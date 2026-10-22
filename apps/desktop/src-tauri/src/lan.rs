@@ -364,7 +364,9 @@ pub(crate) async fn node_status(app: &AppHandle, node_id: &str) -> Result<LanNod
     // and later probes run solely for reachable nodes (they would just burn
     // timeouts otherwise).
     let storage = if matches!(health, Ok(true)) {
-        timed(client.storage()).await.map_err(|error| error.to_string())
+        timed(client.storage())
+            .await
+            .map_err(|error| error.to_string())
     } else {
         Err(String::new()) // not probed; the unreachable branch discards it
     };
@@ -744,7 +746,10 @@ mod tests {
             None,
             Err("node returned status 401: unauthorized".to_owned()),
         );
-        assert!(status.reachable, "node answered the health probe: it is online");
+        assert!(
+            status.reachable,
+            "node answered the health probe: it is online"
+        );
         assert_eq!(status.latency_ms, Some(12));
         assert!(status.storage.is_none());
         assert!(status.warning.as_deref().is_some_and(|w| w.contains("401")));
