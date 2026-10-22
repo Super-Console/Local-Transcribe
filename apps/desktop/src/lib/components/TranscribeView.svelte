@@ -18,6 +18,7 @@
     onCancel,
     onExport,
     onCopy,
+    onBack,
   }: {
     model: ModelSummary | null;
     fileName: string | null;
@@ -32,6 +33,7 @@
     onCancel: () => void;
     onExport: (format: "txt" | "json") => void;
     onCopy: () => void;
+    onBack: () => void;
   } = $props();
 
   const running = $derived(job?.state === "running");
@@ -144,6 +146,13 @@
       </div>
     </div>
   {:else}
+    {#if !running}
+      <div class="back-bar">
+        <button type="button" class="back" onclick={onBack}>
+          <Icon name="chevronLeft" size={12} stroke={1.7} />{t("nav.home")}
+        </button>
+      </div>
+    {/if}
     <div class="task">
       <div class="task-row">
         <div class="file" title={displayName}>{displayName}</div>
@@ -214,6 +223,38 @@
 </section>
 
 <style>
+  .back-bar {
+    display: flex;
+    width: 100%;
+    margin: 2px 0 8px;
+    animation: back-in var(--speed) var(--ease-out);
+  }
+
+  @keyframes back-in {
+    from {
+      opacity: 0;
+      transform: translateX(-4px);
+    }
+  }
+
+  .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 8px 0 3px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    font-size: 12.5px;
+    color: var(--text-3);
+  }
+
+  .back:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+
   .content {
     flex: 1;
     min-height: 0;

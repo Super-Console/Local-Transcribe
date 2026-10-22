@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { t } from "$lib/i18n.svelte";
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import type { AudioApp, RecordedTrack, RecordingStatus, TrackSpec } from "$lib/types";
 
@@ -56,7 +57,6 @@
       apps = nextApps;
       // 默认给一条轨道；没有轨道时补一条可用的来源。
       if (rows.length === 0) addTrack();
-      else rows = rows.map((row) => (row.key && sources.length > 0 ? row : row));
     } catch (issue) {
       error = String(issue);
     }
@@ -77,7 +77,8 @@
     rows = rows.map((row) => (row.id === id ? { ...row, key } : row));
   }
 
-  $effect(() => {
+  // 只在挂载时读取一次来源列表；放在 $effect 里会因读写 rows 形成死循环。
+  onMount(() => {
     void loadSources();
   });
 

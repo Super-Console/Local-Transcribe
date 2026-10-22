@@ -202,7 +202,15 @@
 
   function navigate(next: View) {
     view = next;
-    if (next === "home") void loadHistory();
+    if (next === "home") {
+      // 回到首页 = 回到列表：清掉当前的转写详情（正在跑的任务保持可见）。
+      if (!job || job.state !== "running") {
+        job = null;
+        transcript = null;
+        detail = null;
+      }
+      void loadHistory();
+    }
     if (next === "settings") {
       void refreshService();
       void refreshLibrary();
@@ -587,6 +595,14 @@
           onCancel={cancelJob}
           onExport={exportResult}
           onCopy={copyAll}
+          onBack={() => {
+            job = null;
+            transcript = null;
+            segments = [];
+            fileName = null;
+            error = "";
+            void loadHistory();
+          }}
         />
       {:else}
         <HistoryView
