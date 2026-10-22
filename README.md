@@ -21,9 +21,12 @@ A local-first desktop tool that transcribes user-selected audio/video files into
 apps/desktop/            Tauri 2 + Svelte desktop app (macOS first)
 crates/transcription-core/    audio decoding, model layout inspection, sherpa-onnx inference,
                        cancellable streaming transcription, model library, job/result store
-crates/transcription-service/ single local service (Unix socket) shared by GUI / CLI / MCP
+crates/transcription-service/ single local service (Unix socket on macOS/Linux,
+                       loopback-only TCP on Windows) shared by GUI / CLI / MCP
 crates/transcription-cli/     `local-transcribe` command-line client
 crates/transcription-mcp/     MCP server over local stdio (9 tools)
+crates/lan-compute/           LAN Compute V1.1: task store, node server, client, mDNS
+                       (`local-transcribe-node` binary)
 ```
 
 All three interfaces talk to the same file-backed service instance, so a job started in the GUI is visible to the CLI and MCP, and vice versa.
@@ -36,6 +39,15 @@ All three interfaces talk to the same file-backed service instance, so a job sta
 - **Model picker** in the toolbar lists imported models, marks the default one, and shows a **green dot only when that model is actually resident in memory** (models load on demand, are reused across jobs, and unload after 120 s idle).
 - **Storage** settings show every app directory (models, history results, job records, app data) and offer automatic cleanup by age (1/3/5/7/30 days) or size (1/5/10 GB), off by default; deletions go to the Trash.
 - **Interface languages**: 简体中文, English, Español, Français, Deutsch (follows macOS by default).
+
+## LAN Compute V1.1 (Early Beta)
+
+Optional, off by default: transcribe on another computer on your LAN.
+
+- **Node** (`local-transcribe-node`) exposes a local HTTP API (`/api/v1`, Bearer-token auth) with chunked file upload (resume included), a serialized compute queue, result/collect/export APIs and mDNS discovery (`_localtranscribe._tcp.local.`).
+- **Client** (desktop GUI, LAN view) discovers nodes, pairs by token, sends files with progress and resume, tracks task states (init → file_transferring → queued → transcribing → post_processing → completed / failed / cancelled) and fetches results back.
+- **Compute modes**: local only / prefer local / prefer LAN. Media is uploaded only to the node you pair with; no cloud service is involved anywhere.
+- See `design/windows-early-beta.html` for the frozen Windows Early Beta design and `docs/architecture/windows-lan-review.md` for the design review.
 
 ## Supported model families
 
@@ -80,19 +92,22 @@ All commands print JSON. The shared service starts on demand.
 # Desktop app (unsigned local build)
 cd apps/desktop && npm install && npm run tauri -- build --bundles app --no-sign
 
-# CLI + service + MCP
-cargo build --release -p voice-to-text-cli -p voice-to-text-service -p voice-to-text-mcp
+# CLI + service + MCP + LAN node
+cargo build --release -p voice-to-text-cli -p voice-to-text-service -p voice-to-text-mcp -p voice-to-text-lan
 ```
 
 Rust stable + Node.js 24 are required. Tests: `cargo test --workspace`, plus `npm run check` in `apps/desktop`.
+
+Windows: the workspace compiles `x86_64-pc-windows-msvc` (verified via CI on `windows-2022`, which also builds the MSI and ships `local-transcribe-node.exe` / `local-transcribe.exe` / `voice-to-text-service.exe` as artifacts). In-app recording captures the microphone on Windows; per-application audio capture is macOS-only (Core Audio process tap).
 
 ## Verification status
 
 - Rust workspace, CLI, service and MCP build and pass tests on Apple Silicon (macOS).
 - End-to-end transcription verified on macOS with real models (see the table above) through both the CLI and the GUI.
 - MCP protocol, tool surface and the `--allow-root` file-access guard were exercised against the live service.
-- A Windows CI workflow exists (`.github/workflows/windows-validation.yml`), but real Windows runtime/UI acceptance is **blocked**: the test host's Smart App Control rejects build-script executables (DeviceGuard code-integrity events 3033/3077). No successful Windows Rust build is claimed.
-- Release signing/notarization is unresolved. The product name and final visual design remain open decisions.
+- Windows: the full pipeline (fmt, tests, strict clippy, release build, npm check, MSI) is green on real `windows-2022` CI runners, and the workspace is cross-checked locally against `x86_64-pc-windows-msvc`. Real-machine install/launch acceptance is recorded in `docs/testing/`; runtime claims are limited to what that record actually verified. (Earlier blockers: Smart App Control rejected *compiling* on the test host; CI compilation and MSI install are separate paths.)
+- LAN Compute V1.1: 23 automated tests cover the task state machine, persistence/crash recovery, token auth, resumable upload, collect path-traversal refusal and ZIP export with sha256 manifest. Cross-device runtime verification is recorded in `docs/testing/`.
+- Release signing/notarization is unresolved (unsigned Early Beta; Windows SmartScreen first-run warning applies). The product name and final macOS visual design remain open decisions.
 
 See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the full milestone log with verified facts separated from proposals and blockers, and [`docs/technical-validation.md`](docs/technical-validation.md) for reproducible checks.
 
@@ -104,4 +119,4 @@ See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the full milestone log with ver
 
 ## License
 
-No license has been chosen yet; all rights are reserved by default until one is added.
+MIT — see [LICENSE](LICENSE). Third-party components keep their own licenses.

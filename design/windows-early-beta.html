@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Local Transcribe — Windows Early Beta 冻结灰度功能设计稿</title>
+<style>
+  /* ============ 冻结灰度色板（唯一色源，全稿不得引入彩色） ============ */
+  :root{
+    --g-0:#FFFFFF;   /* 窗口底 / 卡片 */
+    --g-1:#F4F4F5;   /* 画布底 */
+    --g-2:#E8E8EA;   /* 填充、轨道 */
+    --g-3:#D4D4D8;   /* 边框、禁用 */
+    --g-4:#A1A1AA;   /* 次级文字 */
+    --g-5:#71717A;   /* 正文 */
+    --g-6:#3F3F46;   /* 标题 */
+    --g-7:#18181B;   /* 强调按钮、选中 */
+    --ok:#52525B;    /* 成功（灰阶最深填充） */
+    --warn:#71717A;  /* 警示 */
+    --err:#3F3F46;   /* 失败 */
+    --radius-s:4px; --radius-m:8px; --radius-l:12px;
+    --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px;
+    --fs-caption:11px; --fs-small:12px; --fs-body:13px; --fs-title:15px; --fs-display:20px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--g-1);color:var(--g-6);
+    font-family:"Segoe UI",system-ui,-apple-system,sans-serif;font-size:var(--fs-body);line-height:1.55}
+  h1{font-size:22px;margin:var(--sp-6) var(--sp-5) var(--sp-2)}
+  h2{font-size:var(--fs-display);margin:var(--sp-6) var(--sp-5) var(--sp-2)}
+  h3{font-size:var(--fs-title);margin:var(--sp-4) var(--sp-5) var(--sp-2)}
+  p.lead{margin:0 var(--sp-5) var(--sp-4);color:var(--g-5);max-width:760px}
+  section{margin:var(--sp-5);background:var(--g-0);border:1px solid var(--g-3);border-radius:var(--radius-l);overflow:hidden}
+  section > header{padding:var(--sp-3) var(--sp-5);border-bottom:1px solid var(--g-2);background:var(--g-1)}
+  section > header h2{margin:0;font-size:var(--fs-title)}
+  section > header .id{color:var(--g-4);font-size:var(--fs-small);margin-right:var(--sp-2)}
+  .body{padding:var(--sp-5);display:flex;gap:var(--sp-5);flex-wrap:wrap;align-items:flex-start}
+  .mock{flex:1 1 420px;min-width:360px}
+  .notes{flex:1 1 300px;min-width:280px}
+  .notes dt{font-weight:600;color:var(--g-6);margin-top:var(--sp-3);font-size:var(--fs-small)}
+  .notes dd{margin:2px 0 0;color:var(--g-5);font-size:var(--fs-small)}
+  .notes dl{margin:0}
+  .swatches{display:flex;gap:var(--sp-2);flex-wrap:wrap;margin:var(--sp-3) 0}
+  .sw{width:120px}.sw i{display:block;height:36px;border-radius:var(--radius-s);border:1px solid var(--g-3)}
+  .sw b{display:block;font-size:var(--fs-caption);color:var(--g-4);font-weight:500;margin-top:2px}
+  code{background:var(--g-2);padding:1px 5px;border-radius:var(--radius-s);font-size:var(--fs-small)}
+  ul{margin:var(--sp-2) 0;padding-left:20px;color:var(--g-5);font-size:var(--fs-small)}
+  /* ============ mockup 通用件（灰度） ============ */
+  .win{background:var(--g-0);border:1px solid var(--g-3);border-radius:var(--radius-l);overflow:hidden;
+    box-shadow:0 12px 32px rgba(0,0,0,.12)}
+  .titlebar{height:32px;display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-3);
+    border-bottom:1px solid var(--g-2);font-size:var(--fs-small);color:var(--g-4)}
+  .titlebar .app{font-weight:600;color:var(--g-6)}
+  .titlebar .ver{margin-left:auto;font-size:var(--fs-caption)}
+  .app-body{display:flex;min-height:300px}
+  .side{width:168px;border-right:1px solid var(--g-2);padding:var(--sp-3);display:flex;flex-direction:column;gap:2px}
+  .nav{padding:7px 10px;border-radius:var(--radius-m);color:var(--g-5);font-size:var(--fs-body)}
+  .nav.sel{background:var(--g-2);color:var(--g-7);font-weight:600}
+  .nav .badge{float:right;font-size:var(--fs-caption);color:var(--g-4)}
+  .content{flex:1;padding:var(--sp-4);display:flex;flex-direction:column;gap:var(--sp-3)}
+  .row{display:flex;gap:var(--sp-3);align-items:center}
+  .card{border:1px solid var(--g-3);border-radius:var(--radius-m);padding:var(--sp-3);background:var(--g-0)}
+  .sunken{background:var(--g-1);border:1px solid var(--g-2);border-radius:var(--radius-m);padding:var(--sp-3)}
+  .btn{height:30px;padding:0 14px;border-radius:var(--radius-m);border:1px solid var(--g-3);
+    background:var(--g-0);color:var(--g-6);font-size:var(--fs-body);display:inline-flex;align-items:center;gap:6px}
+  .btn.primary{background:var(--g-7);color:var(--g-0);border-color:var(--g-7)}
+  .btn.disabled{background:var(--g-2);color:var(--g-4);border-color:var(--g-2)}
+  .btn.mini{height:24px;padding:0 10px;font-size:var(--fs-small)}
+  .seg{display:inline-flex;border:1px solid var(--g-3);border-radius:var(--radius-m);overflow:hidden}
+  .seg span{padding:5px 12px;font-size:var(--fs-small);color:var(--g-5);border-right:1px solid var(--g-3)}
+  .seg span:last-child{border-right:0}
+  .seg span.sel{background:var(--g-7);color:var(--g-0)}
+  .field{height:30px;border:1px solid var(--g-3);border-radius:var(--radius-s);padding:0 8px;
+    display:flex;align-items:center;color:var(--g-4);font-size:var(--fs-small);background:var(--g-0)}
+  .label{font-size:var(--fs-small);color:var(--g-5);width:96px;flex:none}
+  .progress{height:6px;border-radius:3px;background:var(--g-2);overflow:hidden}
+  .progress i{display:block;height:100%;background:var(--g-6);border-radius:3px}
+  .chip{display:inline-flex;align-items:center;gap:4px;font-size:var(--fs-caption);
+    border:1px solid var(--g-3);border-radius:99px;padding:2px 8px;color:var(--g-5)}
+  .chip.solid{background:var(--g-6);color:var(--g-0);border-color:var(--g-6)}
+  .chip.hollow{background:transparent}
+  .chip.dash{border-style:dashed}
+  table{width:100%;border-collapse:collapse;font-size:var(--fs-small)}
+  th{color:var(--g-4);font-weight:500;text-align:left;border-bottom:1px solid var(--g-2);padding:6px 8px}
+  td{color:var(--g-5);border-bottom:1px solid var(--g-2);padding:7px 8px}
+  tr.sel td{background:var(--g-1);color:var(--g-7)}
+  .drop{border:2px dashed var(--g-3);border-radius:var(--radius-l);padding:var(--sp-5);
+    text-align:center;color:var(--g-4);font-size:var(--fs-small)}
+  .drop.active{border-color:var(--g-6);color:var(--g-6);background:var(--g-1)}
+  .kpi{display:flex;gap:var(--sp-3);flex-wrap:wrap}
+  .kpi .card{flex:1 1 120px}
+  .kpi b{font-size:var(--fs-display);color:var(--g-7);display:block}
+  .kpi small{color:var(--g-4);font-size:var(--fs-caption)}
+  .foot{font-size:var(--fs-caption);color:var(--g-4);padding:var(--sp-2) var(--sp-5) var(--sp-4)}
+  .tag-temp{font-size:var(--fs-caption);color:var(--g-4);border:1px solid var(--g-3);
+    border-radius:99px;padding:1px 8px;margin-left:auto}
+</style>
+</head>
+<body>
+
+<h1>Local Transcribe — Windows Early Beta 冻结灰度功能设计稿</h1>
+<p class="lead">
+  本文档为 Windows Early Beta 的<b>固定</b>功能设计稿（灰度）。文案、布局、尺寸、间距、颜色、组件状态、交互与转场均以此为准。
+  灰度色板是唯一色源；本稿不引入任何彩色。macOS 端视觉不按本稿改动（macOS 保持现行主题，最终设计另行决定）。
+  窗口基准尺寸 1120×720，最小 940×620；内部布局按 8pt 网格（间距取自 --sp-1..--sp-6）。
+</p>
+
+<section>
+  <header><h2><span class="id">§0</span>灰度色板 · 字号 · 圆角 · 间距（全局 token）</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="swatches">
+        <div class="sw"><i style="background:#FFFFFF"></i><b>g-0 #FFFFFF 窗口/卡片</b></div>
+        <div class="sw"><i style="background:#F4F4F5"></i><b>g-1 #F4F4F5 画布底</b></div>
+        <div class="sw"><i style="background:#E8E8EA"></i><b>g-2 #E8E8EA 填充/轨道</b></div>
+        <div class="sw"><i style="background:#D4D4D8"></i><b>g-3 #D4D4D8 边框/禁用</b></div>
+        <div class="sw"><i style="background:#A1A1AA"></i><b>g-4 #A1A1AA 次级文字</b></div>
+        <div class="sw"><i style="background:#71717A"></i><b>g-5 #71717A 正文</b></div>
+        <div class="sw"><i style="background:#3F3F46"></i><b>g-6 #3F3F46 标题</b></div>
+        <div class="sw"><i style="background:#18181B"></i><b>g-7 #18181B 强调/选中</b></div>
+      </div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>字号</dt><dd>caption 11 / small 12 / body 13 / title 15 / display 20；标题字重 600，正文 400。</dd>
+        <dt>圆角</dt><dd>控件 4px、卡片/按钮 8px、窗口/大卡 12px；胶囊 99px。</dd>
+        <dt>间距</dt><dd>4 / 8 / 12 / 16 / 24 / 32；行高 1.55；表格行高 32px。</dd>
+        <dt>状态色（灰度）</dt><dd>成功=填充 g-6；警示=描边虚线 g-5；失败=描边实线 g-6 + 前缀「失败」文字。禁止仅用颜色传达状态，一律配文字或图标。</dd>
+        <dt>暗色</dt><dd>Early Beta 仅浅色；暗色设计留待正式版。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§1</span>主窗口 · 本地转写运行状态</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win">
+        <div class="titlebar"><span class="app">Local Transcribe</span>— 本地转写<span class="ver">版本 1.1.0-beta.1 (Windows x64) · 测试版</span></div>
+        <div class="app-body">
+          <div class="side">
+            <div class="nav sel">转写</div>
+            <div class="nav">历史<span class="badge">12</span></div>
+            <div class="nav">局域网</div>
+            <div class="nav">模型<span class="badge">2</span></div>
+            <div class="nav">设置</div>
+          </div>
+          <div class="content">
+            <div class="drop active">拖拽音视频到此处，自动识别格式并添加转写 · 或 <u>选择文件</u><br><small>支持 MP3 / WAV / M4A / FLAC / MP4 / MOV / MKV / WebM / AVI</small></div>
+            <div class="card">
+              <div class="row"><b>访谈-2026-10-23.mp3</b><span class="chip solid">转写中</span>
+                <span class="tag-temp">临时 UI</span></div>
+              <div class="row" style="margin:8px 0 4px"><div class="progress" style="flex:1"><i style="width:42%"></i></div><span style="color:var(--g-4);font-size:12px">42% · 剩余约 6 分 12 秒</span></div>
+              <div class="row" style="color:var(--g-4);font-size:12px">
+                <span>本地 · GPU</span><span>· 模型：sherpa-onnx SenseVoice（已加载）</span>
+                <span style="margin-left:auto"></span><button class="btn mini">取消</button>
+              </div>
+            </div>
+            <div class="sunken">
+              <table>
+                <tr><th>排队文件</th><th>大小</th><th>预计等待</th><th></th></tr>
+                <tr><td>会议录音.m4a</td><td>38.2 MB</td><td>约 11 分钟</td><td><button class="btn mini">移除</button></td></tr>
+                <tr><td>讲座片段.mp4</td><td>120 MB</td><td>约 26 分钟</td><td><button class="btn mini">移除</button></td></tr>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>文案（固定）</dt><dd>「拖拽音视频到此处，自动识别格式并添加转写」「选择文件」「转写中」「剩余约 X 分 X 秒」「排队文件」「预计等待」「移除」「取消」。</dd>
+        <dt>尺寸/间距</dt><dd>侧栏 168px；拖拽区高 84px；任务卡间距 12px；进度条高 6px。</dd>
+        <dt>状态</dt><dd>拖拽区三态：默认（虚线 g-3）/ hover 有效文件（实线 g-6，文案不变）/ hover 无效文件（文案替换「不支持的文件格式」，控件 1.2s 后恢复）。</dd>
+        <dt>交互</dt><dd>全局拖拽：拖入窗口任意位置都显示拖拽蒙层（覆盖整窗 92% 不透明 g-1），释放命中拖拽区语义。文件夹拖入=批量入队并提示「已添加 N 个文件」。</dd>
+        <dt>转场</dt><dd>任务卡入队 160ms 淡入+上移 4px（ease-out）；进度条宽度线性无动画跳变（≤250ms 周期刷新，不做缓动）。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§2</span>转换为文字稿 · 转换结果状态 · Result 控件</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win">
+        <div class="titlebar"><span class="app">Local Transcribe</span>— 转写结果<span class="ver">版本 1.1.0-beta.1 · 测试版</span></div>
+        <div class="content" style="min-height:320px">
+          <div class="row"><button class="btn mini">‹ 返回</button><b>访谈-2026-10-23 文字稿</b>
+            <span class="chip solid">已完成</span><span style="color:var(--g-4);font-size:12px">00:42:18 · 8,314 字 · 本地处理</span></div>
+          <div class="seg">
+            <span class="sel">全文</span><span>时间轴</span><span>JSON</span>
+          </div>
+          <div class="sunken" style="flex:1;overflow:auto;max-height:220px">
+            <p style="margin:0 0 10px"><b style="color:var(--g-4);font-size:11px">00:00:02</b>&nbsp; 今天我们主要聊两个话题，第一个是本地优先的转写工具……</p>
+            <p style="margin:0 0 10px"><b style="color:var(--g-4);font-size:11px">00:00:21</b>&nbsp; 对，先说数据边界：文件不出机器，这一点是底线……</p>
+            <p style="margin:0"><b style="color:var(--g-4);font-size:11px">00:00:44</b>&nbsp; 所以我们把推理、队列、结果都放在本机。</p>
+          </div>
+          <div class="row">
+            <div class="field" style="flex:1">搜索文字稿…</div>
+            <button class="btn">复制全文</button>
+            <button class="btn">导出 TXT</button>
+            <button class="btn">导出 JSON</button>
+            <button class="btn primary">保存到 Output Folder</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>Result 控件（固定）</dt><dd>「复制全文」「导出 TXT」「导出 JSON」「保存到 Output Folder」+ 文字稿内搜索。导出文件名：<code>&lt;源文件名&gt;.txt / .json</code>。</dd>
+        <dt>状态</dt><dd>结果四态：已完成（实心 chip）/ 失败（「失败」chip + 错误原因行 +「重试」）/ 部分失败（多轨任务，chip「部分失败 N/M」+ 表格逐轨标记）/ 已取消（hollow chip）。</dd>
+        <dt>尺寸</dt><dd>chip 高 20px；正文区最大高 360px 内滚动；时间轴 tab 显示 <code>[HH:MM:SS]</code> 前缀列宽 64px。</dd>
+        <dt>交互</dt><dd>搜索命中滚动定位并以 g-2 底色高亮；「保存到 Output Folder」成功后按钮 1s 内变「已保存 ✓」（文案+图标双通道）。</dd>
+        <dt>转场</dt><dd>tab 切换 160ms 交叉淡入；返回按钮触发 220ms 右移淡出（与 §1 互为逆向）。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§3</span>Model 导入状态 · 导入管理</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win"><div class="content" style="min-height:260px">
+        <div class="row"><b>模型</b><span class="tag-temp">临时 UI</span></div>
+        <div class="card row"><div style="flex:1"><b>SenseVoice</b><br><small style="color:var(--g-4)">sherpa-onnx · 238 MB · 2026-10-20 导入</small></div>
+          <span class="chip solid">使用中</span><button class="btn mini">在文件夹中显示</button><button class="btn mini disabled">移除</button></div>
+        <div class="card row"><div style="flex:1"><b>Paraformer</b><br><small style="color:var(--g-4)">sherpa-onnx · 842 MB · 2026-10-18 导入</small></div>
+          <span class="chip hollow">已导入</span><button class="btn mini">设为默认</button><button class="btn mini">移除</button></div>
+        <div class="card row"><div style="flex:1"><b>Whisper-small（导入中）</b><br><small style="color:var(--g-4)">正在校验 12 / 17 个文件 · 156 MB / 484 MB</small></div>
+          <div class="progress" style="width:120px"><i style="width:32%"></i></div><button class="btn mini">取消导入</button></div>
+        <div class="row"><button class="btn primary">导入模型…</button><span style="color:var(--g-4);font-size:12px">支持 sherpa-onnx / faster-whisper 模型目录（拖入文件夹即可）</span></div>
+      </div></div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>状态</dt><dd>导入五态：选择来源 / 校验中（进度+当前文件计数）/ 导入中（字节进度）/ 已导入 / 失败（原因+「重试」）。</dd>
+        <dt>文案（固定）</dt><dd>「导入模型…」「设为默认」「移除」「取消导入」「使用中」「已导入」「正在校验 N / M 个文件」。</dd>
+        <dt>交互</dt><dd>「使用中」模型的「移除」禁用（tooltip「正在使用，无法移除」）；移除走系统回收站语义，不直接删除。</dd>
+        <dt>转场</dt><dd>导入卡插入 160ms 淡入；校验→导入阶段切换不重排卡片位置（防跳动）。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§4</span>局域网 Compute 设置 · Node 设置</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win"><div class="content" style="min-height:260px">
+        <div class="row"><b>局域网计算</b><span class="chip dash">实验性</span><span class="tag-temp">临时 UI</span></div>
+        <div class="sunken">
+          <div class="row"><span class="label">计算模式</span>
+            <div class="seg"><span>仅本机</span><span class="sel">优先本机</span><span>优先局域网</span></div></div>
+          <div class="row" style="margin-top:8px;color:var(--g-4);font-size:12px">
+            仅本机：所有转写都在这台电脑完成。优先本机：本机排队过长时询问是否发送到节点。优先局域网：新任务默认发送到在线节点。</div>
+        </div>
+        <div class="card">
+          <div class="row"><b>本机作为 Node</b><span class="chip hollow">未开启</span></div>
+          <div class="row" style="margin-top:6px"><span class="label">节点名称</span><div class="field" style="flex:1">书房台式机</div></div>
+          <div class="row" style="margin-top:6px"><span class="label">计算角色</span>
+            <div class="seg"><span class="sel">自动</span><span>GPU</span><span>CPU</span></div>
+            <span style="color:var(--g-4);font-size:12px">检测到 NVIDIA GPU</span></div>
+          <div class="row" style="margin-top:6px"><span class="label">监听端口</span><div class="field" style="width:96px">7878</div>
+            <span style="color:var(--g-4);font-size:12px">仅局域网可达；所有请求需配对令牌</span></div>
+          <div class="row" style="margin-top:10px"><button class="btn primary">启用 Node</button><button class="btn">查看令牌</button></div>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>文案（固定）</dt><dd>「计算模式」「仅本机 / 优先本机 / 优先局域网」「本机作为 Node」「计算角色 自动/GPU/CPU」「监听端口」「启用 Node」「查看令牌」「配对令牌」。</dd>
+        <dt>尺寸</dt><dd>模式分段控件高 30px；设置行高 36px；label 列 96px。</dd>
+        <dt>状态</dt><dd>Node 卡三态：未开启（hollow chip）/ 运行中（solid chip + 端口与在线人数）/ 启动失败（「失败」chip + 原因 + 重试）。</dd>
+        <dt>交互</dt><dd>「查看令牌」需再次确认（弹层显示，30 秒自动隐藏，不进日志）；端口冲突时行内报错「端口 7878 已被占用」。</dd>
+        <dt>转场</dt><dd>模式切换即存（自动保存指示「已保存」1s 淡出）；Node 启停按钮 160ms 状态切换。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§5</span>局域网节点配对 · 节点管理 · 任务状态</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win"><div class="content" style="min-height:300px">
+        <div class="row"><b>局域网节点</b><button class="btn mini">重新扫描</button>
+          <span style="color:var(--g-4);font-size:12px">发现 2 个节点 · 服务类型 _localtranscribe._tcp</span></div>
+        <div class="card row"><div style="flex:1"><b>客厅台式机</b> <small style="color:var(--g-4)">REDACTED-LAN-IP:7878 · GPU · 已配对</small></div>
+          <span class="chip solid">在线</span><button class="btn mini">发送文件…</button><button class="btn mini">管理</button></div>
+        <div class="card row"><div style="flex:1"><b>旧笔记本</b> <small style="color:var(--g-4)">REDACTED-LAN-IP:7878 · CPU · 未配对</small></div>
+          <span class="chip hollow">在线</span><button class="btn mini primary">配对…</button></div>
+        <div class="sunken">
+          <table>
+            <tr><th>文件</th><th>节点</th><th>状态</th><th>进度</th><th></th></tr>
+            <tr class="sel"><td>访谈-2026-10-23.mp3</td><td>客厅台式机</td><td><span class="chip solid">转写中</span></td><td><div class="progress" style="width:88px"><i style="width:64%"></i></div></td><td><button class="btn mini">取消</button></td></tr>
+            <tr><td>会议录音.m4a</td><td>客厅台式机</td><td><span class="chip">传输中 3/5 分片</span></td><td><div class="progress" style="width:88px"><i style="width:58%"></i></div></td><td><button class="btn mini">取消</button></td></tr>
+            <tr><td>讲座片段.mp4</td><td>客厅台式机</td><td><span class="chip hollow">排队中</span></td><td>—</td><td><button class="btn mini">取消</button></td></tr>
+          </table>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>任务状态（固定枚举）</dt><dd>待传输 → 传输中（显示 N/M 分片）→ 排队中 → 转写中 → 后处理 → 已完成 / 已取消 / 失败 / 部分失败。传输失败或节点离线：显示「中断，可续传」。</dd>
+        <dt>配对交互</dt><dd>「配对…」弹层：输入 6 位配对码或粘贴令牌 → 成功后 chip 变「已配对」；失败文案「配对码无效或已过期」。同一节点重复配对直接更新令牌。</dd>
+        <dt>管理弹层</dt><dd>节点详情：能力（GPU/CPU、模型）、存储用量、任务数、「取回结果」「导出收集」「忘记此节点」。</dd>
+        <dt>离线</dt><dd>节点 3 秒 ping 失败即 chip 变「离线」（虚线），进行中传输显示「中断，可续传」；恢复后自动重试续传（2s 间隔，最多 3 次）。</dd>
+        <dt>转场</dt><dd>表格行状态 chip 变化 160ms 交叉淡入；进度条同 §1。弹层 220ms scale(0.96→1)+淡入，关闭 160ms 淡出。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§6</span>输入/输出文件夹设置 · Input Folder 观察文件夹</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win"><div class="content" style="min-height:220px">
+        <div class="row"><span class="label">Input Folder</span><div class="field" style="flex:1">D:\Transcribe\Inbox</div><button class="btn">选择…</button><button class="btn">打开</button></div>
+        <div class="row"><span class="label">Output Folder</span><div class="field" style="flex:1">D:\Transcribe\Output</div><button class="btn">选择…</button><button class="btn">打开</button></div>
+        <div class="sunken">
+          <div class="row"><b style="font-size:12px">观察文件夹（自动转写）</b><div class="seg" style="margin-left:auto"><span>关</span><span class="sel">开</span></div></div>
+          <div class="row" style="margin-top:6px;color:var(--g-4);font-size:12px">放入 Input Folder 的文件会自动开始转写；结果写入 Output Folder。<code>*.mp3 *.wav *.m4a *.flac *.mp4 *.mov *.mkv *.webm *.avi</code></div>
+          <div class="row" style="margin-top:6px"><span class="label">冲突处理</span><div class="seg"><span class="sel">自动改名</span><span>覆盖</span><span>跳过</span></div></div>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>文案（固定）</dt><dd>「Input Folder」「Output Folder」「观察文件夹（自动转写）」「冲突处理 自动改名/覆盖/跳过」「选择…」「打开」。</dd>
+        <dt>状态</dt><dd>路径无效时输入框描边实线 g-6 + 行内提示「文件夹不存在或不可写」；观察开启时卡片右上显示「观察中」chip + 监视文件计数。</dd>
+        <dt>交互</dt><dd>「打开」调系统资源管理器定位；输出冲突按「自动改名」生成 <code>名称 (2).txt</code>。</dd>
+        <dt>转场</dt><dd>开关切换 160ms；保存指示同 §4。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§7</span>全局拖拽 · 识别文件格式转换</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win"><div class="content" style="min-height:180px">
+        <div class="drop active" style="min-height:120px;display:flex;flex-direction:column;justify-content:center">
+          <b style="color:var(--g-6)">松开以添加到转写队列</b>
+          <small>已识别：MP3、WAV、M4A、FLAC、MP4、MOV、MKV、WebM、AVI</small>
+          <small style="color:var(--g-4)">其他格式：松开后提示「不支持的文件格式」</small>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>行为（固定）</dt><dd>拖拽进入窗口即显示全窗蒙层（含主窗口以外的所有视图）；有效文件高亮，无效文件显示拒绝文案；混合拖放按可识别部分添加并提示「已添加 N 个文件，跳过 M 个不支持」。</dd>
+        <dt>格式识别</dt><dd>先扩展名白名单，再读文件头校验（mp4/mkv 的 ftyp/Matroska 魔数）；不一致按不支持处理。</dd>
+        <dt>转场</dt><dd>蒙层 120ms 淡入/160ms 淡出；拖放完成 toast「已添加 N 个文件」2s。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§8</span>本地构建版本标识 · 测试版本信息与测试结果</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win"><div class="content" style="min-height:200px">
+        <div class="kpi">
+          <div class="card"><b>1.1.0-beta.1</b><small>Windows x64 · MSI</small></div>
+          <div class="card"><b>a1b2c3d</b><small>构建提交</small></div>
+          <div class="card"><b>2026-10-23</b><small>构建日期</small></div>
+          <div class="card"><b>测试版</b><small>渠道：Early Beta</small></div>
+        </div>
+        <div class="sunken">
+          <table>
+            <tr><th>测试项</th><th>结果</th><th>备注</th></tr>
+            <tr><td>安装与启动（Windows 11 x64）</td><td>通过</td><td>无签名；SmartScreen 首次运行警告</td></tr>
+            <tr><td>本地转写（麦克风 WAV）</td><td>通过</td><td>SenseVoice 模型</td></tr>
+            <tr><td>局域网节点配对与传输</td><td>通过</td><td>4 MiB 分块 + 续传</td></tr>
+            <tr><td>应用音频内录</td><td>不支持</td><td>macOS 专属；Windows 仅麦克风</td></tr>
+          </table>
+        </div>
+      </div></div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>位置（固定）</dt><dd>设置 → 关于；标题栏常显 <code>版本 x.y.z-beta.n (Windows x64) · 测试版</code>。</dd>
+        <dt>文案（固定）</dt><dd>「版本」「构建提交」「构建日期」「渠道：Early Beta」「测试版」。测试结果表列：测试项 / 结果（通过·失败·不支持）/ 备注。</dd>
+        <dt>规则</dt><dd>「结果」必须来自真实执行记录；不得以构建成功冒充安装验证。未测项显示「未测试」而非「通过」。</dd>
+        <dt>转场</dt><dd>无（静态页）。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<section>
+  <header><h2><span class="id">§9</span>测试与架构说明文档 · 早期 Beta 版说明（帮助入口）</h2></header>
+  <div class="body">
+    <div class="mock">
+      <div class="win"><div class="content" style="min-height:180px">
+        <div class="card row"><div style="flex:1"><b>测试与架构说明</b><br><small style="color:var(--g-4)">测试范围、环境、通过标准与已知限制</small></div><button class="btn mini">打开</button></div>
+        <div class="card row"><div style="flex:1"><b>Early Beta 说明</b><br><small style="color:var(--g-4)">本测试版的功能边界、数据处理方式与反馈渠道</small></div><button class="btn mini">打开</button></div>
+        <div class="card row"><div style="flex:1"><b>开源许可</b><br><small style="color:var(--g-4)">第三方组件许可清单</small></div><button class="btn mini">打开</button></div>
+      </div></div>
+    </div>
+    <div class="notes">
+      <dl>
+        <dt>内容（固定）</dt><dd>Early Beta 说明必须含：本地处理边界（文件不上传）、无签名与 SmartScreen 提示、已知限制清单、反馈渠道。架构说明含组件图与 LAN 协议概述。</dd>
+        <dt>交互</dt><dd>「打开」用系统默认浏览器/查看器打开随包文档（HTML/PDF），不内嵌 WebView。</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+<p class="foot">
+  冻结说明：以上文案与组件状态为 Windows Early Beta 的固定设计；实现与验收以本稿为准。任何改动需重新走设计评审。
+  本稿为灰度稿：不含彩色、不含暗色模式；两者均属正式版设计范围（macOS 最终视觉设计另行决定，不在本稿范围内）。
+</p>
+
+</body>
+</html>

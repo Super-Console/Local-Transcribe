@@ -223,3 +223,12 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - 验证：麦克风录音实测落盘；**应用音频捕获与停止后自动入队转写尚未端到端验证**（需首次授予系统音频权限后复验）。
 
 - 修订：录音改为**自由音轨列表**（可添加任意条输入设备/应用轨），不再固定「麦克风 + 会议应用」两条；每条独立录制、独立转写、独立成记录。
+
+## Windows Early Beta + 局域网 Compute V1.1（2026-10-23，无人值守任务书）
+
+- Phase 1 Windows 构建链打通：service 跨平台 IPC（macOS/Linux Unix socket 不变，Windows 仅回环 TCP + `service.port`，fs2 单实例锁与协议不变）；desktop macOS-only 依赖门控；测试/断言按平台门控；clippy `-D warnings` 双目标清零。**CI（windows-2022 真实 runner）完整管线首次全绿**：fmt/test/clippy/release/npm/MSI/产物暂存（25 分钟）。此前 8 连红的首败点是 recording.rs 未过 rustfmt，Windows 编译从未被真正验证过。
+- Phase 2/3 局域网 Compute V1.1 核心：新 crate `crates/lan-compute`（`voice-to-text-lan`）——九态任务状态机、任务持久化/崩溃恢复、axum HTTP API（分块上传+断点续传、令牌认证恒定时间比较、收集导出防路径穿越、ZIP+sha256 清单）、mDNS 注册/发现（`_localtranscribe._tcp.local.`）、`local-transcribe-node` 程序（令牌自动生成 0600）。23 测试全绿，双平台 clippy 零警告。
+- Windows Early Beta 冻结灰度设计稿：`design/windows-early-beta.html`（§0-§9：色板/转写运行状态/文字稿与 Result 控件/模型导入/局域网 Compute 与 Node 设置/节点配对与任务状态/输入输出与观察文件夹/全局拖拽/构建与测试版本信息/帮助文档入口；文案、尺寸、状态、交互、转场逐项标注）。
+- 许可证：MIT（LICENSE）。README 双语更新（架构/局域网/构建/验证状态/许可证）。
+- 真机档案：目标 Windows 11 Pro（build 26300，x64，AMD RX 6600、无 NVIDIA）、WebView2 155 已装、SSH 管理员权限可用；HA `pc_wake` 实体交叉验证后以同 MAC/同广播魔术包唤醒（HA API 无可用 token 的等效做法，已记录）。
+- 状态：GUI Client 端集成、真机安装/跨设备实测、测试报告与 Early Beta 发布见后续追加条目（本条记录到 2d034df/34799d3 为止的已验证事实）。

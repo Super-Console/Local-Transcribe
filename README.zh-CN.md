@@ -21,9 +21,12 @@
 apps/desktop/                 Tauri 2 + Svelte 桌面应用（macOS 优先）
 crates/transcription-core/    音频解码、模型布局校验、sherpa-onnx 推理、
                               可取消的流式转写、模型库、任务/结果存储
-crates/transcription-service/ 本地共享服务（Unix socket），GUI / CLI / MCP 共用
+crates/transcription-service/ 本地共享服务（macOS/Linux 为 Unix socket，
+                              Windows 为仅回环 TCP），GUI / CLI / MCP 共用
 crates/transcription-cli/     `local-transcribe` 命令行客户端
 crates/transcription-mcp/     本地 stdio 的 MCP 服务（9 个工具）
+crates/lan-compute/           局域网 Compute V1.1：任务存储、节点服务、客户端、mDNS
+                              （`local-transcribe-node` 程序）
 ```
 
 三个界面连接同一个文件存储的共享服务实例：GUI 里开始的任务，CLI 和 MCP 都能看到，反之亦然。
@@ -36,6 +39,15 @@ crates/transcription-mcp/     本地 stdio 的 MCP 服务（9 个工具）
 - **模型选择器**：顶栏下拉列出已导入模型、标注默认项，且**只有模型真正驻留内存时才显示绿点**（按需加载、同模型复用、空闲 120 秒卸载）。
 - **存储**设置展示所有应用目录（模型库、历史结果、任务记录、应用数据），并提供按时间（1/3/5/7/30 天）或按容量（1/5/10 GB）的自动清理，默认关闭；删除一律进废纸篓。
 - **界面语言**：简体中文、English、Español、Français、Deutsch（默认跟随 macOS）。
+
+## 局域网 Compute V1.1（Early Beta）
+
+可选、默认关闭：把转写放到局域网内的另一台电脑上执行。
+
+- **Node**（`local-transcribe-node`）提供本地 HTTP API（`/api/v1`，Bearer 令牌认证）：分块上传（支持断点续传）、串行计算队列、结果/收集/导出 API、mDNS 发现（`_localtranscribe._tcp.local.`）。
+- **Client**（桌面 GUI「局域网」视图）：发现节点、令牌配对、带进度与续传的发送、九态任务状态跟踪（init → file_transferring → queued → transcribing → post_processing → completed / failed / cancelled）、结果取回。
+- **计算模式**：仅本机 / 优先本机 / 优先局域网。媒体只会上传到你配对的节点，全程不涉及任何云服务。
+- Windows Early Beta 冻结设计稿见 `design/windows-early-beta.html`，设计评审见 `docs/architecture/windows-lan-review.md`。
 
 ## 支持的模型族
 
@@ -80,19 +92,22 @@ local-transcribe export <job-id> --format txt|json --output 输出路径
 # 桌面应用（未签名的本地构建）
 cd apps/desktop && npm install && npm run tauri -- build --bundles app --no-sign
 
-# CLI + 服务 + MCP
-cargo build --release -p voice-to-text-cli -p voice-to-text-service -p voice-to-text-mcp
+# CLI + 服务 + MCP + 局域网 Node
+cargo build --release -p voice-to-text-cli -p voice-to-text-service -p voice-to-text-mcp -p voice-to-text-lan
 ```
 
 需要 Rust stable + Node.js 24。测试：`cargo test --workspace`，以及 `apps/desktop` 下的 `npm run check`。
+
+Windows：workspace 可编译 `x86_64-pc-windows-msvc`（由 CI 在 `windows-2022` 真实验证，同时构建 MSI 并附带 `local-transcribe-node.exe` / `local-transcribe.exe` / `voice-to-text-service.exe` 产物）。Windows 端应用内录音支持麦克风；按应用内录仅 macOS（Core Audio 进程内录）。
 
 ## 验证状态
 
 - Rust workspace、CLI、服务与 MCP 在 Apple Silicon（macOS）上构建并通过测试。
 - macOS 上已用真实模型完成端到端转写验证（见上表），CLI 与 GUI 均已走通。
 - MCP 协议、工具面与 `--allow-root` 文件访问防线已对真实服务实测。
-- 仓库带有 Windows CI 工作流（`.github/workflows/windows-validation.yml`），但真实的 Windows 运行时/界面验收仍**受阻**：测试主机的 Smart App Control 拒绝 Cargo 生成的构建脚本可执行文件（DeviceGuard 代码完整性事件 3033/3077）。不声称任何 Windows Rust 构建成功。
-- 发布签名/公证未解决。产品名与最终视觉设计保持开放决策。
+- Windows：完整管线（fmt、测试、严格 clippy、release 构建、npm check、MSI）已在真实 `windows-2022` CI runner 全绿，且本机对 `x86_64-pc-windows-msvc` 做交叉核对。真机安装/启动验收记录见 `docs/testing/`，运行时结论以该记录实际验证的范围为限。（历史阻塞：Smart App Control 拦截的是"在测试主机上编译"；CI 编译与 MSI 安装是另一条路径。）
+- 局域网 Compute V1.1：23 项自动化测试覆盖任务状态机、持久化/崩溃恢复、令牌认证、断点续传上传、收集 API 越界拒绝、带 sha256 清单的 ZIP 导出。跨设备运行时验证记录见 `docs/testing/`。
+- 发布签名/公证未解决（Early Beta 不签名；Windows SmartScreen 首次运行警告适用）。产品名与最终 macOS 视觉设计保持开放决策。
 
 完整里程碑日志（已核实事实与提议/阻塞分开记录）见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)；可复现的核查步骤见 [`docs/technical-validation.md`](docs/technical-validation.md)。
 
@@ -104,4 +119,4 @@ cargo build --release -p voice-to-text-cli -p voice-to-text-service -p voice-to-
 
 ## 许可证
 
-尚未选择许可证；在添加之前默认保留所有权利。
+MIT —— 见 [LICENSE](LICENSE)。第三方组件保留各自许可证。
