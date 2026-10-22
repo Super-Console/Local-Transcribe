@@ -1,0 +1,45 @@
+# OS / IDE noise
+.DS_Store
+.AppleDouble
+Thumbs.db
+.vscode/
+.idea/
+
+# Private source conversation: reference only, never commit
+/GPT聊天记录/
+
+# Build outputs and package caches
+/target/
+/node_modules/
+/dist/
+/.tauri/
+/src-tauri/target/
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# User media, model weights, and generated transcripts/results
+/media/
+/models/
+/output/
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.onnx
+*.ggml
+*.safetensors
+*.tar.bz2
+*.zip

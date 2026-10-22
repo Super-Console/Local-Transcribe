@@ -1,0 +1,79 @@
+name: Windows validation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+          components: clippy, rustfmt
+
+      - name: Report toolchain
+        run: |
+          rustc --version
+          cargo --version
+          node --version
+          npm --version
+          rustup show active-toolchain
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test Rust workspace
+        run: cargo test --workspace --locked
+
+      - name: Run strict Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Build Rust workspace (release)
+        run: cargo build --workspace --release --locked
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Check frontend
+        working-directory: apps/desktop
+        run: npm run check
+
+      - name: Build frontend
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Build Windows MSI installer
+        working-directory: apps/desktop
+        run: npm run tauri -- build --bundles msi
+
+      - name: Verify MSI output (not uploaded)
+        shell: pwsh
+        run: |
+          $msiDir = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/src-tauri/target/release/bundle/msi'
+          $packages = @(Get-ChildItem -LiteralPath $msiDir -Filter '*.msi' -File -ErrorAction Stop)
+          if ($packages.Count -lt 1) { throw "No MSI was produced in $msiDir" }
+          $packages | ForEach-Object { "MSI=$($_.Name) SIZE=$($_.Length)" }
