@@ -73,7 +73,16 @@ jobs:
       - name: Verify MSI output (not uploaded)
         shell: pwsh
         run: |
-          $msiDir = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/src-tauri/target/release/bundle/msi'
-          $packages = @(Get-ChildItem -LiteralPath $msiDir -Filter '*.msi' -File -ErrorAction Stop)
+          $candidates = @(
+            (Join-Path $env:GITHUB_WORKSPACE 'target/release/bundle/msi'),
+            (Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/src-tauri/target/release/bundle/msi')
+          )
+          $msiDir = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $msiDir) { throw "No MSI bundle directory found. Checked: $($candidates -join ', ')" }
+          $packages = @(Get-ChildItem -LiteralPath $msiDir -Filter '*.msi' -File)
           if ($packages.Count -lt 1) { throw "No MSI was produced in $msiDir" }
-          $packages | ForEach-Object { "MSI=$($_.Name) SIZE=$($_.Length)" }
+          $packages | ForEach-Object { "MSI=$($_.Name) SIZE=$($_.Length) PATH=$($_.FullName)" }
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'target/release/voice-to-text-desktop.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "Windows executable missing at $exe" }
+          $info = Get-Item -LiteralPath $exe
+          "EXE=$($info.Name) SIZE=$($info.Length)"
