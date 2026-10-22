@@ -87,6 +87,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item -LiteralPath $packages[0].FullName -Destination $stage
           Copy-Item -LiteralPath $exe -Destination $stage
+          foreach ($name in @('local-transcribe-node.exe', 'local-transcribe.exe', 'voice-to-text-service.exe')) {
+            $tool = Join-Path $env:GITHUB_WORKSPACE "target/release/$name"
+            if (-not (Test-Path -LiteralPath $tool)) { throw "Windows executable missing at $tool" }
+            Copy-Item -LiteralPath $tool -Destination $stage
+          }
           Get-ChildItem -LiteralPath $stage | ForEach-Object {
             $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "STAGED=$($_.Name) SIZE=$($_.Length) SHA256=$hash"
