@@ -209,20 +209,22 @@
     flex: 1;
   }
 
-  /* 搜索框：默认收起成放大镜，点击后平滑展开 */
+  /* 搜索框：默认收起成放大镜（图标居中），点击后平滑展开 */
   .search {
     display: flex;
     align-items: center;
-    gap: 7px;
+    justify-content: center;
+    gap: 0;
     width: 32px;
     height: 32px;
-    padding: 0 9px;
+    padding: 0 4px;
     border-radius: 16px;
     background: var(--fill);
     color: var(--text-3);
     overflow: hidden;
     transition:
       width var(--speed) var(--ease-out),
+      padding var(--speed) var(--ease-out),
       border-radius var(--speed) var(--ease-out),
       background-color var(--speed-fast) var(--ease-out),
       box-shadow var(--speed) var(--ease-out);
@@ -230,6 +232,9 @@
 
   .search.open {
     width: 240px;
+    padding: 0 8px;
+    gap: 5px;
+    justify-content: flex-start;
     border-radius: 9px;
   }
 
@@ -237,16 +242,14 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
+  /* 固定尺寸的图标按钮：命中区够大，收起时正好居中 */
   .search-icon {
     display: flex;
     flex: none;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
-    /* 放大命中区但不影响布局 */
-    padding: 10px;
-    margin: -10px;
+    width: 24px;
+    height: 32px;
     border: 0;
     background: transparent;
     color: var(--text-3);
@@ -258,8 +261,11 @@
   }
 
   .search input {
-    flex: 1;
+    flex: 0 1 auto;
+    width: 0;
     min-width: 0;
+    height: 100%;
+    padding: 0;
     border: 0;
     background: transparent;
     color: var(--text);
@@ -274,16 +280,14 @@
   }
 
   .search.open input {
+    flex: 1;
+    width: auto;
     opacity: 1;
     transform: none;
   }
 
   .search input::placeholder {
     color: var(--text-3);
-  }
-
-  .search :global(svg) {
-    flex: none;
   }
 
   .search-clear {
