@@ -279,7 +279,7 @@
     align-items: center;
     text-align: center;
     color: var(--text-3);
-    transition: border-color 120ms ease, background-color 120ms ease;
+    transition: border-color var(--speed-fast) var(--ease-out), background-color var(--speed-fast) var(--ease-out);
   }
 
   .drop:hover {
@@ -427,7 +427,7 @@
     height: 100%;
     border-radius: 2px;
     background: var(--accent);
-    transition: width 200ms ease;
+    transition: width var(--speed) var(--ease-out);
   }
 
   /* 总段数未知时（刚开始解码）用滑动的扫描条，而不是一条卡在中间的静态条。 */

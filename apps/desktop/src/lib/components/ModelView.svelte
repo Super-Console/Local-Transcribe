@@ -160,7 +160,7 @@
     border: 1px solid var(--hairline-2);
     border-radius: 12px;
     background: var(--card);
-    transition: border-color 120ms ease;
+    transition: border-color var(--speed-fast) var(--ease-out);
   }
 
   .row:hover {

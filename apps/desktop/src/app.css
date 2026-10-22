@@ -126,3 +126,53 @@ button {
     scroll-behavior: auto !important;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* 动效：统一的非线性缓动                                            */
+/* ------------------------------------------------------------------ */
+:root {
+  /* 减速收尾（默认）· 对称平滑 · 轻回弹 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --speed-fast: 160ms;
+  --speed: 260ms;
+  --speed-slow: 420ms;
+}
+
+button,
+a,
+select,
+[role="button"] {
+  transition:
+    background-color var(--speed-fast) var(--ease-out),
+    border-color var(--speed-fast) var(--ease-out),
+    color var(--speed-fast) var(--ease-out),
+    box-shadow var(--speed) var(--ease-out),
+    transform var(--speed-fast) var(--ease-out);
+}
+
+button:active:not(:disabled),
+[role="button"]:active {
+  transform: scale(0.97);
+}
+
+input,
+textarea {
+  transition:
+    background-color var(--speed-fast) var(--ease-out),
+    border-color var(--speed-fast) var(--ease-out),
+    box-shadow var(--speed) var(--ease-out);
+}
+
+/* 视图切换：轻微上浮入场 */
+section.content {
+  animation: view-in var(--speed) var(--ease-out);
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}

@@ -87,7 +87,7 @@
     padding: 14px 10px 10px;
     background: var(--sidebar);
     border-right: 1px solid var(--hairline);
-    transition: width 160ms ease;
+    transition: width var(--speed) var(--ease-out);
   }
 
   /* 折叠 = 整列完全消失，内容区拿回全宽 */

@@ -2,6 +2,8 @@
   import Icon from "./Icon.svelte";
   import { theme } from "$lib/theme.svelte";
   import { t } from "$lib/i18n.svelte";
+  import { fade, scale } from "svelte/transition";
+  import { quintOut } from "svelte/easing";
   import type { LibraryModelSummary, ModelSummary } from "$lib/types";
 
   let {
@@ -47,29 +49,42 @@
 
 <div class="toolbar" role="toolbar" aria-label={t("toolbar.ariaLabel")} tabindex="-1">
   <div class="spacer"></div>
-  {#if searchOpen}
-    <div class="search">
+
+  <div class="search" class:open={searchOpen}>
+    <button
+      type="button"
+      class="search-icon"
+      aria-label={t("search.placeholder")}
+      title={t("search.placeholder")}
+      onclick={() => {
+        if (searchOpen) searchField?.focus();
+        else searchOpen = true;
+      }}
+    >
       <Icon name="search" size={14} stroke={1.6} />
-      <input
-        type="text"
-        autocomplete="off"
-        autocorrect="off"
-        spellcheck="false"
-        value={search}
-        placeholder={t("search.placeholder")}
-        aria-label={t("search.placeholder")}
-        bind:this={searchField}
-        oninput={(event) => onSearchChange(event.currentTarget.value)}
-        onkeydown={(event) => {
-          if (event.key === "Escape") {
-            onSearchChange("");
-            searchOpen = false;
-          }
-        }}
-        onblur={() => {
-          if (!search) searchOpen = false;
-        }}
-      />
+    </button>
+    <input
+      type="text"
+      autocomplete="off"
+      autocorrect="off"
+      spellcheck="false"
+      value={search}
+      placeholder={t("search.placeholder")}
+      aria-label={t("search.placeholder")}
+      bind:this={searchField}
+      tabindex={searchOpen ? 0 : -1}
+      oninput={(event) => onSearchChange(event.currentTarget.value)}
+      onkeydown={(event) => {
+        if (event.key === "Escape") {
+          onSearchChange("");
+          searchOpen = false;
+        }
+      }}
+      onblur={() => {
+        if (!search) searchOpen = false;
+      }}
+    />
+    {#if search}
       <button
         type="button"
         class="search-clear"
@@ -82,18 +97,8 @@
       >
         ×
       </button>
-    </div>
-  {:else}
-    <button
-      type="button"
-      class="icon-btn"
-      aria-label={t("search.placeholder")}
-      title={t("search.placeholder")}
-      onclick={() => (searchOpen = true)}
-    >
-      <Icon name="search" size={15} stroke={1.6} />
-    </button>
-  {/if}
+    {/if}
+  </div>
   <button
     type="button"
     class="icon-btn theme"
@@ -130,7 +135,7 @@
         aria-label={t("common.cancel")}
         onclick={() => (open = false)}
       ></button>
-      <div class="menu" role="listbox" aria-label={t("toolbar.defaultModel")}>
+      <div class="menu" in:scale={{ duration: 200, easing: quintOut, start: 0.96 }} out:fade={{ duration: 120 }} role="listbox" aria-label={t("toolbar.defaultModel")}>
         {#each models as entry (entry.id)}
           <button
             type="button"
@@ -204,17 +209,52 @@
     flex: 1;
   }
 
-  /* 参考设计的搜索框：圆角、浅底、放大镜 */
+  /* 搜索框：默认收起成放大镜，点击后平滑展开 */
   .search {
     display: flex;
     align-items: center;
     gap: 7px;
-    width: 240px;
+    width: 32px;
     height: 32px;
     padding: 0 9px;
-    border-radius: 9px;
+    border-radius: 16px;
     background: var(--fill);
     color: var(--text-3);
+    overflow: hidden;
+    transition:
+      width var(--speed) var(--ease-out),
+      border-radius var(--speed) var(--ease-out),
+      background-color var(--speed-fast) var(--ease-out),
+      box-shadow var(--speed) var(--ease-out);
+  }
+
+  .search.open {
+    width: 240px;
+    border-radius: 9px;
+  }
+
+  .search:focus-within {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .search-icon {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    /* 放大命中区但不影响布局 */
+    padding: 10px;
+    margin: -10px;
+    border: 0;
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+  }
+
+  .search-icon:hover {
+    color: var(--text);
   }
 
   .search input {
@@ -226,6 +266,16 @@
     font: inherit;
     font-size: 13.5px;
     outline: none;
+    opacity: 0;
+    transform: translateX(-6px);
+    transition:
+      opacity var(--speed-fast) var(--ease-out),
+      transform var(--speed) var(--ease-out);
+  }
+
+  .search.open input {
+    opacity: 1;
+    transform: none;
   }
 
   .search input::placeholder {
@@ -237,12 +287,21 @@
   }
 
   .search-clear {
+    flex: none;
     border: 0;
     background: transparent;
     color: var(--text-3);
     font-size: 15px;
     line-height: 1;
     padding: 0 2px;
+    animation: clear-in var(--speed-fast) var(--ease-spring);
+  }
+
+  @keyframes clear-in {
+    from {
+      opacity: 0;
+      transform: scale(0.6);
+    }
   }
 
   .search-clear:hover {
@@ -314,6 +373,7 @@
 
   .menu {
     position: absolute;
+    transform-origin: top right;
     top: 38px;
     right: 0;
     z-index: 25;

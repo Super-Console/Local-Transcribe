@@ -255,7 +255,7 @@
     color: var(--text);
     font-size: 14.5px;
     font-weight: 500;
-    transition: border-color 120ms ease, background-color 120ms ease;
+    transition: border-color var(--speed-fast) var(--ease-out), background-color var(--speed-fast) var(--ease-out);
   }
 
   .import-tile:hover {
@@ -295,7 +295,7 @@
     border-radius: 12px;
     background: var(--card);
     text-align: left;
-    transition: border-color 120ms ease, box-shadow 120ms ease;
+    transition: border-color var(--speed-fast) var(--ease-out), box-shadow var(--speed-fast) var(--ease-out);
   }
 
   .card:hover {

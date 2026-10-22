@@ -281,7 +281,7 @@
     border: 1px solid var(--hairline-2);
     border-radius: 12px;
     background: var(--card);
-    transition: border-color 140ms ease;
+    transition: border-color var(--speed-fast) var(--ease-out);
   }
 
   .track.hot {
@@ -344,7 +344,7 @@
     height: 100%;
     border-radius: 2px;
     background: var(--green);
-    transition: width 120ms linear;
+    transition: width var(--speed-fast) var(--ease-out);
   }
 
   .track-error {
