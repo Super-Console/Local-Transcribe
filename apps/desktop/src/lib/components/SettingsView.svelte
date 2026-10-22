@@ -1,24 +1,48 @@
 <script lang="ts">
   import { theme, type ThemePreference } from "$lib/theme.svelte";
-  import type { ModelSummary, ServiceStatus, StorageSummary } from "$lib/types";
+  import {
+    locale,
+    t,
+    LOCALE_OPTIONS,
+    LOCALE_NAMES,
+    type LocalePreference,
+  } from "$lib/i18n.svelte";
+  import type {
+    ModelSummary,
+    RetentionPolicy,
+    ServiceStatus,
+    StorageSummary,
+  } from "$lib/types";
 
   let {
     model,
     storage,
     service,
+    appVersion,
+    retention,
     onOpenLibrary,
     onOpenHistory,
+    onOpenPath,
     onGoModels,
     onRefreshService,
+    onRetentionChange,
   }: {
     model: ModelSummary | null;
     storage: StorageSummary | null;
     service: ServiceStatus | null;
+    appVersion: string;
+    retention: RetentionPolicy | null;
     onOpenLibrary: () => void;
     onOpenHistory: () => void;
+    onOpenPath: (path: string) => void;
     onGoModels: () => void;
     onRefreshService: () => void;
+    onRetentionChange: (policy: RetentionPolicy) => void;
   } = $props();
+
+  const AGE_OPTIONS = [1, 3, 5, 7, 30];
+  const SIZE_OPTIONS = [1, 5, 10];
+  const GiB = 1_073_741_824;
 
   import { onDestroy } from "svelte";
 
@@ -32,14 +56,14 @@
   const mcpConfig = $derived(`{
   "mcpServers": {
     "local-transcribe": {
-      "command": "<voice-to-text-mcp 可执行文件路径>",
-      "args": ["--allow-root", "${storage?.libraryPath ? storage.libraryPath.replace(/\/models$/, "") : "/路径/到/你的/媒体目录"}"]
+      "command": "${t("settings.mcpCommandPlaceholder")}",
+      "args": ["--allow-root", "${storage?.libraryPath ? storage.libraryPath.replace(/\/models$/, "") : t("settings.mcpPathPlaceholder")}"]
     }
   }
 }`);
 
   const cliExample = $derived(`local-transcribe models list
-local-transcribe jobs add "<媒体文件>" --model <模型 id>
+local-transcribe jobs add "${t("settings.cliMediaPlaceholder")}" --model ${t("settings.cliModelPlaceholder")}
 local-transcribe jobs show <job-id>
 local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
 
@@ -54,11 +78,11 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     }
   }
 
-  const options: Array<{ id: ThemePreference; label: string }> = [
-    { id: "system", label: "跟随系统" },
-    { id: "light", label: "浅色" },
-    { id: "dark", label: "深色" },
-  ];
+  const options: Array<{ id: ThemePreference; label: string }> = $derived([
+    { id: "system", label: t("common.system") },
+    { id: "light", label: t("settings.themeLight") },
+    { id: "dark", label: t("settings.themeDark") },
+  ]);
 
   function sizeLabel(bytes?: number): string {
     if (!bytes) return "0 MB";
@@ -69,15 +93,16 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
 </script>
 
 <section class="content">
+  <h1 class="page-title">{t("nav.settings")}</h1>
   <div class="set">
     <div class="group">
-      <div class="label">通用</div>
+      <div class="label">{t("settings.general")}</div>
       <div class="row">
         <div>
-          <div class="name">主题</div>
-          <div class="desc">跟随系统时，浅色与深色随外观自动切换</div>
+          <div class="name">{t("settings.themeName")}</div>
+          <div class="desc">{t("settings.themeDesc")}</div>
         </div>
-        <div class="seg" role="radiogroup" aria-label="主题">
+        <div class="seg" role="radiogroup" aria-label={t("settings.themeName")}>
           {#each options as option (option.id)}
             <button
               type="button"
@@ -91,81 +116,184 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           {/each}
         </div>
       </div>
-    </div>
-
-    <div class="group">
-      <div class="label">转写</div>
       <div class="row">
         <div>
-          <div class="name">默认模型</div>
-          <div class="desc">只影响之后新建的任务</div>
+          <div class="name">{t("settings.languageName")}</div>
+          <div class="desc">{t("settings.languageDesc")}</div>
         </div>
         <div class="value">
-          <span class:empty={!model}>{model?.displayName ?? "未选择模型"}</span>
-          <button type="button" class="link" onclick={onGoModels}>管理模型</button>
+          <select
+            class="locale-pick"
+            aria-label={t("settings.languageName")}
+            value={locale.preference}
+            onchange={(event) => {
+              locale.preference = event.currentTarget.value as LocalePreference;
+            }}
+          >
+            {#each LOCALE_OPTIONS as option (option)}
+              <option value={option}>
+                {option === "system" ? t("common.system") : LOCALE_NAMES[option]}
+              </option>
+            {/each}
+          </select>
         </div>
-      </div>
-      <div class="row">
-        <div>
-          <div class="name">语言</div>
-          <div class="desc">由模型自动检测，结果保留原语言</div>
-        </div>
-        <div class="value">自动检测</div>
       </div>
     </div>
 
     <div class="group">
-      <div class="label">存储</div>
+      <div class="label">{t("settings.transcription")}</div>
+      <div class="row">
+        <div>
+          <div class="name">{t("toolbar.defaultModel")}</div>
+          <div class="desc">{t("settings.defaultModelDesc")}</div>
+        </div>
+        <div class="value">
+          <span class:empty={!model}>{model?.displayName ?? t("common.noModel")}</span>
+          <button type="button" class="link" onclick={onGoModels}>{t("settings.manageModels")}</button>
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <div class="name">{t("settings.audioLangName")}</div>
+          <div class="desc">{t("settings.audioLangDesc")}</div>
+        </div>
+        <div class="value">{t("settings.audioLangValue")}</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="label">{t("settings.storage")}</div>
       <div class="row">
         <div class="grow">
-          <div class="name">模型目录</div>
+          <div class="name">{t("settings.libraryDir")}</div>
           <div class="path" title={storage?.libraryPath ?? ""}>
             {storage?.libraryPath ?? "—"}
           </div>
         </div>
         <div class="value">
-          <span>{storage?.libraryCount ?? 0} 个 · {sizeLabel(storage?.libraryBytes)}</span>
-          <button type="button" class="link" onclick={onOpenLibrary} disabled={!storage}>打开</button>
+          <span>{t("settings.countModels", { count: storage?.libraryCount ?? 0, size: sizeLabel(storage?.libraryBytes) })}</span>
+          <button type="button" class="link" onclick={onOpenLibrary} disabled={!storage}>{t("common.open")}</button>
         </div>
       </div>
       <div class="row">
         <div class="grow">
-          <div class="name">历史结果</div>
+          <div class="name">{t("settings.historyDir")}</div>
           <div class="path" title={storage?.historyPath ?? ""}>
             {storage?.historyPath ?? "—"}
           </div>
         </div>
         <div class="value">
-          <span>{storage?.historyCount ?? 0} 条 · {sizeLabel(storage?.historyBytes)}</span>
-          <button type="button" class="link" onclick={onOpenHistory} disabled={!storage}>打开</button>
+          <span>{t("settings.countHistory", { count: storage?.historyCount ?? 0, size: sizeLabel(storage?.historyBytes) })}</span>
+          <button type="button" class="link" onclick={onOpenHistory} disabled={!storage}>{t("common.open")}</button>
         </div>
       </div>
-      <p class="note">迁移模型目录需要先做空间预检与回滚方案，尚未开放；删除模型只会移除应用内副本。</p>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.jobsDir")}</div>
+          <div class="path" title={storage?.jobsPath ?? ""}>{storage?.jobsPath ?? "—"}</div>
+        </div>
+        <div class="value">
+          <span>{t("settings.countHistory", { count: storage?.jobsCount ?? 0, size: sizeLabel(storage?.jobsBytes) })}</span>
+          <button
+            type="button"
+            class="link"
+            onclick={() => storage && onOpenPath(storage.jobsPath)}
+            disabled={!storage}>{t("common.open")}</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.dataDir")}</div>
+          <div class="path" title={storage?.dataPath ?? ""}>{storage?.dataPath ?? "—"}</div>
+        </div>
+        <div class="value">
+          <button
+            type="button"
+            class="link"
+            onclick={() => storage && onOpenPath(storage.dataPath)}
+            disabled={!storage}>{t("common.open")}</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.retentionName")}</div>
+          <div class="desc">{t("settings.retentionDesc")}</div>
+        </div>
+        <div class="value retention">
+          <select
+            class="locale-pick"
+            aria-label={t("settings.retentionName")}
+            value={retention?.mode ?? "off"}
+            onchange={(event) =>
+              onRetentionChange({
+                ...(retention ?? { mode: "off", ageDays: 7, maxBytes: GiB }),
+                mode: event.currentTarget.value as RetentionPolicy["mode"],
+              })}
+          >
+            <option value="off">{t("settings.retentionOff")}</option>
+            <option value="age">{t("settings.retentionAge")}</option>
+            <option value="size">{t("settings.retentionSize")}</option>
+          </select>
+          {#if retention && retention.mode === "age"}
+            <select
+              class="locale-pick"
+              aria-label={t("settings.retentionAge")}
+              value={String(retention.ageDays)}
+              onchange={(event) =>
+                onRetentionChange({
+                  ...retention,
+                  ageDays: Number(event.currentTarget.value),
+                })}
+            >
+              {#each AGE_OPTIONS as days (days)}
+                <option value={String(days)}>{t("settings.retentionDays", { days })}</option>
+              {/each}
+            </select>
+          {:else if retention && retention.mode === "size"}
+            <select
+              class="locale-pick"
+              aria-label={t("settings.retentionSize")}
+              value={String(retention.maxBytes)}
+              onchange={(event) =>
+                onRetentionChange({
+                  ...retention,
+                  maxBytes: Number(event.currentTarget.value),
+                })}
+            >
+              {#each SIZE_OPTIONS as gib (gib)}
+                <option value={String(gib * GiB)}>{gib} GB</option>
+              {/each}
+            </select>
+          {/if}
+        </div>
+      </div>
+      <p class="note">{t("settings.chunkNote")}</p>
+      <p class="note">{t("settings.storageNote")}</p>
     </div>
 
     <div class="group">
-      <div class="label">集成</div>
+      <div class="label">{t("settings.integration")}</div>
       <div class="row">
         <div class="grow">
-          <div class="name">本地服务</div>
+          <div class="name">{t("settings.serviceName")}</div>
           <div class="desc">
-            {service?.running ? `运行中 · pid ${service.pid}` : "未运行：CLI 或 MCP 调用时会自动启动"}
+            {service?.running ? t("settings.serviceRunning", { pid: service.pid ?? "—" }) : t("settings.serviceStopped")}
           </div>
           <div class="path" title={service?.socketPath ?? ""}>{service?.socketPath ?? "—"}</div>
         </div>
         <div class="value">
           <span class="status-dot" class:on={service?.running}></span>
-          <button type="button" class="link" onclick={onRefreshService}>刷新</button>
+          <button type="button" class="link" onclick={onRefreshService}>{t("settings.refresh")}</button>
         </div>
       </div>
       <div class="row">
         <div class="grow">
-          <div class="name">MCP（stdio）</div>
-          <div class="desc">9 个工具：模型、提交、状态、结果、队列、取消、重试、导出</div>
+          <div class="name">{t("settings.mcpName")}</div>
+          <div class="desc">{t("settings.mcpDesc")}</div>
         </div>
         <div class="value">
           <button type="button" class="link" onclick={() => copy(mcpConfig, "mcp")}>
-            {copied === "mcp" ? "已复制" : "复制配置"}
+            {copied === "mcp" ? t("common.copied") : t("settings.copyConfig")}
           </button>
         </div>
       </div>
@@ -173,29 +301,29 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
       <div class="row">
         <div class="grow">
           <div class="name">CLI</div>
-          <div class="desc">与 MCP 共用同一服务与队列</div>
+          <div class="desc">{t("settings.cliDesc")}</div>
         </div>
         <div class="value">
           <button type="button" class="link" onclick={() => copy(cliExample, "cli")}>
-            {copied === "cli" ? "已复制" : "复制示例"}
+            {copied === "cli" ? t("common.copied") : t("settings.copyExample")}
           </button>
         </div>
       </div>
       <pre class="snippet">{cliExample}</pre>
       <p class="note">
-        故障排查：服务只监听本机 Unix socket（权限 0600）；文件访问需在启动时用
-        <code>--allow-root</code> 授权；日志在终端输出，不记录音频内容。
+        {t("settings.troubleIntro")}
+        <code>--allow-root</code>{t("settings.troubleOutro")}
       </p>
     </div>
 
     <div class="group">
-      <div class="label">关于</div>
+      <div class="label">{t("settings.about")}</div>
       <div class="row">
         <div>
           <div class="name">Local Transcribe</div>
-          <div class="desc">本地音视频转写 · 预览版本 0.1.0</div>
+          <div class="desc">{t("settings.aboutDesc", { version: appVersion })}</div>
         </div>
-        <div class="value">未签名开发构建</div>
+        <div class="value">{t("settings.aboutBuild")}</div>
       </div>
     </div>
   </div>
@@ -209,9 +337,19 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     padding: 2px 28px 20px;
   }
 
+  .page-title {
+    width: 100%;
+    max-width: 720px;
+    margin: 10px auto 6px;
+    font-family: var(--font-display);
+    font-size: 34px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
   .set {
     width: 100%;
-    max-width: 648px;
+    max-width: 720px;
     margin: 0 auto;
     padding: 0 0 16px;
   }
@@ -225,10 +363,12 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
   }
 
   .label {
-    font-size: 11px;
-    color: var(--text-3);
-    letter-spacing: 0.03em;
-    padding: 0 2px 2px;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+    padding: 0 2px 6px;
+    margin-top: 6px;
   }
 
   .row {
@@ -236,8 +376,9 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     align-items: center;
     flex-wrap: wrap;
     gap: 12px;
-    padding: 6.5px 2px;
-    font-size: 12.5px;
+    padding: 14px 2px;
+    font-size: 14px;
+    border-top: 1px solid var(--hairline);
   }
 
   .grow {
@@ -246,18 +387,20 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
   }
 
   .name {
-    font-size: 13px;
+    font-size: 15px;
+    font-weight: 500;
   }
 
   .desc {
-    font-size: 11px;
+    font-size: 13.5px;
     color: var(--text-3);
-    margin-top: 1px;
+    margin-top: 2px;
+    line-height: 1.45;
   }
 
   .path {
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 12px;
     color: var(--text-3);
     margin-top: 2px;
     overflow: hidden;
@@ -270,7 +413,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-2);
     /* 窄窗口下允许收缩与折行，长模型 id 不再把行顶出窗口 */
     flex: 0 1 auto;
@@ -287,8 +430,20 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     border: 0;
     background: none;
     padding: 0;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--accent-ink);
+  }
+
+  .locale-pick {
+    height: 30px;
+    padding: 0 8px;
+    border-radius: 8px;
+    border: 0;
+    background: var(--fill);
+    color: var(--text);
+    font-size: 13.5px;
+    font-family: inherit;
+    max-width: 190px;
   }
 
   .status-dot {
@@ -310,7 +465,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     border-radius: 8px;
     background: var(--sunken);
     font-family: var(--font-mono);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.6;
     color: var(--text-2);
     overflow-x: auto;
@@ -325,9 +480,9 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     margin-left: auto;
     display: flex;
     gap: 2px;
-    padding: 2px;
-    border-radius: 7px;
-    background: var(--sunken);
+    padding: 3px;
+    border-radius: 9px;
+    background: var(--fill);
   }
 
   .seg button {

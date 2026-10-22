@@ -1,6 +1,6 @@
 /** Shared frontend types mirroring the Rust command/event payloads. */
 
-export type View = "transcribe" | "history" | "model" | "settings";
+export type View = "home" | "model" | "settings";
 
 export type InputFile = { path: string; fileName: string; sizeBytes: number };
 
@@ -23,6 +23,23 @@ export type StorageSummary = {
   historyPath: string;
   historyBytes: number;
   historyCount: number;
+  jobsPath: string;
+  jobsBytes: number;
+  jobsCount: number;
+  dataPath: string;
+};
+
+/** 模型运行时状态：loadedModelId 非空才代表模型真的驻留内存。 */
+export type ModelRuntime = {
+  loadedModelId?: string | null;
+  idleUnloadSeconds: number;
+};
+
+/** 历史与任务记录的自动清理策略；默认关闭。 */
+export type RetentionPolicy = {
+  mode: "off" | "age" | "size";
+  ageDays: number;
+  maxBytes: number;
 };
 
 export type ServiceStatus = {
@@ -39,6 +56,8 @@ export type JobStatus = {
   phase: string;
   completedChunks: number;
   totalChunks?: number;
+  startedAtMs?: number;
+  totalDurationMs?: number;
   transcriptAvailable: boolean;
   resultSaved: boolean;
   error?: string;
@@ -55,6 +74,16 @@ export type Transcript = {
   durationMs?: number;
   text: string;
   segments?: Segment[];
+};
+
+export type SearchHit = {
+  jobId: string;
+  sourceFileName: string;
+  modelId: string;
+  durationMs?: number;
+  snippet: string;
+  matchedInContent: boolean;
+  updatedAtMs: number;
 };
 
 export type HistoryEntry = {

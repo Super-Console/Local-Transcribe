@@ -70,6 +70,8 @@ pub struct LocalModel {
 pub struct TranscriptionProgress {
     pub completed_chunks: usize,
     pub total_chunks: usize,
+    /// 音频总时长（毫秒）。界面据此计算实时倍速与剩余时间。
+    pub total_duration_ms: u64,
 }
 
 /// One stable segment, reported as soon as the engine has decoded it.
@@ -84,6 +86,51 @@ pub struct TranscriptionSegmentUpdate {
 }
 
 /// Supported layouts, named in every rejection message so users know what import can accept.
+/// 常驻识别器缓存：同一模型连续任务复用，切换模型在任务边界卸载，
+/// 整个进程空闲 120 秒后释放（见任务书：模型空闲卸载默认两分钟）。
+struct CachedRecognizer {
+    model_id: String,
+    directory: std::path::PathBuf,
+    recognizer: OfflineRecognizer,
+    last_used: std::time::Instant,
+}
+
+static RECOGNIZER_CACHE: std::sync::Mutex<Option<CachedRecognizer>> = std::sync::Mutex::new(None);
+static IDLE_UNLOADER: std::sync::Once = std::sync::Once::new();
+
+const IDLE_UNLOAD: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn spawn_idle_unloader() {
+    IDLE_UNLOADER.call_once(|| {
+        std::thread::Builder::new()
+            .name("model-idle-unload".to_owned())
+            .spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if let Ok(mut cache) = RECOGNIZER_CACHE.lock() {
+                    let expired = cache
+                        .as_ref()
+                        .is_some_and(|entry| entry.last_used.elapsed() >= IDLE_UNLOAD);
+                    if expired {
+                        *cache = None;
+                    }
+                }
+            })
+            .ok();
+    });
+}
+
+/// 当前确实驻留在内存中的模型 id（顶部绿点只认这个值）。
+pub fn loaded_model_id() -> Option<String> {
+    RECOGNIZER_CACHE
+        .lock()
+        .ok()
+        .and_then(|cache| cache.as_ref().map(|entry| entry.model_id.clone()))
+}
+
+pub fn idle_unload_seconds() -> u64 {
+    IDLE_UNLOAD.as_secs()
+}
+
 const SUPPORTED_LAYOUTS: &str = "Supported layouts: sherpa-onnx Whisper ONNX exports (encoder + decoder + tokens.txt), sherpa-onnx Qwen3-ASR exports (conv_frontend.onnx + encoder/decoder + tokenizer/), sherpa-onnx FireRedASR exports (encoder + decoder + tokens.txt, keep the original fire-red folder name), and Paraformer or SenseVoice folders (model.onnx + tokens.txt).";
 
 fn non_empty_file(path: &Path) -> bool {
@@ -368,6 +415,7 @@ pub fn transcribe_file_streaming(
     if chunks.is_empty() {
         return Err("The selected media contains no audio to transcribe.".to_owned());
     }
+    let total_duration_ms = (audio.samples.len() * 1_000 / SAMPLE_RATE as usize) as u64;
 
     let mut config = OfflineRecognizerConfig::default();
     config.model_config.num_threads = 2;
@@ -461,10 +509,29 @@ pub fn transcribe_file_streaming(
             );
         }
     }
-    let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
-        "sherpa-onnx could not load this model. Verify that its files are a compatible export."
-            .to_owned()
-    })?;
+    spawn_idle_unloader();
+    let mut cache = RECOGNIZER_CACHE
+        .lock()
+        .map_err(|_| "The model cache is unavailable.".to_owned())?;
+    let reusable = cache.as_ref().is_some_and(|entry| {
+        entry.model_id == model.id && entry.directory == model.directory
+    });
+    if !reusable {
+        let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
+            "sherpa-onnx could not load this model. Verify that its files are a compatible export."
+                .to_owned()
+        })?;
+        *cache = Some(CachedRecognizer {
+            model_id: model.id.clone(),
+            directory: model.directory.clone(),
+            recognizer,
+            last_used: std::time::Instant::now(),
+        });
+    }
+    let recognizer = &cache
+        .as_ref()
+        .ok_or_else(|| "The model cache is unavailable.".to_owned())?
+        .recognizer;
     if is_cancelled() {
         return Err("Transcription was cancelled.".to_owned());
     }
@@ -500,6 +567,7 @@ pub fn transcribe_file_streaming(
         on_progress(TranscriptionProgress {
             completed_chunks: index + 1,
             total_chunks: chunks.len(),
+            total_duration_ms,
         });
         if is_cancelled() {
             return Err("Transcription was cancelled.".to_owned());
@@ -515,6 +583,11 @@ pub fn transcribe_file_streaming(
         .map(|segment| segment.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
+    if let Some(entry) = cache.as_mut() {
+        entry.last_used = std::time::Instant::now();
+    }
+    drop(cache);
+
     Ok(Transcript {
         schema_version: "1".to_owned(),
         job_id: format!(

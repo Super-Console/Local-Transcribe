@@ -27,6 +27,14 @@ crates/transcription-mcp/     MCP server over local stdio (9 tools)
 
 All three interfaces talk to the same file-backed service instance, so a job started in the GUI is visible to the CLI and MCP, and vice versa.
 
+## Desktop GUI (0.2.0)
+
+- **Home** merges transcription and history: an import tile plus date-grouped transcript cards; opening a record shows the transcript in the reader.
+- **Search** in the toolbar matches both file names and transcript text (local JSON, case-insensitive) and shows the matching snippet; the reader has its own in-transcript search with match count and highlighting.
+- **Model picker** in the toolbar lists imported models, marks the default one, and shows a **green dot only when that model is actually resident in memory** (models load on demand, are reused across jobs, and unload after 120 s idle).
+- **Storage** settings show every app directory (models, history results, job records, app data) and offer automatic cleanup by age (1/3/5/7/30 days) or size (1/5/10 GB), off by default; deletions go to the Trash.
+- **Interface languages**: 简体中文, English, Español, Français, Deutsch (follows macOS by default).
+
 ## Supported model families
 
 Imported model folders are validated strictly by on-disk layout; nothing is auto-downloaded.

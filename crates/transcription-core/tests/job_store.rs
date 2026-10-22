@@ -28,6 +28,8 @@ fn running(job_id: &str) -> JobStatus {
         phase: "Starting".to_owned(),
         completed_chunks: 0,
         total_chunks: None,
+        started_at_ms: Some(1_000),
+        total_duration_ms: None,
         transcript_available: false,
         result_saved: false,
         error: None,
@@ -41,6 +43,8 @@ fn completed(job_id: &str) -> JobStatus {
         phase: "Completed".to_owned(),
         completed_chunks: 1,
         total_chunks: Some(1),
+        started_at_ms: Some(1_000),
+        total_duration_ms: Some(30_000),
         transcript_available: true,
         result_saved: true,
         error: None,
@@ -55,6 +59,8 @@ fn job_status_round_trips_and_active_job_is_shared_between_store_instances() {
     let mut lease = first.begin_job(running("job-1")).unwrap();
 
     assert_eq!(second.job_status("job-1").unwrap(), Some(running("job-1")));
+    let shared = second.job_status("job-1").unwrap().unwrap();
+    assert_eq!(shared.started_at_ms, Some(1_000));
     assert!(second.begin_job(running("job-2")).is_err());
 
     lease.save_status(completed("job-1")).unwrap();
@@ -80,6 +86,8 @@ fn cancellation_request_is_visible_across_store_instances_and_terminal_jobs_are_
             phase: "Cancelled".to_owned(),
             completed_chunks: 0,
             total_chunks: None,
+            started_at_ms: Some(1_000),
+            total_duration_ms: None,
             transcript_available: false,
             result_saved: false,
             error: None,

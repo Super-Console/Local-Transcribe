@@ -4,10 +4,10 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     AppHandle, Emitter, Manager, State,
     menu::{Menu, MenuItem, MenuItemKind},
@@ -66,6 +66,10 @@ struct StorageSummary {
     history_path: String,
     history_bytes: u64,
     history_count: usize,
+    jobs_path: String,
+    jobs_bytes: u64,
+    jobs_count: usize,
+    data_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +105,12 @@ fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn model_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("selected-model.json"))
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64)
 }
 
 fn read_selected_model(app: &AppHandle) -> Result<Option<LocalModel>, String> {
@@ -313,33 +323,40 @@ fn sync_window_theme(dark: bool, window: tauri::WebviewWindow) -> Result<(), Str
     };
     window
         .set_theme(Some(theme))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    set_native_window_background(&window, dark);
+    Ok(())
 }
 
-/// Overlay 标题栏会关掉原生拖动；把窗口设为「可拖背景」，
-/// 这样任何非交互区域的空白处都能移动窗口，标题栏条也一样。
+/// 透明标题栏条显示的是 NSWindow 背景色；把它调成与页面 `--bg` 一致
+/// （浅色 #faf9f5 / 深色 #1e1e20，见 app.css），避免标题栏与内容出现接缝色差。
 #[cfg(target_os = "macos")]
-fn enable_window_background_drag(app: &tauri::App) {
-    use objc2::msg_send;
+fn set_native_window_background(window: &tauri::WebviewWindow, dark: bool) {
     use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
     use tauri::Manager;
 
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    if let Ok(pointer) = window.ns_window() {
+    let app = window.app_handle().clone();
+    let window = window.clone();
+    // AppKit 只能在主线程调用；裸指针不能跨线程，所以在闭包内获取。
+    let _ = app.run_on_main_thread(move || {
+        let Ok(pointer) = window.ns_window() else {
+            return;
+        };
         unsafe {
             let ns_window = pointer as *mut AnyObject;
-            // 不再使用 setMovableByWindowBackground：它会把内容区的按住拖动
-            // 吃成窗口拖动，导致正文无法拖选。窗口拖动由工具栏/侧栏拖拽条的
-            // startDragging 显式承担。
-            let _ = ns_window;
+            let (r, g, b): (f64, f64, f64) = if dark {
+                (30.0 / 255.0, 30.0 / 255.0, 32.0 / 255.0)
+            } else {
+                (250.0 / 255.0, 249.0 / 255.0, 245.0 / 255.0)
+            };
+            let color: *mut AnyObject =
+                msg_send![class!(NSColor), colorWithRed: r, green: g, blue: b, alpha: 1.0f64];
+            let _: () = msg_send![ns_window, setBackgroundColor: color];
         }
-    }
+    });
 }
-
-#[cfg(not(target_os = "macos"))]
-fn enable_window_background_drag(_app: &tauri::App) {}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -375,64 +392,6 @@ fn service_status(app: AppHandle) -> Result<ServiceStatus, String> {
     Ok(status)
 }
 
-/// 三个标准按钮的绝对位置（窗口坐标）：左侧 30、间距 20，
-/// 让它们落在浮起侧栏内部、离圆角有足够净空。
-/// macOS 会在获得焦点/缩放时重置按钮 frame，所以每次事件都重新摆放。
-#[cfg(target_os = "macos")]
-fn place_traffic_lights(window: &tauri::WebviewWindow) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use objc2_foundation::NSPoint;
-
-    let Ok(pointer) = window.ns_window() else {
-        return;
-    };
-    unsafe {
-        let ns_window = pointer as *mut AnyObject;
-        for kind in 0..3usize {
-            let button: *mut AnyObject = msg_send![ns_window, standardWindowButton: kind];
-            if button.is_null() {
-                continue;
-            }
-            let target = NSPoint {
-                // 绝对坐标，避免每次事件读到被自己改过的 frame 后逐次漂移；
-                // 侧栏卡片左 12、上 8，按钮统一留 12px 内边距：x=24、顶边=20（标题栏高 28、按钮高 12）
-                x: 24.0 + (kind as f64) * 20.0,
-                y: -4.0,
-            };
-            let _: () = msg_send![button, setFrameOrigin: target];
-        }
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn place_traffic_lights(_window: &tauri::WebviewWindow) {}
-
-/// 缩放期间 macOS 会持续把按钮 frame 重置回原生位置，逐次强摆会和它互相打架，
-/// 造成红绿灯抖动。这里按“代际计数”防抖：只有停手 PLACE_SETTLE_MS 后才真正摆放一次。
-#[cfg(target_os = "macos")]
-static PLACE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-#[cfg(target_os = "macos")]
-const PLACE_SETTLE_MS: u64 = 150;
-
-#[cfg(target_os = "macos")]
-fn schedule_place_traffic_lights(window: tauri::WebviewWindow) {
-    use std::sync::atomic::Ordering;
-    let generation = PLACE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(PLACE_SETTLE_MS));
-        if PLACE_GENERATION.load(Ordering::SeqCst) == generation {
-            // AppKit 只能在主线程调用：后台线程直接 setFrameOrigin 会抛异常崩溃
-            let app = window.app_handle().clone();
-            let target = window.clone();
-            let _ = app.run_on_main_thread(move || place_traffic_lights(&target));
-        }
-    });
-}
-
-#[cfg(not(target_os = "macos"))]
-fn schedule_place_traffic_lights(_window: tauri::WebviewWindow) {}
-
 #[tauri::command]
 fn inspect_input(path: String) -> Result<InputFile, String> {
     InputFile::inspect(path).map_err(|error| error.to_string())
@@ -461,6 +420,7 @@ fn start_transcription(
         .ok_or_else(|| "Choose a local Paraformer or SenseVoice model folder first.".to_owned())?;
     let store = JobStore::new(app_data_dir(&app)?);
     let state = Arc::clone(state.inner());
+    let started_at_ms = unix_now_ms();
     {
         let mut jobs = state
             .jobs
@@ -476,6 +436,8 @@ fn start_transcription(
             phase: "正在读取并解码音频".to_owned(),
             completed_chunks: 0,
             total_chunks: None,
+            started_at_ms: Some(started_at_ms),
+            total_duration_ms: None,
             transcript_available: false,
             result_saved: false,
             error: None,
@@ -515,6 +477,8 @@ fn start_transcription(
                             ),
                             completed_chunks: progress.completed_chunks,
                             total_chunks: Some(progress.total_chunks),
+                            started_at_ms: Some(started_at_ms),
+                            total_duration_ms: Some(progress.total_duration_ms),
                             transcript_available: false,
                             result_saved: false,
                             error: None,
@@ -547,8 +511,13 @@ fn start_transcription(
                             .lock()
                             .ok()
                             .and_then(|jobs| {
-                                jobs.get(&worker_job_id)
-                                    .map(|job| (job.completed_chunks, job.total_chunks))
+                                jobs.get(&worker_job_id).map(|job| {
+                                    (
+                                        job.completed_chunks,
+                                        job.total_chunks,
+                                        job.total_duration_ms,
+                                    )
+                                })
                             })
                             .unwrap_or_default();
                         let status = JobStatus {
@@ -566,6 +535,8 @@ fn start_transcription(
                             .to_owned(),
                             completed_chunks: progress.0,
                             total_chunks: progress.1,
+                            started_at_ms: Some(started_at_ms),
+                            total_duration_ms: progress.2,
                             transcript_available: false,
                             result_saved: false,
                             error: if cancelled { None } else { Some(error) },
@@ -581,8 +552,13 @@ fn start_transcription(
                     .lock()
                     .ok()
                     .and_then(|jobs| {
-                        jobs.get(&worker_job_id)
-                            .map(|job| (job.completed_chunks, job.total_chunks))
+                        jobs.get(&worker_job_id).map(|job| {
+                            (
+                                job.completed_chunks,
+                                job.total_chunks,
+                                job.total_duration_ms,
+                            )
+                        })
                     })
                     .unwrap_or_default();
                 let save_result = save_transcript(&worker_app, &transcript);
@@ -599,12 +575,16 @@ fn start_transcription(
                     },
                     completed_chunks: final_progress.0,
                     total_chunks: final_progress.1,
+                    started_at_ms: Some(started_at_ms),
+                    total_duration_ms: final_progress.2,
                     transcript_available: true,
                     result_saved: save_result.is_ok(),
                     error: save_result.err(),
                 };
                 let _ = lease.save_status(status.clone());
                 update_job(&worker_app, &worker_state, status);
+                // 任务结束后按保留策略清理旧结果（默认关闭）。
+                let _ = apply_retention(&worker_app);
             });
         if worker.is_err() {
             jobs.remove(&response_status.job_id);
@@ -707,6 +687,8 @@ fn storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
     let library_bytes = models.iter().map(|entry| entry.bytes).sum();
     let history = data_dir.join("transcripts");
     let (history_bytes, history_count) = directory_usage(&history);
+    let jobs = data_dir.join("jobs");
+    let (jobs_bytes, jobs_count) = directory_usage(&jobs);
     Ok(StorageSummary {
         library_path: library.directory().to_string_lossy().into_owned(),
         library_bytes,
@@ -714,7 +696,200 @@ fn storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
         history_path: history.to_string_lossy().into_owned(),
         history_bytes,
         history_count,
+        jobs_path: jobs.to_string_lossy().into_owned(),
+        jobs_bytes,
+        jobs_count,
+        data_path: data_dir.to_string_lossy().into_owned(),
     })
+}
+
+/// 模型运行时状态：绿点只表示模型确实驻留内存（任务书：空闲 120 秒卸载）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelRuntime {
+    loaded_model_id: Option<String>,
+    idle_unload_seconds: u64,
+}
+
+#[tauri::command]
+fn model_runtime() -> ModelRuntime {
+    ModelRuntime {
+        loaded_model_id: voice_to_text_core::loaded_model_id(),
+        idle_unload_seconds: voice_to_text_core::idle_unload_seconds(),
+    }
+}
+
+/// 历史与任务记录的自动清理策略。默认关闭：未经用户设置绝不自动删除。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RetentionPolicy {
+    /// "off" | "age" | "size"
+    mode: String,
+    /// 按天清理：1 / 3 / 5 / 7 / 30 天
+    age_days: u32,
+    /// 按容量清理：1 / 5 / 10 GiB
+    max_bytes: u64,
+}
+
+const GIB: u64 = 1_073_741_824;
+
+impl Default for RetentionPolicy {
+    fn default() -> Self {
+        Self {
+            mode: "off".to_owned(),
+            age_days: 7,
+            max_bytes: GIB,
+        }
+    }
+}
+
+fn retention_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("retention.json"))
+}
+
+fn read_retention(app: &AppHandle) -> Result<RetentionPolicy, String> {
+    let path = retention_config_path(app)?;
+    if !path.exists() {
+        return Ok(RetentionPolicy::default());
+    }
+    let bytes = fs::read(path).map_err(|_| "Could not read the cleanup settings.".to_owned())?;
+    Ok(serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+#[tauri::command]
+fn get_retention_policy(app: AppHandle) -> Result<RetentionPolicy, String> {
+    read_retention(&app)
+}
+
+fn validate_retention(policy: &RetentionPolicy) -> Result<(), String> {
+    if !matches!(policy.mode.as_str(), "off" | "age" | "size") {
+        return Err("Unknown cleanup mode.".to_owned());
+    }
+    if !matches!(policy.age_days, 1 | 3 | 5 | 7 | 30) {
+        return Err("Unsupported cleanup age.".to_owned());
+    }
+    if ![GIB, 5 * GIB, 10 * GIB].contains(&policy.max_bytes) {
+        return Err("Unsupported cleanup size.".to_owned());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_retention_policy(policy: RetentionPolicy, app: AppHandle) -> Result<RetentionPolicy, String> {
+    validate_retention(&policy)?;
+    let path = retention_config_path(&app)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "The app's local data folder is unavailable.".to_owned())?;
+    fs::create_dir_all(parent).map_err(|_| "Could not prepare the cleanup settings.".to_owned())?;
+    let temporary = parent.join("retention.json.tmp");
+    let contents = serde_json::to_vec_pretty(&policy)
+        .map_err(|_| "Could not encode the cleanup settings.".to_owned())?;
+    fs::write(&temporary, contents).map_err(|_| "Could not save the cleanup settings.".to_owned())?;
+    fs::rename(&temporary, &path).map_err(|_| "Could not save the cleanup settings.".to_owned())?;
+    Ok(policy)
+}
+
+/// 清理结果（条数与字节），供启动日志与后续界面提示使用。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetentionOutcome {
+    removed: usize,
+    bytes: u64,
+}
+
+/// 把文件移入废纸篓（本项目的删除约定：永不永久删除）。
+#[cfg(target_os = "macos")]
+fn move_to_trash(path: &Path) -> Result<(), String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?;
+    let trash = PathBuf::from(home).join(".Trash");
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("entry");
+    let target = trash.join(format!("{name}.{}", unix_now_ms()));
+    fs::rename(path, target).map_err(|_| "Could not move the entry to the Trash.".to_owned())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn move_to_trash(_path: &Path) -> Result<(), String> {
+    Err("Automatic cleanup currently supports macOS only.".to_owned())
+}
+
+/// 按策略清理历史结果与任务记录（不动模型库、不动用户原始文件）。
+fn apply_retention(app: &AppHandle) -> Result<RetentionOutcome, String> {
+    let policy = read_retention(app)?;
+    if policy.mode == "off" {
+        return Ok(RetentionOutcome {
+            removed: 0,
+            bytes: 0,
+        });
+    }
+    let data_dir = app_data_dir(app)?;
+    let now = std::time::SystemTime::now();
+    let mut entries: Vec<(PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    for directory in [data_dir.join("transcripts"), data_dir.join("jobs")] {
+        let Ok(read_dir) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+            // 只处理结果与状态 JSON；锁文件、取消标记、派发锁一律不动。
+            if !name.ends_with(".json") {
+                continue;
+            }
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if !metadata.is_file() {
+                continue;
+            }
+            let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+            entries.push((path, metadata.len(), modified));
+        }
+    }
+    let mut targets: Vec<(PathBuf, u64)> = Vec::new();
+    if policy.mode == "age" {
+        let cutoff = now
+            - std::time::Duration::from_secs(u64::from(policy.age_days) * 86_400);
+        for (path, bytes, modified) in &entries {
+            if *modified < cutoff {
+                targets.push((path.clone(), *bytes));
+            }
+        }
+    } else {
+        let total: u64 = entries.iter().map(|(_, bytes, _)| *bytes).sum();
+        if total > policy.max_bytes {
+            let mut sorted = entries.clone();
+            sorted.sort_by_key(|(_, _, modified)| *modified);
+            let mut current = total;
+            for (path, bytes, modified) in sorted {
+                if current <= policy.max_bytes {
+                    break;
+                }
+                // 正在写入的新文件（1 分钟内）不参与清理，避免碰到活动任务。
+                if now
+                    .duration_since(modified)
+                    .map(|age| age.as_secs() < 60)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                current = current.saturating_sub(bytes);
+                targets.push((path, bytes));
+            }
+        }
+    }
+    let mut removed = 0usize;
+    let mut bytes = 0u64;
+    for (path, size) in targets {
+        if move_to_trash(&path).is_ok() {
+            removed += 1;
+            bytes = bytes.saturating_add(size);
+        }
+    }
+    Ok(RetentionOutcome { removed, bytes })
 }
 
 /// 用系统文件管理器打开一个已存在的目录。
@@ -774,6 +949,8 @@ fn get_job_status(
         phase: "转写完成（已从本地历史恢复）".to_owned(),
         completed_chunks: 0,
         total_chunks: None,
+        started_at_ms: None,
+        total_duration_ms: None,
         transcript_available: true,
         result_saved: true,
         error: None,
@@ -787,6 +964,95 @@ fn get_job_result(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Transcript, String> {
     load_transcript(&app, state.inner(), &job_id)
+}
+
+/// 搜索命中：文件名或正文命中都返回，带命中上下文片段。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchHit {
+    job_id: String,
+    source_file_name: String,
+    model_id: String,
+    duration_ms: Option<u64>,
+    snippet: String,
+    matched_in_content: bool,
+    updated_at_ms: u128,
+}
+
+/// 在正文中截取命中位置前后约 40/80 字的片段（按字符，不切坏 UTF-8）。
+fn match_snippet(text: &str, needle: &str, before: usize, take: usize) -> String {
+    let lowered = text.to_lowercase();
+    let Some(byte_index) = lowered.find(needle) else {
+        let head: String = text.chars().take(take).collect();
+        return head;
+    };
+    let char_index = lowered[..byte_index].chars().count();
+    let start = char_index.saturating_sub(before);
+    let mut snippet: String = text.chars().skip(start).take(take).collect();
+    if start > 0 {
+        snippet.insert(0, '…');
+    }
+    if text.chars().count() > start + take {
+        snippet.push('…');
+    }
+    snippet
+}
+
+#[tauri::command]
+fn search_history(query: String, app: AppHandle) -> Result<Vec<SearchHit>, String> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Ok(Vec::new());
+    }
+    let directory = app_data_dir(&app)?.join("transcripts");
+    if !directory.exists() {
+        return Ok(Vec::new());
+    }
+    let entries =
+        fs::read_dir(directory).map_err(|_| "Could not read local transcription history.".to_owned())?;
+    let mut hits = Vec::new();
+    for entry in entries.flatten() {
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(bytes) = fs::read(entry.path()) else {
+            continue;
+        };
+        let Ok(transcript) = serde_json::from_slice::<Transcript>(&bytes) else {
+            continue;
+        };
+        let name_hit = transcript.source_file_name.to_lowercase().contains(&needle);
+        let content_hit = transcript.text.to_lowercase().contains(&needle);
+        if !name_hit && !content_hit {
+            continue;
+        }
+        let updated_at_ms = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map_or(0, |duration| duration.as_millis());
+        let snippet = if content_hit {
+            match_snippet(&transcript.text, &needle, 30, 110)
+        } else {
+            let mut head: String = transcript.text.chars().take(110).collect();
+            if transcript.text.chars().count() > 110 {
+                head.push('…');
+            }
+            head
+        };
+        hits.push(SearchHit {
+            job_id: transcript.job_id,
+            source_file_name: transcript.source_file_name,
+            model_id: transcript.model_id,
+            duration_ms: transcript.duration_ms,
+            snippet,
+            matched_in_content: content_hit,
+            updated_at_ms,
+        });
+    }
+    hits.sort_by_key(|entry| std::cmp::Reverse(entry.updated_at_ms));
+    Ok(hits)
 }
 
 #[tauri::command]
@@ -864,6 +1130,133 @@ fn export_transcript(
     Ok(target.to_string_lossy().into_owned())
 }
 
+/// 标题栏左侧的侧栏开关（原生 NSTitlebarAccessoryViewController）：
+/// 与红绿灯同一行、圆形系统按钮、SF Symbol "sidebar.left"，点击发事件给前端。
+#[cfg(target_os = "macos")]
+mod titlebar_toggle {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::{AllocAnyThread, MainThreadMarker, sel};
+    use objc2_app_kit::{
+        NSBezelStyle, NSButton, NSControlSize, NSImage, NSCellImagePosition, NSLayoutAttribute,
+        NSTitlebarAccessoryViewController, NSWindow,
+    };
+    use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
+    use std::sync::OnceLock;
+    use tauri::{Emitter, Manager};
+
+    pub const EVENT: &str = "voice-to-text:toggle-sidebar";
+
+    static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+    /// 按钮指针（仅在主线程使用），用于同步本地化提示语。
+    static BUTTON: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    pub fn set_tooltip(label: &str) {
+        use std::sync::atomic::Ordering;
+        let raw = BUTTON.load(Ordering::Relaxed);
+        if raw == 0 {
+            return;
+        }
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let _ = mtm;
+        let button: &NSButton = unsafe { &*(raw as *const NSButton) };
+        let tip = NSString::from_str(label);
+        button.setToolTip(Some(&tip));
+    }
+
+    objc2::define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "LTSidebarToggleTarget"]
+        #[ivars = ()]
+        struct ToggleTarget;
+
+        unsafe impl NSObjectProtocol for ToggleTarget {}
+
+        impl ToggleTarget {
+            #[unsafe(method(toggleSidebar:))]
+            fn toggle_sidebar(&self, _sender: Option<&AnyObject>) {
+                if let Some(app) = APP.get() {
+                    let _ = app.emit(EVENT, ());
+                }
+            }
+        }
+    );
+
+    impl ToggleTarget {
+        fn new() -> Retained<Self> {
+            let this = Self::alloc();
+            unsafe { objc2::msg_send![this, init] }
+        }
+    }
+
+    pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {        let _ = APP.set(window.app_handle().clone());
+        let handle = window.app_handle().clone();
+        let window = window.clone();
+        handle
+            .run_on_main_thread(move || {
+                if let Err(error) = install_on_main(&window) {
+                    eprintln!("titlebar toggle unavailable: {error}");
+                }
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn install_on_main(window: &tauri::WebviewWindow) -> Result<(), String> {
+        let mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
+        let raw = window.ns_window().map_err(|error| error.to_string())? as *mut NSWindow;
+        let ns_window = unsafe { Retained::retain(raw) }.ok_or("window is unavailable")?;
+
+        let symbol = NSString::from_str("sidebar.left");
+        let description = NSString::from_str("Toggle sidebar");
+        let image =
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol, Some(&description))
+                .ok_or("SF Symbol sidebar.left is unavailable")?;
+
+        let target = ToggleTarget::new();
+        let button = unsafe {
+            NSButton::buttonWithImage_target_action(
+                &image,
+                Some(&target),
+                Some(sel!(toggleSidebar:)),
+                mtm,
+            )
+        };
+        button.setBezelStyle(NSBezelStyle::Circular);
+        button.setImagePosition(NSCellImagePosition::ImageOnly);
+        button.setControlSize(NSControlSize::Small);
+        button.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(26.0, 26.0)));
+        let tip = NSString::from_str("Toggle sidebar");
+        button.setToolTip(Some(&tip));
+        BUTTON.store(
+            Retained::as_ptr(&button) as usize,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        let controller = NSTitlebarAccessoryViewController::new(mtm);
+        controller.setView(&button);
+        controller.setLayoutAttribute(NSLayoutAttribute::Leading);
+        ns_window.addTitlebarAccessoryViewController(&controller);
+
+        // NSButton 的 target 是弱引用；按钮与窗口同寿命，这里保留 target 直到进程结束。
+        std::mem::forget(target);
+        Ok(())
+    }
+}
+
+/// 前端切换语言或侧栏状态时同步原生按钮的提示语。
+#[tauri::command]
+fn set_sidebar_toggle_label(label: String, app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.run_on_main_thread(move || titlebar_toggle::set_tooltip(&label));
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (label, app);
+    Ok(())
+}
+
 pub fn menu_event_for_id(id: &str) -> Option<&'static str> {
     match id {
         "open_media" => Some("voice-to-text:open-media"),
@@ -875,23 +1268,6 @@ pub fn menu_event_for_id(id: &str) -> Option<&'static str> {
 pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(AppState::default()))
-        .setup(|app| {
-            enable_window_background_drag(app);
-            if let Some(window) = app.get_webview_window("main") {
-                place_traffic_lights(&window);
-                let watched = window.clone();
-                window.on_window_event(move |event| match event {
-                    // 获得焦点时 macOS 才重置按钮，立即摆放一次
-                    tauri::WindowEvent::Focused(true) => place_traffic_lights(&watched),
-                    // 缩放过程中不抢，停手后落位一次，避免抖动
-                    tauri::WindowEvent::Resized(_) => {
-                        schedule_place_traffic_lights(watched.clone())
-                    }
-                    _ => {}
-                });
-            }
-            Ok(())
-        })
         .menu(|app| {
             let menu = Menu::default(app)?;
             let open_media =
@@ -919,6 +1295,27 @@ pub fn run() {
             }
         })
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // 标题栏侧栏开关（原生按钮，与红绿灯同一行）。
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main")
+                && let Err(error) = titlebar_toggle::install(&window)
+            {
+                eprintln!("could not install the sidebar toggle: {error}");
+            }
+            // 启动时按用户的保留策略清理历史与任务记录（默认关闭 = 不删任何东西）。
+            let handle = app.handle().clone();
+            let outcome = apply_retention(&handle);
+            if let Ok(outcome) = outcome
+                && outcome.removed > 0
+            {
+                eprintln!(
+                    "retention: moved {} file(s) ({} bytes) to the Trash",
+                    outcome.removed, outcome.bytes
+                );
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             inspect_input,
             get_selected_model,
@@ -933,11 +1330,16 @@ pub fn run() {
             delete_library_model,
             storage_summary,
             open_directory,
+            model_runtime,
+            get_retention_policy,
+            set_retention_policy,
+            set_sidebar_toggle_label,
             sync_window_theme,
             service_status,
             get_job_status,
             get_job_result,
             list_history,
+            search_history,
             export_transcript
         ])
         .run(tauri::generate_context!())
@@ -1005,5 +1407,60 @@ mod tests {
         );
         assert!(prepare_export_path(&root.join("result.srt"), "txt", None).is_err());
         assert!(prepare_export_path(&root.join("result.json"), "pdf", None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::{GIB, RetentionPolicy, validate_retention};
+
+    #[test]
+    fn retention_policy_validation_rejects_unsupported_values() {
+        let ok = RetentionPolicy {
+            mode: "age".to_owned(),
+            age_days: 7,
+            max_bytes: GIB,
+        };
+        assert!(validate_retention(&ok).is_ok());
+
+        let bad_mode = RetentionPolicy {
+            mode: "forever".to_owned(),
+            ..ok.clone()
+        };
+        assert!(validate_retention(&bad_mode).is_err());
+
+        let bad_age = RetentionPolicy {
+            mode: "age".to_owned(),
+            age_days: 2,
+            max_bytes: GIB,
+        };
+        assert!(validate_retention(&bad_age).is_err());
+
+        let bad_size = RetentionPolicy {
+            mode: "size".to_owned(),
+            age_days: 7,
+            max_bytes: 3 * GIB,
+        };
+        assert!(validate_retention(&bad_size).is_err());
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::match_snippet;
+
+    #[test]
+    fn snippet_centers_on_the_match_and_keeps_utf8() {
+        let text = "开场白很多字很多字很多字很多字很多字很多字很多字关键词后面的内容还有更多更多";
+        let snippet = match_snippet(text, "关键词", 4, 16);
+        assert!(snippet.contains("关键词"));
+        assert!(snippet.starts_with('…'), "leading ellipsis expected: {snippet}");
+        assert!(std::str::from_utf8(snippet.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn snippet_falls_back_to_the_head_when_the_needle_is_absent() {
+        let snippet = match_snippet("short text", "absent", 5, 20);
+        assert_eq!(snippet, "short text");
     }
 }

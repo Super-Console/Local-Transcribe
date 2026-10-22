@@ -1,106 +1,112 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { t } from "$lib/i18n.svelte";
   import type { View } from "$lib/types";
 
   let {
     view,
+    collapsed,
     onNavigate,
-  }: { view: View; onNavigate: (next: View) => void } = $props();
+  }: {
+    view: View;
+    collapsed: boolean;
+    onNavigate: (next: View) => void;
+  } = $props();
 
-  // Overlay 标题栏下原生拖动被关闭，侧栏顶部条显式发起拖动。
-  async function beginDrag(event: MouseEvent) {
-    if (event.button !== 0) return;
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    try {
-      await getCurrentWindow().startDragging();
-    } catch {
-      /* 浏览器预览没有窗口 */
-    }
-  }
-
-  async function toggleMaximize() {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    try {
-      await getCurrentWindow().toggleMaximize();
-    } catch {
-      /* ignore */
-    }
-  }
-
-  const items: Array<{ id: View; label: string; icon: string }> = [
-    { id: "transcribe", label: "转写", icon: "transcribe" },
-    { id: "history", label: "历史", icon: "history" },
-    { id: "model", label: "模型", icon: "model" },
-  ];
 </script>
 
-<aside class="sidebar" aria-label="主导航">
-  <div
-    class="drag-strip"
-    data-tauri-drag-region
-    role="presentation"
-    onmousedown={beginDrag}
-    ondblclick={toggleMaximize}
-  ></div>
-  <div class="brand">Local Transcribe</div>
+<aside class="sidebar" class:collapsed inert={collapsed} aria-label={t("nav.mainLabel")}>
+  <div class="brand" title="Local Transcribe">
+    <span class="label">Local Transcribe</span>
+  </div>
+  <div class="section">{t("nav.workspace")}</div>
   <nav class="nav">
-    {#each items as item (item.id)}
-      <button
-        type="button"
-        class="nav-item"
-        class:active={view === item.id}
-        aria-current={view === item.id ? "page" : undefined}
-        onclick={() => onNavigate(item.id)}
-      >
-        <Icon name={item.icon} />
-        <span>{item.label}</span>
-      </button>
-    {/each}
+    <button
+      type="button"
+      class="nav-item"
+      class:active={view === "home"}
+      aria-current={view === "home" ? "page" : undefined}
+      aria-label={t("nav.home")}
+      title={t("nav.home")}
+      onclick={() => onNavigate("home")}
+    >
+      <Icon name="home" />
+      <span class="label">{t("nav.home")}</span>
+    </button>
   </nav>
   <div class="bottom">
+    <div class="section">{t("nav.manage")}</div>
+    <button
+      type="button"
+      class="nav-item"
+      class:active={view === "model"}
+      aria-current={view === "model" ? "page" : undefined}
+      aria-label={t("nav.model")}
+      title={t("nav.model")}
+      onclick={() => onNavigate("model")}
+    >
+      <Icon name="model" />
+      <span class="label">{t("nav.model")}</span>
+    </button>
     <button
       type="button"
       class="nav-item"
       class:active={view === "settings"}
       aria-current={view === "settings" ? "page" : undefined}
+      aria-label={t("nav.settings")}
+      title={t("nav.settings")}
       onclick={() => onNavigate("settings")}
     >
       <Icon name="settings" />
-      <span>设置</span>
+      <span class="label">{t("nav.settings")}</span>
     </button>
   </div>
 </aside>
 
 <style>
+  /* 普通 macOS 侧栏：通高平铺列，右缘一条发丝线与内容分开 */
   .sidebar {
-    width: 196px;
+    width: 214px;
     flex: none;
     height: 100%;
     display: flex;
     flex-direction: column;
-    padding: 0 10px 10px;
-    background: var(--glass);
-    backdrop-filter: blur(28px) saturate(180%);
-    -webkit-backdrop-filter: blur(28px) saturate(180%);
-    border: 1px solid var(--glass-border);
-    border-radius: 14px;
-    box-shadow: inset 0 1px 0 var(--glass-highlight), var(--glass-shadow);
+    /* 顶部留白与红绿灯条下方的首个内容行对齐 */
+    padding: 14px 10px 10px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--hairline);
+    transition: width 160ms ease;
   }
 
-  /* 原生窗口按钮区域（macOS overlay 标题栏）：只用于拖动，不放控件 */
-  .drag-strip {
-    height: 40px;
-    flex: none;
+  /* 折叠 = 整列完全消失，内容区拿回全宽 */
+  .sidebar.collapsed {
+    width: 0;
+    padding: 0;
+    border-right: 0;
+    overflow: hidden;
   }
 
   .brand {
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    padding: 0 8px 16px;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    padding: 2px 10px 16px;
     color: var(--text);
     user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  /* 参考设计的分组小标题：大写、字距加宽、弱化颜色 */
+  .section {
+    padding: 0 10px 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    user-select: none;
+    white-space: nowrap;
   }
 
   .nav {
@@ -112,23 +118,31 @@
   .bottom {
     margin-top: auto;
     padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .bottom .section {
+    padding: 0 10px 6px;
   }
 
   .nav-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    height: 32px;
-    padding: 0 8px;
+    gap: 9px;
+    height: 36px;
+    padding: 0 11px;
     border: 0;
-    border-radius: 7px;
+    border-radius: 8px;
     background: transparent;
-    font-size: 13px;
+    font-size: 14.5px;
     line-height: 1;
     color: var(--text);
     text-align: left;
     cursor: default;
     width: 100%;
+    white-space: nowrap;
   }
 
   .nav-item :global(svg) {
@@ -148,5 +162,11 @@
 
   .nav-item.active :global(svg) {
     opacity: 1;
+  }
+
+  /* 参考设计的导航没有焦点环：选中态本身就是指示 */
+  .nav-item:focus,
+  .nav-item:focus-visible {
+    outline: none;
   }
 </style>

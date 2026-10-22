@@ -1,45 +1,52 @@
-/* Local Transcribe — 设计 token（与 design/ui-v2 基线一致） */
+/* Local Transcribe — 设计 token（视觉语言参照 TranscribeX 参考图） */
 :root {
   color-scheme: light;
-  --bg: #fbfbfd;
-  --sidebar: #f1f1f4;
+  /* Anthropic 风格浅色：牛皮纸奶白底 + 陶土强调色（Claude clay #C15F3C / ivory #FAF9F5） */
+  --bg: #faf9f5;
+  --sidebar: #f1efe7;
   --panel: #ffffff;
-  --text: #1d1c1f;
-  --text-2: #6c6c72;
-  --text-3: #9b9ba1;
-  --hairline: rgba(0, 0, 0, 0.075);
-  --hairline-2: rgba(0, 0, 0, 0.12);
-  --hover: rgba(0, 0, 0, 0.045);
-  --selected: rgba(10, 122, 255, 0.085);
-  --track: rgba(0, 0, 0, 0.07);
-  --sunken: rgba(0, 0, 0, 0.04);
-  --accent: #0a7aff;
-  --accent-ink: #0a57c2;
-  --green: #34c759;
-  --red: #ff3b30;
-  --fill: #ececf0;
-  --radius: 9px;
+  --text: #141413;
+  --text-2: #6b6660;
+  --text-3: #97928a;
+  --hairline: rgba(20, 20, 19, 0.08);
+  --hairline-2: rgba(20, 20, 19, 0.14);
+  --hover: rgba(20, 20, 19, 0.05);
+  --selected: rgba(193, 95, 60, 0.13);
+  --track: rgba(20, 20, 19, 0.07);
+  --sunken: rgba(20, 20, 19, 0.04);
+  --accent: #c15f3c;
+  --accent-ink: #a14a2f;
+  --green: #3d7f52;
+  --red: #b3402e;
+  --fill: #f2efe6;
+  --card: #fffefb;
+  --chip: #ece7db;
+  --radius: 12px;
   --glass: rgba(255, 255, 255, 0.52);
   --glass-border: rgba(255, 255, 255, 0.6);
   --glass-highlight: rgba(255, 255, 255, 0.45);
   --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
   --shadow-panel: 0 18px 44px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  /* 大标题衬线：与参考设计的 Welcome 标题一致 */
+  --font-display: "New York", ui-serif, "Songti SC", "STSong", Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #141416;
-  --sidebar: #1b1b1f;
-  --panel: #232327;
-  --text: #ececee;
-  --text-2: #a3a3aa;
-  --text-3: #78787f;
+  --bg: #1e1e20;
+  --sidebar: #242426;
+  --panel: #2a2a2d;
+  --text: #ededf0;
+  --text-2: #a1a1a6;
+  --text-3: #7a7a80;
   --hairline: rgba(255, 255, 255, 0.08);
-  --hairline-2: rgba(255, 255, 255, 0.14);
+  --hairline-2: rgba(255, 255, 255, 0.13);
   --hover: rgba(255, 255, 255, 0.06);
-  --selected: rgba(10, 132, 255, 0.18);
+  --selected: rgba(64, 120, 255, 0.3);
+  --card: #2a2a2d;
+  --chip: rgba(255, 255, 255, 0.1);
   --track: rgba(255, 255, 255, 0.1);
   --sunken: rgba(255, 255, 255, 0.04);
   --accent: #0a84ff;
@@ -69,8 +76,8 @@ body {
 
 body {
   font-family: var(--font-ui);
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: 14.5px;
+  line-height: 1.5;
   color: var(--text);
   /* 窗口透明，系统材质（NSVisualEffectView）从下往上透 */
   background: transparent;
@@ -90,7 +97,7 @@ button {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 ::-webkit-scrollbar {

@@ -5,9 +5,9 @@ mod library;
 mod media;
 
 pub use asr::{
-    inspect_model_directory, transcribe_file, transcribe_file_cancellable,
-    transcribe_file_streaming, LocalModel, ModelFamily, ModelFiles, TranscriptionProgress,
-    TranscriptionSegmentUpdate,
+    idle_unload_seconds, inspect_model_directory, loaded_model_id, transcribe_file,
+    transcribe_file_cancellable, transcribe_file_streaming, LocalModel, ModelFamily, ModelFiles,
+    TranscriptionProgress, TranscriptionSegmentUpdate,
 };
 pub use input_file::{InputFile, InputFileError};
 pub use jobs::{JobLease, JobState, JobStatus, JobStore};

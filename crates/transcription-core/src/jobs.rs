@@ -26,6 +26,12 @@ pub struct JobStatus {
     pub phase: String,
     pub completed_chunks: usize,
     pub total_chunks: Option<usize>,
+    /// 任务进入运行态时的 Unix 毫秒时间戳；用于界面计算实时倍速与剩余时间。
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
+    /// 音频总时长（解码后得到）；用于倍速与 ETA，未知时为 None。
+    #[serde(default)]
+    pub total_duration_ms: Option<u64>,
     pub transcript_available: bool,
     pub result_saved: bool,
     pub error: Option<String>,

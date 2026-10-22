@@ -163,3 +163,51 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - 真实转写（共享服务 + 真实人声）：FireRedASR2 中英混读与 sherpa-onnx 官方基准输出逐字一致，四川话、河南话均正确；Paraformer-zh 中文与中英混合均正确。JSON 导出含 `engine: sherpa-onnx/1.13.8`、`durationMs`、`segments[]`。GUI 端到端：模型页正确显示 FireRedASR · 1.15 GB / Paraformer · 234 MB，历史页完整显示全部真实结果。
 - 状态：模型库现有 3 个模型共 2.31 GB（应用内副本），默认模型已恢复 Qwen3-ASR。P0 兼容矩阵新增：FireRedASR2-AED ✓、Paraformer-zh（2023-09-14 包）✓。
 - 已知限制：GUI 文件对话框（NSOpenPanel sheet）CUA 后台模式无法操作（AX 面向解析失败），GUI 提交路径未用真实鼠标走通；`jobs show` 不含正文，需 `export`（既有行为）。
+
+## 窗口外壳改版：原生红绿灯 + 平铺侧栏 + compact 模式（2026-10-22）
+
+- 动因：浮动侧栏卡片设计需要 objc 把红绿灯搬进卡片，引发一串问题（缩放抖动、off-main-thread 崩溃）；且 Overlay 标题栏下 `startDragging()` 因 currentEvent 时序永远失效，窗口拖不动（已用 HID 真实注入复现）。
+- 决策（Timmy 确认）：红绿灯交还 macOS 原生管理；侧栏从浮动卡片改为平铺通高列；折叠改为 compact（52px 图标列 + 悬停提示 + 记住状态），不再完全隐藏；窄窗口不再浮层盖内容。
+- 配置：`titleBarStyle: Overlay → Transparent`，`hiddenTitle` 保留；删除 `transparent` 与 `windowEffects`。
+- Rust 侧净删：`place_traffic_lights`、`schedule_place_traffic_lights`（代际防抖）、`enable_window_background_drag`、`debug_drag_probe`、Focused/Resized 挂钩、setup 整块；Cargo 移除 `objc2-foundation`。新增 `set_native_window_background`（sync_window_theme 内，主线程执行）：透明标题栏条底色随主题对齐页面 `--bg`（浅 #fbfbfd / 深 #141416），消除接缝色差。
+- 前端：`+page.svelte` 删 `.side-shell`/`.scrim`/`.overlay`/窄窗滞回折叠；侧栏 in-flow（196px ⇄ 52px，`lt.sidebar.collapsed.v1` 持久化，⌘\\ 快捷键保留）；工具栏删拖动区域与 inset 让位逻辑，侧栏开关移到侧栏底部。Icon 新增 `chevronRight`。
+- 验证：svelte-check 0/0；release 构建零警告；CUA HID 真实拖动原生标题栏条窗口移动 ✓；折叠/展开/重启后保持 compact ✓；深色主题标题栏条无接缝 ✓；23:08 构建后无新崩溃报告。
+- 待 Timmy 真实手感确认：拖动、悬停 tooltip、⌘\\ 折叠。
+
+## 界面多语言适配首轮（中/英/西/法/德）（2026-10-22）
+
+- 方案：手写零依赖 i18n（未引入 svelte-i18n，避免 Svelte 5/Vite 8 兼容风险与运行时体积）。`src/lib/i18n/messages/` 五个目录，zh 为源（99 个 key），其余语言类型 `Record<MessageKey, Message>`，**key 对齐由 tsc 编译期强制**；复数走 `Intl.PluralRules`，日期时间走 `Intl.DateTimeFormat`（替换历史页硬编码 zh-CN）。状态层 `i18n.svelte.ts`（runes + `lt.locale.v1` 持久化，默认跟随系统，系统语言按启动时 `navigator.languages` 解析，范围外语回退英语）。
+- 范围：前端 GUI 全部 9 个视图/组件；品牌名、技术标识（MCP/CLI/pid/--allow-root 等）、GB/MB 单位、转写正文有意不翻译。设置页新增「界面语言」原生下拉（语言名按母语显示）。
+- 验证：svelte-check 0/0；残留中文扫描仅剩注释；release 零警告；CUA 实测 zh（默认跟随系统）/en/de/es 切换渲染、ARIA 标签同步、复数（3 models/3 Modelle/3 modelos）正确、德语重启后持久化 ✓、外壳拖动复验 ✓、无新崩溃报告；验收后已恢复「跟随系统」。
+- 未覆盖（第二轮范围）：Rust 后端错误文案、CLI/MCP 输出、`job.phase` 后端值。法语运行时视觉抽查未做（类型对齐已保证）。
+
+## 侧栏折叠改为左上圆形按钮 + 完全隐藏（2026-10-23）
+
+- Timmy 对照 TranscribeX 截图要求照抄折叠设计。新形态：28px 圆形图标按钮（新 `sidebar` 图标）固定窗口左上（原生 strip 正下方），展开时浮于侧栏列顶部（品牌名下移一行），折叠时侧栏完全隐藏（0 宽 + inert），内容全宽，工具栏标题自动让位；删 52px compact 列与底部「折叠」文字按钮。i18n 文案改为「显示/隐藏侧栏」五语言同步。
+- 与 TranscribeX 唯一差异：其按钮嵌于更高的原生标题栏行；我们的 28px strip 为原生层 HTML 不可渲染，按钮位于其下一行。
+- 实测：svelte-check 0/0，展开/折叠/恢复两跳 CUA 截图验证 ✓。因 Timmy 有进行中转写任务未重启，折叠状态跨重启持久化与深色主题外观待空闲补验（持久化逻辑与样式 tokens 未变，风险低）。
+
+## 设计照抄 TranscribeX + 首页合并 + 速度/ETA + 存储策略（2026-10-23）
+
+- 视觉语言按 Timmy 提供的 TranscribeX 参考图重做：白底内容 + 浅灰侧栏、衬线大标题、12px 圆角卡片、深色药丸主按钮、分组小标题、发丝分隔；历史改为日期分组卡片网格；模型/设置/转写引导同步改版；浅色/深色两套实测。
+- 导航重构（Timmy 方案）：`View` 改为 `home | model | settings`；**首页合并转写与历史**（标题 + 导入磁贴 + 最近记录卡片，运行中/打开记录时显示任务卡片与正文）；模型与设置收进侧栏底部「管理」组。
+- 任务状态新增 `startedAtMs` / `totalDurationMs`：界面实时显示倍速与剩余时间（实测 13.8× / 剩余约 1 分钟），进度条 indeterminate 改为滑动动画。
+- 修复共享队列可见性：运行中每秒轮询、空闲每 2 秒轮询活动任务，CLI/MCP 任务自动出现在 GUI 并实时更新；限制：外部任务运行中无文件名与逐段正文。
+- 存储：设置页展示模型库/历史结果/任务记录/应用数据四个目录；新增自动清理（关闭/按时间 1-3-5-7-30 天/按容量 1-5-10 GB），删除走废纸篓，默认关闭；已实测策略落盘并恢复关闭。当前版本无切片临时文件（内存分段）。
+- 版本 0.2.0（关于页运行时读取）；GitHub 仓库已设为 private。
+
+## 模型驻留缓存 + 顶栏下拉绿点 + 字号放大（2026-10-23）
+
+- 按任务书落地模型驻留：进程内识别器缓存（同模型复用、切换模型在任务边界替换、空闲 120 秒卸载），导出 `loaded_model_id()`；Tauri 命令 `model_runtime`；新增 ignored 集成测试用真实 paraformer 验证任务后仍驻留（通过）。
+- 顶栏「默认模型」改为下拉菜单：模型列表（名称/家族/体积）、当前默认打勾、**绿点=真正驻留内存（灰点=未加载）**、底部管理入口；前端 2 秒轮询运行时状态。限制：绿点仅反映 GUI 进程，CLI/MCP 任务在服务进程加载不显示。
+- 字号整体放大：基准 13→14.5px，标题 30→34px（引导 36px），侧栏 14.5px，卡片/设置/正文同步上调，贴近参考图比例。
+
+## 浅色主题改为 Anthropic 牛皮纸风（2026-10-23）
+
+- 依据 Claude 品牌色（Clay #C15F3C / Ivory #FAF9F5 / Pampas #F4F3EE / Slate #141413）重做浅色 token：奶白内容底、牛皮纸色侧栏、陶土强调与选中、暖灰次级文字与阴影；原生标题栏条同步 #FAF9F5 消除接缝。深色主题不变。截图验证首页与设置页。
+
+## 首页全文搜索 + 阅读器内搜索（2026-10-23）
+
+- 新命令 `search_history`：文件名与转写正文大小写不敏感匹配，正文命中返回上下文片段（字符级截取，UTF-8 安全），附 2 个单元测试。
+- 顶栏搜索框（220ms 防抖）+ 首页结果卡片（命中片段高亮底色、空/加载状态）；阅读器本稿搜索（过滤、高亮、计数）；历史详情改用 Reader 组件（`initialFollow=false`）以获得同样的稿内搜索。
+- i18n 五语言补齐；README/README.zh-CN 增加 GUI 0.2.0 章节；实测：文件名 6 条、正文 7 条、稿内 9 处匹配。

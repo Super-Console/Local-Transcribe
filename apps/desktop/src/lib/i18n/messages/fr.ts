@@ -1,0 +1,173 @@
+import type { Message } from "./types";
+import type { MessageKey } from "./zh";
+
+export const fr: Record<MessageKey, Message> = {
+  // Navigation
+  "nav.transcribe": "Transcrire",
+  "nav.history": "Historique",
+  "nav.model": "Modèles",
+  "nav.settings": "Réglages",
+  "nav.home": "Accueil",
+  "nav.manage": "Gérer",
+  "nav.workspace": "Espace de travail",
+  "nav.mainLabel": "Navigation principale",
+  "nav.expandTitle": "Afficher la barre latérale (⌘\\)",
+  "nav.collapseTitle": "Masquer la barre latérale (⌘\\)",
+
+  // Barre d’outils
+  "toolbar.ariaLabel": "Barre d’outils de transcription",
+  "toolbar.toLight": "Passer à l’apparence claire",
+  "toolbar.toDark": "Passer à l’apparence sombre",
+  "toolbar.defaultModel": "Modèle par défaut",
+
+  // Communs
+  "common.system": "Système",
+  "common.cancel": "Annuler",
+  "common.delete": "Supprimer",
+  "common.copied": "Copié",
+  "common.open": "Ouvrir",
+  "common.noModel": "Aucun modèle sélectionné",
+  "common.notSelected": "Aucun",
+
+  // États de la tâche
+  "state.running": "Transcription en cours",
+  "state.completed": "Terminé",
+  "state.cancelled": "Annulé",
+  "state.failed": "Échec",
+
+  // Vue de transcription
+  "home.subtitle": "Déposez des fichiers audio ou vidéo à tout moment, ou ouvrez une transcription ci-dessous.",
+  "home.import": "Importer des fichiers",
+  "transcribe.untitled": "Média sans nom",
+  "transcribe.introTitle": "Lancer une transcription",
+  "transcribe.introBody":
+    "Déposez un fichier audio ou vidéo, ou choisissez-le avec le bouton ci-dessous ; les imports sont mis en file d’attente automatiquement.",
+  "transcribe.dropAria":
+    "Déposez un fichier audio ou vidéo, ou appuyez sur Entrée pour en choisir un",
+  "transcribe.dropTitle": "Déposez un fichier audio ou vidéo",
+  "transcribe.dropSub":
+    "Formats audio et vidéo courants pris en charge ; vous pouvez ajouter plusieurs fichiers à la fois",
+  "transcribe.chooseFile": "Choisir un fichier",
+  "transcribe.copyAll": "Copier le texte intégral",
+  "transcribe.model": "Modèle",
+  "transcribe.chunksBefore": "Transcrit",
+  "transcribe.chunksAfter": { one: "segment", other: "segments" },
+  "transcribe.progressIdle": "Reconnaissance en cours",
+  "transcribe.progressPercent": "Traité à {percent} %",
+  "transcribe.partialNote":
+    "Ce résultat est partiel et incomplet ; une confirmation vous sera redemandée à l’export.",
+  "transcribe.preparingExport": "Préparation de l’export…",
+  "transcribe.speed": "{value}× en temps réel",
+  "transcribe.etaSeconds": "environ {seconds} s restantes",
+  "transcribe.etaMinutes": "environ {minutes} min restantes",
+  "transcribe.etaHours": "environ {hours} h {minutes} min restantes",
+
+  // Historique
+  "search.placeholder": "Rechercher un nom ou le texte",
+  "search.clear": "Effacer",
+  "search.results": "{count} résultats",
+  "search.empty": "Aucun résultat",
+  "history.loading": "Chargement de l’historique…",
+  "history.emptyTitle": "Pas encore d’historique",
+  "history.emptyBody": "Une fois une transcription terminée, son résultat apparaîtra ici.",
+  "time.today": "Aujourd’hui",
+  "time.yesterday": "Hier",
+
+  // Lecteur
+  "reader.recognizing":
+    "Reconnaissance en cours ; le texte apparaîtra segment par segment d’un instant.",
+  "reader.noText": "Pas encore de texte à afficher.",
+  "reader.searchPlaceholder": "Rechercher dans cette transcription",
+  "reader.matchCount": "{count} correspondances",
+  "reader.noMatch": "Aucune correspondance",
+  "reader.viewLatest": "Voir le plus récent",
+
+  // Modèles
+  "model.loadedHint": "Chargé en mémoire",
+  "model.unknownSize": "Taille inconnue",
+  "model.import": "Importer un modèle",
+  "model.emptyTitle": "Aucun modèle importé pour l’instant",
+  "model.emptyBody":
+    "Téléchargez vous-même un paquet d’export Whisper, Qwen3-ASR, Paraformer ou SenseVoice depuis sherpa-onnx, puis choisissez son dossier pour l’importer. L’import est copié dans le dossier de l’app ; vos téléchargements d’origine restent intacts.",
+  "model.chooseFolder": "Choisir le dossier des modèles",
+  "model.defaultTag": "Par défaut",
+  "model.installedNotLoaded": "Installé, non chargé",
+  "model.setDefault": "Définir par défaut",
+  "model.currentDefault": "Par défaut actuel",
+  "model.footer": {
+    one: "{count} modèle au total · {size}. La suppression ne retire que la copie interne ; vos téléchargements d’origine restent intacts.",
+    other: "{count} modèles au total · {size}. La suppression ne retire que la copie interne ; vos téléchargements d’origine restent intacts.",
+  },
+
+  // Réglages
+  "settings.general": "Général",
+  "settings.transcription": "Transcription",
+  "settings.storage": "Stockage",
+  "settings.integration": "Intégrations",
+  "settings.about": "À propos",
+  "settings.themeName": "Apparence",
+  "settings.themeDesc": "En mode système, le clair et le sombre suivent macOS",
+  "settings.themeLight": "Clair",
+  "settings.themeDark": "Sombre",
+  "settings.serviceName": "Service local",
+  "settings.mcpName": "MCP (stdio)",
+  "settings.languageName": "Langue de l’interface",
+  "settings.languageDesc":
+    "Langue de l’interface de l’app ; « Système » utilise la langue macOS au lancement",
+  "settings.audioLangName": "Langue",
+  "settings.audioLangDesc":
+    "Détectée automatiquement par le modèle ; les résultats conservent leur langue d’origine",
+  "settings.audioLangValue": "Détection automatique",
+  "settings.defaultModelDesc": "N’affecte que les tâches créées à partir de maintenant",
+  "settings.manageModels": "Gérer les modèles",
+  "settings.libraryDir": "Dossier des modèles",
+  "settings.historyDir": "Résultats de l’historique",
+  "settings.storageNote":
+    "Déplacer le dossier des modèles nécessite d’abord un contrôle d’espace et un plan de retour arrière ; ce n’est pas encore disponible. La suppression d’un modèle ne retire que sa copie interne.",
+  "settings.jobsDir": "Journaux des tâches",
+  "settings.dataDir": "Données de l’app",
+  "settings.retentionName": "Nettoyage automatique",
+  "settings.retentionDesc":
+    "Place les anciens résultats et journaux dans la corbeille au-delà du seuil ; la bibliothèque de modèles et vos fichiers d’origine ne sont jamais nettoyés (désactivé par défaut)",
+  "settings.retentionOff": "Désactivé",
+  "settings.retentionAge": "Par ancienneté",
+  "settings.retentionSize": "Par taille",
+  "settings.retentionDays": "{days} jours",
+  "settings.chunkNote":
+    "Le décodage et le découpage se font en mémoire ; cette version ne crée aucun fichier temporaire.",
+  "settings.countModels": {
+    one: "{count} modèle · {size}",
+    other: "{count} modèles · {size}",
+  },
+  "settings.countHistory": {
+    one: "{count} entrée · {size}",
+    other: "{count} entrées · {size}",
+  },
+  "settings.serviceRunning": "En cours · pid {pid}",
+  "settings.serviceStopped":
+    "Arrêté : démarré automatiquement quand la CLI ou MCP l’appelle",
+  "settings.refresh": "Actualiser",
+  "settings.mcpDesc":
+    "9 outils : modèles, soumettre, statut, résultat, file, annuler, réessayer, exporter",
+  "settings.copyConfig": "Copier la config",
+  "settings.copyExample": "Copier l’exemple",
+  "settings.cliDesc": "Partage le même service et la même file que MCP",
+  "settings.troubleIntro":
+    "Dépannage : le service n’écoute que sur une socket Unix locale (permission 0600) ; l’accès aux fichiers doit être autorisé au lancement avec",
+  "settings.troubleOutro":
+    " ; les journaux restent dans le terminal et ne contiennent aucun contenu audio.",
+  "settings.aboutDesc": "Transcription audio et vidéo locale · Version préliminaire {version}",
+  "settings.aboutBuild": "Build de développement non signé",
+  "settings.mcpCommandPlaceholder": "<chemin vers l’exécutable voice-to-text-mcp>",
+  "settings.mcpPathPlaceholder": "/chemin/vers/vos/media",
+  "settings.cliMediaPlaceholder": "<fichier média>",
+  "settings.cliModelPlaceholder": "<id du modèle>",
+
+  // Dialogues et erreurs
+  "dialog.mediaFilter": "Audio ou vidéo",
+  "dialog.importModelTitle": "Choisir le dossier des modèles",
+  "dialog.deleteModelTitle": "Supprimer le modèle",
+  "dialog.deleteModelMessage":
+    "Supprimer la copie interne de « {name} » ? Votre téléchargement d’origine n’est pas supprimé ; la copie est placée dans la corbeille.",
+  "error.copyFailed": "Échec de la copie : {error}",
+};

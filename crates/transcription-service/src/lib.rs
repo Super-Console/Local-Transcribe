@@ -1046,6 +1046,8 @@ fn worker_loop(shared: Arc<Shared>) {
             phase: "Queued".to_owned(),
             completed_chunks: 0,
             total_chunks: None,
+            started_at_ms: Some(unix_now_ms()),
+            total_duration_ms: None,
             transcript_available: false,
             result_saved: false,
             error: None,
@@ -1133,6 +1135,8 @@ fn execute_job(
                 ),
                 completed_chunks: progress.completed_chunks,
                 total_chunks: Some(progress.total_chunks),
+                started_at_ms: Some(started_unix_ms),
+                total_duration_ms: Some(progress.total_duration_ms),
                 transcript_available: false,
                 result_saved: false,
                 error: None,
@@ -1160,7 +1164,12 @@ fn execute_job(
                 }
                 .to_owned(),
                 completed_chunks: previous.as_ref().map_or(0, |job| job.completed_chunks),
-                total_chunks: previous.and_then(|job| job.total_chunks),
+                total_chunks: previous.as_ref().and_then(|job| job.total_chunks),
+                started_at_ms: previous
+                    .as_ref()
+                    .and_then(|job| job.started_at_ms)
+                    .or(Some(started_unix_ms)),
+                total_duration_ms: previous.as_ref().and_then(|job| job.total_duration_ms),
                 transcript_available: saved,
                 result_saved: saved,
                 error: save_result.err(),
@@ -1179,7 +1188,12 @@ fn execute_job(
                 },
                 phase: if cancelled { "Cancelled" } else { "Failed" }.to_owned(),
                 completed_chunks: previous.as_ref().map_or(0, |job| job.completed_chunks),
-                total_chunks: previous.and_then(|job| job.total_chunks),
+                total_chunks: previous.as_ref().and_then(|job| job.total_chunks),
+                started_at_ms: previous
+                    .as_ref()
+                    .and_then(|job| job.started_at_ms)
+                    .or(Some(started_unix_ms)),
+                total_duration_ms: previous.as_ref().and_then(|job| job.total_duration_ms),
                 transcript_available: false,
                 result_saved: false,
                 error: if cancelled { None } else { Some(error) },

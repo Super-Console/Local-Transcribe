@@ -1,21 +1,27 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 
   import AppSidebar from "$lib/components/AppSidebar.svelte";
   import AppToolbar from "$lib/components/AppToolbar.svelte";
+  import Icon from "$lib/components/Icon.svelte";
   import TranscribeView from "$lib/components/TranscribeView.svelte";
   import HistoryView from "$lib/components/HistoryView.svelte";
   import ModelView from "$lib/components/ModelView.svelte";
   import SettingsView from "$lib/components/SettingsView.svelte";
+  import { t } from "$lib/i18n.svelte";
   import type {
     HistoryEntry,
     JobStatus,
     LibraryModelSummary,
+    ModelRuntime,
     ModelSummary,
+    RetentionPolicy,
+    SearchHit,
     ServiceStatus,
     StorageSummary,
     Segment,
@@ -35,26 +41,15 @@
     "mp4", "mov", "mkv", "ogg", "oga", "flac", "aac", "opus", "3gp", "webm",
   ];
 
-  const TITLES: Record<View, string> = {
-    transcribe: "转写",
-    history: "历史",
-    model: "模型",
-    settings: "设置",
-  };
-
-  // 侧栏折叠阈值带滞回：< 780 折叠，> 820 才恢复，避免宽度抖动时反复闪烁。
-  const NARROW = 780;
-  const WIDE = 820;
-  const SIDEBAR_KEY = "lt.sidebar.v2";
+  // 侧栏展开/折叠（compact 图标列）状态的持久化键。
+  const SIDEBAR_KEY = "lt.sidebar.collapsed.v1";
 
   function initialView(): View {
     if (import.meta.env.DEV) {
       const requested = new URLSearchParams(window.location.search).get("view");
-      if (requested === "history" || requested === "model" || requested === "settings") {
-        return requested;
-      }
+      if (requested === "model" || requested === "settings") return requested;
     }
-    return "transcribe";
+    return "home";
   }
 
   let view = $state<View>(initialView());
@@ -76,87 +71,129 @@
   let detailJobId = $state<string | null>(null);
   let historyLoading = $state(false);
 
-  let viewportWidth = $state(900);
-  let autoHidden = $state(false);
-  let userPreference = $state<"shown" | "hidden">("shown");
-  let overlayOpen = $state(false);
+  let sidebarCollapsed = $state(false);
+  let appVersion = $state("0.2.0");
+  let loadedModelId = $state<string | null>(null);
+  let searchQuery = $state("");
+  let searchHits = $state<SearchHit[] | null>(null);
+  let searchBusy = $state(false);
+  let retention = $state<RetentionPolicy | null>(null);
 
-  const sidebarMode = $derived(
-    userPreference === "hidden" || autoHidden
-      ? overlayOpen
-        ? "overlay"
-        : "hidden"
-      : "inline",
-  );
-  const sidebarVisible = $derived(sidebarMode !== "hidden");
   const fullText = $derived(
     transcript?.text ?? segments.map((segment) => segment.text).join("\n"),
   );
 
-  async function beginDragWindow(event: MouseEvent) {
-    if (event.button !== 0) return;
+  // 原生标题栏按钮的提示语跟随界面语言与折叠状态。
+  $effect(() => {
     if (!tauriAvailable) return;
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().startDragging();
-    } catch {
-      /* 忽略 */
-    }
-  }
+    const label = sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle");
+    void invoke("set_sidebar_toggle_label", { label }).catch(() => {
+      /* 预览环境没有原生按钮 */
+    });
+  });
 
-  async function toggleWindowMaximize() {
+  // 运行中每秒拉一次状态：CLI/MCP 启动的任务没有本进程事件，也能看到实时进度、速度与剩余时间。
+  $effect(() => {
     if (!tauriAvailable) return;
-    try {
-      const { getCurrentWindow } = await import("@tauri-apps/api/window");
-      await getCurrentWindow().toggleMaximize();
-    } catch {
-      /* 忽略 */
+    const runningId = job?.state === "running" ? job.jobId : null;
+    if (!runningId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await invoke<JobStatus>("get_job_status", { jobId: runningId });
+        job = status;
+        if (status.state === "completed") void loadResult(status.jobId);
+      } catch {
+        /* 任务刚好结束或后端短暂不可用 */
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  });
+
+  // 首页搜索：文件名或转写正文全文匹配（后端读取本地历史 JSON）。
+  $effect(() => {
+    if (!tauriAvailable) return;
+    const query = searchQuery.trim();
+    if (view !== "home" || query.length === 0) {
+      searchHits = null;
+      searchBusy = false;
+      return;
     }
-  }
+    searchBusy = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        searchHits = await invoke<SearchHit[]>("search_history", { query });
+      } catch {
+        searchHits = [];
+      } finally {
+        searchBusy = false;
+      }
+    }, 220);
+    return () => window.clearTimeout(timer);
+  });
 
-  let resizeSettle: ReturnType<typeof setTimeout> | undefined;
+  // 模型运行时状态：只用于顶栏绿点（是否真的驻留内存）。
+  $effect(() => {
+    if (!tauriAvailable) return;
+    const tick = async () => {
+      try {
+        const runtime = await invoke<ModelRuntime>("model_runtime");
+        loadedModelId = runtime.loadedModelId ?? null;
+      } catch {
+        /* 后端未就绪 */
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 2000);
+    return () => window.clearInterval(timer);
+  });
 
-  function syncWidth(width: number) {
-    viewportWidth = width;
-    // 拖动窗口时先只记录宽度；停手 120ms 后再决定折叠，
-    // 否则跨越阈值的一瞬间侧栏消失，看起来像窗口尺寸突变。
-    if (resizeSettle) clearTimeout(resizeSettle);
-    resizeSettle = setTimeout(() => {
-      if (viewportWidth < NARROW) autoHidden = true;
-      else if (viewportWidth > WIDE) autoHidden = false;
-    }, 120);
-  }
+  // 空闲时也每 2 秒看一眼共享队列：CLI / MCP 启动的任务会自动出现在界面里
+  //（此前只在启动瞬间读一次，外部任务看不到进度）。
+  $effect(() => {
+    if (!tauriAvailable) return;
+    if (job || transcript) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await invoke<JobStatus | null>("get_active_job_status");
+        if (status && status.state === "running") {
+          job = status;
+          fileName = null;
+        }
+      } catch {
+        /* 后端未就绪 */
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  });
 
   function toggleSidebar() {
-    if (sidebarMode === "inline") {
-      userPreference = "hidden";
-      persistSidebarPreference();
-      overlayOpen = false;
-      return;
-    }
-    // 宽窗下再次点击 = 恢复内联侧栏（否则手动折叠后没有回头路）；
-    // 窄窗下才用临时浮层导航。
-    if (viewportWidth > WIDE) {
-      userPreference = "shown";
-      persistSidebarPreference();
-      overlayOpen = false;
-      return;
-    }
-    overlayOpen = !overlayOpen;
-  }
-
-  function persistSidebarPreference() {
+    sidebarCollapsed = !sidebarCollapsed;
     try {
-      localStorage.setItem(SIDEBAR_KEY, userPreference);
+      localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "collapsed" : "expanded");
     } catch {
       /* ignore storage errors */
     }
   }
 
+  async function refreshRetention() {
+    try {
+      retention = await invoke<RetentionPolicy>("get_retention_policy");
+    } catch {
+      /* 浏览器预览没有 Tauri 后端 */
+    }
+  }
+
+  async function changeRetention(policy: RetentionPolicy) {
+    try {
+      retention = await invoke<RetentionPolicy>("set_retention_policy", { policy });
+    } catch (issue) {
+      error = String(issue);
+    }
+  }
+
   function navigate(next: View) {
     view = next;
-    overlayOpen = false;
-    if (next === "history") void loadHistory();
+    if (next === "home") void loadHistory();
     if (next === "settings") {
       void refreshService();
       void refreshLibrary();
@@ -196,7 +233,7 @@
       const picked = await open({
         multiple: false,
         directory: false,
-        filters: [{ name: "音频或视频", extensions: MEDIA_EXTENSIONS }],
+        filters: [{ name: t("dialog.mediaFilter"), extensions: MEDIA_EXTENSIONS }],
       });
       if (typeof picked === "string") await startTranscription(picked);
     } catch (issue) {
@@ -235,7 +272,7 @@
     try {
       await navigator.clipboard.writeText(fullText);
     } catch (issue) {
-      error = `复制失败：${String(issue)}`;
+      error = t("error.copyFailed", { error: String(issue) });
     }
   }
 
@@ -309,7 +346,7 @@
     error = "";
     libraryBusy = true;
     try {
-      const picked = await open({ multiple: false, directory: true, title: "选择模型文件夹" });
+      const picked = await open({ multiple: false, directory: true, title: t("dialog.importModelTitle") });
       if (typeof picked !== "string") return;
       await invoke("import_model", { path: picked });
       await Promise.all([refreshLibrary(), refreshModel()]);
@@ -335,8 +372,13 @@
 
   async function deleteModel(target: LibraryModelSummary) {
     const approved = await confirm(
-      `删除「${target.displayName}」在应用内的副本？原始下载文件不会被删除，副本会移入废纸篓。`,
-      { title: "删除模型", kind: "warning", okLabel: "删除", cancelLabel: "取消" },
+      t("dialog.deleteModelMessage", { name: target.displayName }),
+      {
+        title: t("dialog.deleteModelTitle"),
+        kind: "warning",
+        okLabel: t("common.delete"),
+        cancelLabel: t("common.cancel"),
+      },
     );
     if (!approved) return;
     error = "";
@@ -377,18 +419,17 @@
 
   onMount(() => {
     try {
-      const stored = localStorage.getItem(SIDEBAR_KEY);
-      if (stored === "hidden" || stored === "shown") userPreference = stored;
+      sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "collapsed";
     } catch {
       /* ignore storage errors */
     }
-    syncWidth(document.documentElement.clientWidth || window.innerWidth);
 
-    const onResize = () => syncWidth(document.documentElement.clientWidth || window.innerWidth);
-    window.addEventListener("resize", onResize);
-
-    const observer = new ResizeObserver(onResize);
-    observer.observe(document.documentElement);
+    void getVersion()
+      .then((value) => (appVersion = value))
+      .catch(() => {
+        /* 浏览器预览没有 Tauri 后端 */
+      });
+    void refreshRetention();
 
     const onKeydown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
@@ -396,10 +437,7 @@
         toggleSidebar();
         return;
       }
-      if (event.key === "Escape") {
-        if (overlayOpen) overlayOpen = false;
-        else if (error) error = "";
-      }
+      if (event.key === "Escape" && error) error = "";
     };
     window.addEventListener("keydown", onKeydown);
 
@@ -419,9 +457,11 @@
         }),
         listen<SegmentEvent>(SEGMENT_EVENT, (event) => upsertSegment(event.payload)),
         listen(OPEN_EVENT, () => void pickFile()),
+        // 原生标题栏按钮（红绿灯同一行）发出的折叠开关事件。
+        listen("voice-to-text:toggle-sidebar", () => toggleSidebar()),
       );
 
-      if (view === "history") void loadHistory();
+      if (view === "home") void loadHistory();
       void refreshLibrary();
       void refreshService();
 
@@ -467,9 +507,7 @@
     }
 
     return () => {
-      window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeydown);
-      observer.disconnect();
       dragDropUnlisten?.();
       for (const pending of unlisteners) {
         void pending.then((stop) => stop()).catch(() => {});
@@ -478,50 +516,62 @@
   });
 </script>
 
-<div class="app">
-  <div class="body">
-  <div class="side-shell" class:collapsed={sidebarMode !== "inline"} inert={sidebarMode !== "inline"}>
-    <AppSidebar {view} onNavigate={navigate} />
-  </div>
+<div class="app" class:collapsed={sidebarCollapsed}>
+  <AppSidebar {view} collapsed={sidebarCollapsed} onNavigate={navigate} />
 
-  <main class="main" class:collapsed={sidebarMode !== "inline"}>
+  <main class="main">
     <AppToolbar
-      title={TITLES[view]}
       {model}
-      {sidebarVisible}
-      onToggleSidebar={toggleSidebar}
-      onChooseModel={chooseModel}
+      models={libraryModels}
+      {loadedModelId}
+      search={searchQuery}
+      onSearchChange={(value) => (searchQuery = value)}
+      onSelectModel={selectModel}
+      onManageModels={() => (view = "model")}
     />
 
-    {#if view === "transcribe"}
-      <TranscribeView
-        {model}
-        {fileName}
-        {job}
-        {segments}
-        {transcript}
-        {error}
-        {busy}
-        {dropping}
-        onPickFile={pickFile}
-        onChooseModel={chooseModel}
-        onCancel={cancelJob}
-        onExport={exportResult}
-        onCopy={copyAll}
-      />
-    {:else if view === "history"}
-      <HistoryView
-        entries={history}
-        detail={detail}
-        detailJobId={detailJobId}
-        loading={historyLoading}
-        onSelect={selectHistory}
-        onBack={() => {
-          detail = null;
-          detailJobId = null;
-        }}
-        onExport={exportResult}
-      />
+    {#if view === "home"}
+      {#if detail && detailJobId}
+        <HistoryView
+          entries={history}
+          {detail}
+          {detailJobId}
+          loading={historyLoading}
+          onSelect={selectHistory}
+          onExport={exportResult}
+          onBack={() => {
+            detail = null;
+            detailJobId = null;
+          }}
+        />
+      {:else if job || transcript}
+        <TranscribeView
+          {model}
+          {fileName}
+          {job}
+          {segments}
+          {transcript}
+          {error}
+          {busy}
+          {dropping}
+          onPickFile={pickFile}
+          onChooseModel={chooseModel}
+          onCancel={cancelJob}
+          onExport={exportResult}
+          onCopy={copyAll}
+        />
+      {:else}
+        <HistoryView
+          entries={history}
+          loading={historyLoading}
+          hits={searchHits}
+          {searchBusy}
+          onSelect={selectHistory}
+          onExport={exportResult}
+          onPickFile={pickFile}
+          {dropping}
+        />
+      {/if}
     {:else if view === "model"}
       <ModelView
         models={libraryModels}
@@ -535,21 +585,17 @@
         {model}
         {storage}
         {service}
+        {appVersion}
+        {retention}
         onRefreshService={refreshService}
         onOpenLibrary={() => openStorage(storage?.libraryPath)}
         onOpenHistory={() => openStorage(storage?.historyPath)}
+        onOpenPath={openStorage}
+        onRetentionChange={changeRetention}
         onGoModels={() => (view = "model")}
       />
     {/if}
   </main>
-  </div>
-
-  {#if sidebarMode === "overlay"}
-    <button class="scrim" type="button" aria-label="关闭导航" onclick={() => (overlayOpen = false)}></button>
-    <div class="overlay">
-      <AppSidebar {view} onNavigate={navigate} />
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -557,80 +603,21 @@
     display: flex;
     height: 100vh;
     overflow: hidden;
-    border-radius: 12px;
-    background: transparent;
+    background: var(--bg);
     color: var(--text);
   }
 
-  .body {
+  /* 侧栏折叠开关现在是原生标题栏按钮（与红绿灯同一行），内容区不再需要让位。 */
+
+  /* 内容区：侧栏右侧的通高区域；圆角与窗口边框交给原生窗口 */
+  .main {
     flex: 1;
     /* 必须可收缩：否则 min-content（MCP 代码块 pre 长行/长路径）会把整条布局顶得比窗口宽 */
     min-width: 0;
     min-height: 0;
     display: flex;
-    position: relative;
-    gap: 0;
-    padding: 0;
-  }
-
-  /* 侧栏是唯一浮起的圆角卡片，压在铺满窗口的内容区之上 */
-  .side-shell {
-    position: absolute;
-    left: 12px;
-    top: 8px;
-    bottom: 8px;
-    width: 196px;
-    z-index: 2;
-    overflow: hidden;
-    /* 与 .sidebar 同圆角，避免 overflow 裁剪把投影切成直角 */
-    border-radius: 14px;
-    transition: width 160ms ease, opacity 140ms ease;
-  }
-
-  .side-shell.collapsed {
-    width: 0;
-    opacity: 0;
-    pointer-events: none;
-  }
-
-
-
-  /* 内容区铺满窗口，圆角交给窗口本身裁切，不再是一块独立面板 */
-  .main {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    display: flex;
     flex-direction: column;
-    padding: 8px 12px 12px 230px;
+    padding: 8px 12px 12px 12px;
     background: var(--bg);
-    border: 0;
-    border-radius: 0;
-    transition: padding-left 160ms ease;
-  }
-
-  /* 侧栏收起后内容回到窗口左侧 */
-  .main.collapsed {
-    padding-left: 12px;
-  }
-
-  .scrim {
-    position: fixed;
-    inset: 0;
-    border: 0;
-    padding: 0;
-    background: rgba(0, 0, 0, 0.16);
-    z-index: 9;
-  }
-
-  .overlay {
-    position: fixed;
-    left: 12px;
-    top: 12px;
-    bottom: 12px;
-    width: 196px;
-    z-index: 10;
-    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.24);
-    border-radius: 14px;
   }
 </style>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import Reader from "./Reader.svelte";
+  import { t } from "$lib/i18n.svelte";
   import type { JobStatus, ModelSummary, Segment, Transcript } from "$lib/types";
 
   let {
@@ -42,19 +43,58 @@
       ? Math.round((job.completedChunks / job.totalChunks) * 100)
       : null,
   );
-  const displayName = $derived(fileName ?? transcript?.sourceFileName ?? "未命名媒体");
+  const displayName = $derived(fileName ?? transcript?.sourceFileName ?? t("transcribe.untitled"));
   const stateLabel = $derived(
     running
-      ? "正在转写"
+      ? t("state.running")
       : job?.state === "completed" || transcript
-        ? "已完成"
+        ? t("state.completed")
         : job?.state === "cancelled"
-          ? "已取消"
+          ? t("state.cancelled")
           : job?.state === "failed"
-            ? "失败"
+            ? t("state.failed")
             : "",
   );
   const partial = $derived(stopped && segments.length > 0);
+
+  // 实时倍速与剩余时间：每秒刷新时钟，用后端给出的开始时间与音频总长推算。
+  let nowMs = $state(Date.now());
+  $effect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => (nowMs = Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  });
+
+  const audioRatio = $derived(
+    job?.totalChunks && job.totalChunks > 0 ? job.completedChunks / job.totalChunks : null,
+  );
+  /** 已处理音频时长 / 已耗时 = 实时倍速（1.0× 表示与音频等速）。 */
+  const speed = $derived.by(() => {
+    const started = job?.startedAtMs;
+    const duration = job?.totalDurationMs;
+    const ratio = audioRatio;
+    if (!running || !started || !duration || ratio === null || ratio <= 0) return null;
+    const elapsed = nowMs - started;
+    // 前 2 秒样本太少，不显示会跳动的数字。
+    if (elapsed < 2000) return null;
+    const value = (duration * ratio) / elapsed;
+    return Number.isFinite(value) && value > 0 ? value : null;
+  });
+  const etaMs = $derived.by(() => {
+    const duration = job?.totalDurationMs;
+    const ratio = audioRatio;
+    const current = speed;
+    if (!running || !duration || ratio === null || !current) return null;
+    return (duration * (1 - ratio)) / current;
+  });
+
+  function etaLabel(ms: number): string {
+    const seconds = Math.max(1, Math.round(ms / 1000));
+    if (seconds < 60) return t("transcribe.etaSeconds", { seconds });
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return t("transcribe.etaMinutes", { minutes });
+    return t("transcribe.etaHours", { hours: Math.floor(minutes / 60), minutes: minutes % 60 });
+  }
 </script>
 
 <section class="content">
@@ -67,8 +107,8 @@
 
   {#if !hasTask}
     <div class="intro">
-      <h2>开始一段转写</h2>
-      <p>拖入音频或视频文件，或使用下方按钮选择；导入后会自动排队。</p>
+      <h2>{t("transcribe.introTitle")}</h2>
+      <p>{t("transcribe.introBody")}</p>
     </div>
     <div class="center">
       <div
@@ -76,7 +116,7 @@
         class:dropping
         role="button"
         tabindex="0"
-        aria-label="拖入音频或视频文件，或按回车选择文件"
+        aria-label={t("transcribe.dropAria")}
         onclick={onPickFile}
         onkeydown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
@@ -86,8 +126,8 @@
         }}
       >
         <Icon name="file" size={30} stroke={1.35} />
-        <div class="drop-title">拖入音频或视频文件</div>
-        <div class="drop-sub">支持常见的音频与视频格式，可一次放入多个文件</div>
+        <div class="drop-title">{t("transcribe.dropTitle")}</div>
+        <div class="drop-sub">{t("transcribe.dropSub")}</div>
         <div class="actions">
           <button
             type="button"
@@ -97,7 +137,7 @@
               onPickFile();
             }}
           >
-            选择文件
+            {t("transcribe.chooseFile")}
           </button>
           <span class="kbd">⌘O</span>
         </div>
@@ -109,11 +149,11 @@
         <div class="file" title={displayName}>{displayName}</div>
         <div class="spacer"></div>
         {#if running}
-          <button type="button" class="quiet" onclick={onCancel}>取消</button>
+          <button type="button" class="quiet" onclick={onCancel}>{t("common.cancel")}</button>
         {:else}
           <div class="actions">
             <button type="button" class="act" onclick={onCopy} disabled={segments.length === 0}>
-              <Icon name="copy" size={13} />复制全文
+              <Icon name="copy" size={13} />{t("transcribe.copyAll")}
             </button>
             <button type="button" class="act" onclick={() => onExport("txt")} disabled={segments.length === 0 || !transcript}>
               <Icon name="download" size={13} />TXT
@@ -125,16 +165,24 @@
         {/if}
       </div>
       <div class="meta">
-        <span>模型 <b>{model?.displayName ?? "未选择"}</b></span>
+        <span>{t("transcribe.model")} <b>{model?.displayName ?? t("common.notSelected")}</b></span>
         <span class="sep">·</span>
         <span>{stateLabel}</span>
         {#if job?.totalChunks}
           <span class="sep">·</span>
-          <span>已转写 <b>{job.completedChunks} / {job.totalChunks}</b> 段</span>
+          <span>{t("transcribe.chunksBefore")} <b>{job.completedChunks} / {job.totalChunks}</b> {t("transcribe.chunksAfter", { count: job.totalChunks })}</span>
         {/if}
         {#if running && job?.phase}
           <span class="sep">·</span>
           <span>{job.phase}</span>
+        {/if}
+        {#if running && speed !== null}
+          <span class="sep">·</span>
+          <span>{t("transcribe.speed", { value: speed.toFixed(1) })}</span>
+        {/if}
+        {#if running && etaMs !== null}
+          <span class="sep">·</span>
+          <span>{etaLabel(etaMs)}</span>
         {/if}
       </div>
       {#if running}
@@ -144,7 +192,7 @@
           aria-valuemin="0"
           aria-valuemax="100"
           aria-valuenow={percent ?? undefined}
-          aria-valuetext={percent === null ? "正在识别" : `已处理 ${percent}%`}
+          aria-valuetext={percent === null ? t("transcribe.progressIdle") : t("transcribe.progressPercent", { percent })}
         >
           <i class:indeterminate={percent === null} style:width={percent === null ? undefined : `${percent}%`}></i>
         </div>
@@ -152,7 +200,7 @@
       {#if partial}
         <div class="note">
           <span class="dot red"></span>
-          <span>该结果为部分内容，不完整；导出时会再次提示。</span>
+          <span>{t("transcribe.partialNote")}</span>
         </div>
       {/if}
     </div>
@@ -160,7 +208,7 @@
     <Reader jobId={job?.jobId ?? transcript?.jobId ?? null} {segments} {running} />
 
     {#if finished && busy}
-      <p class="hint">正在准备导出…</p>
+      <p class="hint">{t("transcribe.preparingExport")}</p>
     {/if}
   {/if}
 </section>
@@ -171,7 +219,7 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    padding: 2px 28px 0;
+    padding: 6px 28px 0;
   }
 
   @media (max-width: 760px) {
@@ -194,36 +242,38 @@
 
   .intro {
     width: 100%;
-    max-width: 720px;
+    max-width: 940px;
     margin: 10px auto 0;
   }
 
+  /* 参考设计的大标题：衬线字体 */
   .intro h2 {
     margin: 0;
-    font-size: 26px;
+    font-family: var(--font-display);
+    font-size: 36px;
     font-weight: 600;
-    letter-spacing: -0.022em;
+    letter-spacing: -0.02em;
   }
 
   .intro p {
     margin: 8px 0 0;
-    font-size: 13px;
+    font-size: 14.5px;
     color: var(--text-2);
   }
 
   .center {
     flex: 1;
     display: grid;
-    place-items: center;
-    padding-bottom: 30px;
+    place-items: start center;
+    padding-top: 34px;
   }
 
   .drop {
-    width: min(462px, 100%);
-    padding: 30px 28px 26px;
-    border-radius: 11px;
-    border: 1px dashed var(--hairline-2);
-    background: color-mix(in srgb, var(--text) 1.2%, transparent);
+    width: min(520px, 100%);
+    padding: 34px 30px 28px;
+    border-radius: 14px;
+    border: 1px solid transparent;
+    background: var(--fill);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -233,17 +283,17 @@
   }
 
   .drop:hover {
-    border-color: color-mix(in srgb, var(--text) 22%, transparent);
+    border-color: var(--hairline-2);
   }
 
   .drop.dropping {
-    border-color: color-mix(in srgb, var(--accent) 65%, transparent);
-    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
   }
 
   .drop-title {
     margin-top: 12px;
-    font-size: 14.5px;
+    font-size: 16px;
     font-weight: 500;
     letter-spacing: -0.011em;
     color: var(--text);
@@ -251,7 +301,7 @@
 
   .drop-sub {
     margin-top: 5px;
-    font-size: 12.5px;
+    font-size: 13.5px;
     color: var(--text-2);
   }
 
@@ -268,25 +318,26 @@
     letter-spacing: 0.02em;
   }
 
+  /* 主按钮：深色药丸（参考设计的 Upgrade to Pro 样式） */
   .btn {
-    height: 30px;
-    padding: 0 14px;
-    border-radius: 8px;
-    background: var(--panel);
-    border: 1px solid var(--hairline-2);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-    font-size: 13px;
+    height: 32px;
+    padding: 0 16px;
+    border-radius: 9px;
+    background: var(--text);
+    border: 0;
+    color: var(--bg);
+    font-size: 14px;
     font-weight: 500;
   }
 
   .btn:hover {
-    background: var(--fill);
+    opacity: 0.88;
   }
 
   .task {
     width: 100%;
-    max-width: 720px;
-    margin: 6px auto 0;
+    max-width: 940px;
+    margin: 8px auto 0;
   }
 
   .task-row {
@@ -296,7 +347,7 @@
   }
 
   .file {
-    font-size: 15px;
+    font-size: 16.5px;
     font-weight: 600;
     letter-spacing: -0.012em;
     white-space: nowrap;
@@ -310,7 +361,7 @@
   }
 
   .quiet {
-    font-size: 12.5px;
+    font-size: 13.5px;
     color: var(--text-2);
     white-space: nowrap;
     background: none;
@@ -332,7 +383,7 @@
     border: 0;
     background: transparent;
     color: var(--text-2);
-    font-size: 12.5px;
+    font-size: 13.5px;
   }
 
   .act:hover:not(:disabled) {
@@ -349,7 +400,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--text-3);
     flex-wrap: wrap;
   }
@@ -379,9 +430,26 @@
     transition: width 200ms ease;
   }
 
+  /* 总段数未知时（刚开始解码）用滑动的扫描条，而不是一条卡在中间的静态条。 */
   .bar i.indeterminate {
-    width: 38%;
-    opacity: 0.55;
+    width: 34%;
+    opacity: 0.6;
+    animation: sweep 1.5s ease-in-out infinite;
+  }
+
+  @keyframes sweep {
+    0% {
+      margin-left: -34%;
+    }
+    100% {
+      margin-left: 100%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar i.indeterminate {
+      animation-duration: 4s;
+    }
   }
 
   .note {
@@ -389,7 +457,7 @@
     align-items: center;
     gap: 7px;
     margin-top: 10px;
-    font-size: 11.5px;
+    font-size: 12.5px;
     color: var(--text-3);
   }
 
@@ -406,7 +474,7 @@
 
   .hint {
     margin: 6px 0 0;
-    font-size: 11.5px;
+    font-size: 12.5px;
     color: var(--text-3);
   }
 </style>
