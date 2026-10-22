@@ -41,7 +41,11 @@
     "mp4", "mov", "mkv", "ogg", "oga", "flac", "aac", "opus", "3gp", "webm",
   ];
 
-  // 侧栏展开/折叠（compact 图标列）状态的持久化键。
+  // 侧栏折叠：产品决定默认关闭，不再提供折叠入口。
+  // 恢复方式：把这里改成 true，并把 Rust 侧 `SIDEBAR_COLLAPSE_ENABLED` 同步改成 true。
+  const SIDEBAR_COLLAPSE_ENABLED = false;
+
+  // 折叠状态的持久化键（保留，便于恢复）。
   const SIDEBAR_KEY = "lt.sidebar.collapsed.v1";
 
   function initialView(): View {
@@ -83,9 +87,9 @@
     transcript?.text ?? segments.map((segment) => segment.text).join("\n"),
   );
 
-  // 原生标题栏按钮的提示语跟随界面语言与折叠状态。
+  // 原生标题栏按钮的提示语跟随界面语言与折叠状态（折叠关闭时不调用）。
   $effect(() => {
-    if (!tauriAvailable) return;
+    if (!SIDEBAR_COLLAPSE_ENABLED || !tauriAvailable) return;
     const label = sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle");
     void invoke("set_sidebar_toggle_label", { label }).catch(() => {
       /* 预览环境没有原生按钮 */
@@ -167,6 +171,7 @@
   });
 
   function toggleSidebar() {
+    if (!SIDEBAR_COLLAPSE_ENABLED) return;
     sidebarCollapsed = !sidebarCollapsed;
     try {
       localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "collapsed" : "expanded");
@@ -418,10 +423,12 @@
   }
 
   onMount(() => {
-    try {
-      sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "collapsed";
-    } catch {
-      /* ignore storage errors */
+    if (SIDEBAR_COLLAPSE_ENABLED) {
+      try {
+        sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "collapsed";
+      } catch {
+        /* ignore storage errors */
+      }
     }
 
     void getVersion()
@@ -432,7 +439,7 @@
     void refreshRetention();
 
     const onKeydown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "\\") {
+      if (SIDEBAR_COLLAPSE_ENABLED && (event.metaKey || event.ctrlKey) && event.key === "\\") {
         event.preventDefault();
         toggleSidebar();
         return;

@@ -211,3 +211,7 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - 新命令 `search_history`：文件名与转写正文大小写不敏感匹配，正文命中返回上下文片段（字符级截取，UTF-8 安全），附 2 个单元测试。
 - 顶栏搜索框（220ms 防抖）+ 首页结果卡片（命中片段高亮底色、空/加载状态）；阅读器本稿搜索（过滤、高亮、计数）；历史详情改用 Reader 组件（`initialFollow=false`）以获得同样的稿内搜索。
 - i18n 五语言补齐；README/README.zh-CN 增加 GUI 0.2.0 章节；实测：文件名 6 条、正文 7 条、稿内 9 处匹配。
+
+## 关闭侧栏折叠（实现保留可恢复）（2026-10-23）
+
+- 产品决定不再折叠侧栏。以双开关关闭入口：Rust `SIDEBAR_COLLAPSE_ENABLED=false`（不安装原生标题栏按钮、提示语命令 no-op）、前端同名常量（⌘\ 与持久化读取不生效）。`titlebar_toggle` 模块、折叠样式与 i18n 文案全部保留，两处常量改回 true 即可完整恢复。

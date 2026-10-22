@@ -1130,9 +1130,15 @@ fn export_transcript(
     Ok(target.to_string_lossy().into_owned())
 }
 
+/// 侧栏折叠开关：产品决定默认不折叠。
+/// 保留完整实现，把这里改回 true 即可恢复（前端 `SIDEBAR_COLLAPSE_ENABLED` 同步打开）。
+#[cfg(target_os = "macos")]
+const SIDEBAR_COLLAPSE_ENABLED: bool = false;
+
 /// 标题栏左侧的侧栏开关（原生 NSTitlebarAccessoryViewController）：
 /// 与红绿灯同一行、圆形系统按钮、SF Symbol "sidebar.left"，点击发事件给前端。
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod titlebar_toggle {
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
@@ -1249,7 +1255,7 @@ mod titlebar_toggle {
 #[tauri::command]
 fn set_sidebar_toggle_label(label: String, app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    {
+    if crate::SIDEBAR_COLLAPSE_ENABLED {
         let _ = app.run_on_main_thread(move || titlebar_toggle::set_tooltip(&label));
     }
     #[cfg(not(target_os = "macos"))]
@@ -1297,8 +1303,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // 标题栏侧栏开关（原生按钮，与红绿灯同一行）。
+            // 折叠功能已按产品决定关闭；SIDEBAR_COLLAPSE_ENABLED = true 时恢复。
             #[cfg(target_os = "macos")]
-            if let Some(window) = app.get_webview_window("main")
+            if SIDEBAR_COLLAPSE_ENABLED
+                && let Some(window) = app.get_webview_window("main")
                 && let Err(error) = titlebar_toggle::install(&window)
             {
                 eprintln!("could not install the sidebar toggle: {error}");
