@@ -307,7 +307,7 @@ impl JobStore {
                 let _ = fs::remove_file(lock_path);
                 Ok(false)
             }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(true),
+            Err(error) if is_lock_contention(&error) => Ok(true),
             Err(_) => Err("Could not inspect the local task lock.".to_owned()),
         }
     }
@@ -412,6 +412,23 @@ fn validate_job_id(job_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn is_lock_contention(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        return true;
+    }
+
+    // fs2 uses LockFileEx on Windows, which reports ERROR_LOCK_VIOLATION (33)
+    // as ErrorKind::Other instead of WouldBlock when another process owns the lock.
+    #[cfg(windows)]
+    {
+        error.raw_os_error() == Some(33)
+    }
+
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
 fn open_lock(path: &Path) -> Result<File, String> {
     OpenOptions::new()
         .read(true)
@@ -469,5 +486,22 @@ fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
         Err(std::io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lock_error_tests {
+    use super::is_lock_contention;
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn would_block_is_lock_contention() {
+        assert!(is_lock_contention(&Error::from(ErrorKind::WouldBlock)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_lock_violation_is_lock_contention() {
+        assert!(is_lock_contention(&Error::from_raw_os_error(33)));
     }
 }
