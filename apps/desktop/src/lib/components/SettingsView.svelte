@@ -8,6 +8,7 @@
     type LocalePreference,
   } from "$lib/i18n.svelte";
   import type {
+    LanMode,
     ModelSummary,
     RetentionPolicy,
     ServiceStatus,
@@ -20,10 +21,12 @@
     service,
     appVersion,
     retention,
+    lanMode,
     onOpenLibrary,
     onOpenHistory,
     onOpenPath,
     onGoModels,
+    onGoLan,
     onRefreshService,
     onRetentionChange,
   }: {
@@ -32,13 +35,24 @@
     service: ServiceStatus | null;
     appVersion: string;
     retention: RetentionPolicy | null;
+    lanMode: LanMode | null;
     onOpenLibrary: () => void;
     onOpenHistory: () => void;
     onOpenPath: (path: string) => void;
     onGoModels: () => void;
+    onGoLan: () => void;
     onRefreshService: () => void;
     onRetentionChange: (policy: RetentionPolicy) => void;
   } = $props();
+
+  const LAN_MODE_LABELS = $derived.by(() => {
+    const labels: Record<LanMode, string> = {
+      local_only: t("lan.modeLocalOnly"),
+      prefer_local: t("lan.modePreferLocal"),
+      prefer_lan: t("lan.modePreferLan"),
+    };
+    return labels;
+  });
 
   const AGE_OPTIONS = [1, 3, 5, 7, 30];
   const SIZE_OPTIONS = [1, 5, 10];
@@ -269,6 +283,20 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
       </div>
       <p class="note">{t("settings.chunkNote")}</p>
       <p class="note">{t("settings.storageNote")}</p>
+    </div>
+
+    <div class="group">
+      <div class="label">{t("settings.network")}</div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("lan.modeLabel")}</div>
+          <div class="desc">{t("settings.networkDesc")}</div>
+        </div>
+        <div class="value">
+          <span>{lanMode ? LAN_MODE_LABELS[lanMode] : "—"}</span>
+          <button type="button" class="link" onclick={onGoLan}>{t("settings.openLan")}</button>
+        </div>
+      </div>
     </div>
 
     <div class="group">

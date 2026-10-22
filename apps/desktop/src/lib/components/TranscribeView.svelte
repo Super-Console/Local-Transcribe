@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import Reader from "./Reader.svelte";
   import { t } from "$lib/i18n.svelte";
+  import type { MessageKey } from "$lib/i18n/messages/zh";
   import type { JobStatus, ModelSummary, Segment, Transcript } from "$lib/types";
 
   let {
@@ -13,6 +14,7 @@
     error,
     busy,
     dropping,
+    lanHint = null,
     onPickFile,
     onChooseModel,
     onCancel,
@@ -28,6 +30,8 @@
     error: string;
     busy: boolean;
     dropping: boolean;
+    /** 局域网派发提示（prefer_lan 模式下显示），null 表示不显示。 */
+    lanHint?: string | null;
     onPickFile: () => void;
     onChooseModel: () => void;
     onCancel: () => void;
@@ -35,6 +39,11 @@
     onCopy: () => void;
     onBack: () => void;
   } = $props();
+
+  /** 局域网任务的阶段文案是稳定 key（lan.phase.*），本机任务沿用后端原文。 */
+  function phaseLabel(phase: string): string {
+    return phase.startsWith("lan.phase.") ? t(phase as MessageKey) : phase;
+  }
 
   const running = $derived(job?.state === "running");
   const finished = $derived(job?.state === "completed" || !!transcript);
@@ -111,6 +120,9 @@
     <div class="intro">
       <h2>{t("transcribe.introTitle")}</h2>
       <p>{t("transcribe.introBody")}</p>
+      {#if lanHint}
+        <p class="lan-hint">{lanHint}</p>
+      {/if}
     </div>
     <div class="center">
       <div
@@ -183,7 +195,7 @@
         {/if}
         {#if running && job?.phase}
           <span class="sep">·</span>
-          <span>{job.phase}</span>
+          <span>{phaseLabel(job.phase)}</span>
         {/if}
         {#if running && speed !== null}
           <span class="sep">·</span>
@@ -300,6 +312,12 @@
     margin: 8px 0 0;
     font-size: 14.5px;
     color: var(--text-2);
+  }
+
+  /* 局域网派发提示：说明新任务会被送往哪个方向 */
+  .intro p.lan-hint {
+    font-size: 12.5px;
+    color: var(--accent-ink);
   }
 
   .center {

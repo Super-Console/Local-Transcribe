@@ -1,6 +1,6 @@
 /** Shared frontend types mirroring the Rust command/event payloads. */
 
-export type View = "home" | "record" | "model" | "settings";
+export type View = "home" | "record" | "model" | "lan" | "settings";
 
 export type InputFile = { path: string; fileName: string; sizeBytes: number };
 
@@ -117,4 +117,104 @@ export type SegmentEvent = {
   startMs: number;
   endMs: number;
   text: string;
+};
+
+/* ------------------------------------------------------------------ */
+/* 局域网 Compute V1.1（Client 端）：与 Rust lan.rs / LAN 协议的        */
+/* snake_case 载荷一一对应。                                          */
+/* ------------------------------------------------------------------ */
+
+export type LanMode = "local_only" | "prefer_local" | "prefer_lan";
+
+export type LanNodeConfig = {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  token: string;
+  enabled: boolean;
+};
+
+export type LanSettings = {
+  mode: LanMode;
+  nodes: LanNodeConfig[];
+};
+
+export type LanNodeInfo = {
+  name: string;
+  host: string;
+  port: number;
+  proto_version: number;
+  compute_enabled: boolean;
+  role: string;
+  model_id: string | null;
+};
+
+export type LanCapabilities = {
+  proto_version: number;
+  max_chunk_bytes: number;
+  compute_enabled: boolean;
+  role: string;
+  model_id: string | null;
+  platform: string;
+};
+
+export type LanNodeStatus = {
+  reachable: boolean;
+  capabilities: LanCapabilities | null;
+  latency_ms: number | null;
+};
+
+export type LanTaskState =
+  | "init"
+  | "file_transferring"
+  | "queued"
+  | "transcribing"
+  | "post_processing"
+  | "completed"
+  | "failed"
+  | "cancel_requested"
+  | "cancelled";
+
+export type LanTaskError = { code: string; message: string };
+
+export type LanSegment = { start_ms: number; end_ms: number; text: string };
+
+export type LanTaskResult = {
+  transcript: string;
+  segments: LanSegment[];
+  duration_ms: number;
+};
+
+export type LanTask = {
+  id: string;
+  state: LanTaskState;
+  file_name: string;
+  file_size: number;
+  received_bytes: number;
+  chunks_total: number;
+  chunks_received: number;
+  model_id: string | null;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  error: LanTaskError | null;
+  result: LanTaskResult | null;
+};
+
+export type LanCollectReport = {
+  exported: string[];
+  failed: [string, string][];
+};
+
+export type LanStorageInfo = {
+  data_dir: string;
+  total_bytes: number;
+  free_bytes: number;
+};
+
+/** `lan://progress` 事件载荷。 */
+export type LanProgressEvent = {
+  task_id: string;
+  sent: number;
+  total: number;
 };

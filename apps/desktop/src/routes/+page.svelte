@@ -14,10 +14,12 @@
   import ModelView from "$lib/components/ModelView.svelte";
   import SettingsView from "$lib/components/SettingsView.svelte";
   import RecordView from "$lib/components/RecordView.svelte";
+  import LanView from "$lib/components/LanView.svelte";
   import { t } from "$lib/i18n.svelte";
   import type {
     HistoryEntry,
     JobStatus,
+    LanSettings,
     LibraryModelSummary,
     ModelRuntime,
     ModelSummary,
@@ -86,9 +88,15 @@
   let searchHits = $state<SearchHit[] | null>(null);
   let searchBusy = $state(false);
   let retention = $state<RetentionPolicy | null>(null);
+  let lanSettings = $state<LanSettings | null>(null);
 
   const fullText = $derived(
     transcript?.text ?? segments.map((segment) => segment.text).join("\n"),
+  );
+
+  // 局域网派发提示：prefer_lan 模式下在转写页说明任务会去哪里。
+  const lanHint = $derived(
+    lanSettings?.mode === "prefer_lan" ? t("transcribe.lanHint") : null,
   );
 
   // 原生标题栏按钮的提示语跟随界面语言与折叠状态（折叠关闭时不调用）。
@@ -192,6 +200,15 @@
     }
   }
 
+  async function refreshLanSettings() {
+    if (!tauriAvailable) return;
+    try {
+      lanSettings = await invoke<LanSettings>("get_lan_settings");
+    } catch {
+      /* 浏览器预览没有 Tauri 后端 */
+    }
+  }
+
   async function changeRetention(policy: RetentionPolicy) {
     try {
       retention = await invoke<RetentionPolicy>("set_retention_policy", { policy });
@@ -214,7 +231,9 @@
     if (next === "settings") {
       void refreshService();
       void refreshLibrary();
+      void refreshLanSettings();
     }
+    if (next === "lan") void refreshLanSettings();
     if (next === "model") void refreshLibrary();
   }
 
@@ -463,6 +482,7 @@
         /* 浏览器预览没有 Tauri 后端 */
       });
     void refreshRetention();
+    void refreshLanSettings();
 
     const onKeydown = (event: KeyboardEvent) => {
       if (SIDEBAR_COLLAPSE_ENABLED && (event.metaKey || event.ctrlKey) && event.key === "\\") {
@@ -590,6 +610,7 @@
           {error}
           {busy}
           {dropping}
+          {lanHint}
           onPickFile={pickFile}
           onChooseModel={chooseModel}
           onCancel={cancelJob}
@@ -626,6 +647,11 @@
         onSelect={selectModel}
         onDelete={deleteModel}
       />
+    {:else if view === "lan"}
+      <LanView
+        settings={lanSettings}
+        onSettingsSaved={(value) => (lanSettings = value)}
+      />
     {:else}
       <SettingsView
         {model}
@@ -633,12 +659,14 @@
         {service}
         {appVersion}
         {retention}
+        lanMode={lanSettings?.mode ?? null}
         onRefreshService={refreshService}
         onOpenLibrary={() => openStorage(storage?.libraryPath)}
         onOpenHistory={() => openStorage(storage?.historyPath)}
         onOpenPath={openStorage}
         onRetentionChange={changeRetention}
         onGoModels={() => (view = "model")}
+        onGoLan={() => (view = "lan")}
       />
     {/if}
   </main>

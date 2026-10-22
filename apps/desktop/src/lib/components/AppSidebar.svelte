@@ -45,6 +45,18 @@
       <Icon name="mic" />
       <span class="label">{t("nav.record")}</span>
     </button>
+    <button
+      type="button"
+      class="nav-item"
+      class:active={view === "lan"}
+      aria-current={view === "lan" ? "page" : undefined}
+      aria-label={t("nav.lan")}
+      title={t("nav.lan")}
+      onclick={() => onNavigate("lan")}
+    >
+      <Icon name="lan" />
+      <span class="label">{t("nav.lan")}</span>
+    </button>
   </nav>
   <div class="bottom">
     <div class="section">{t("nav.manage")}</div>

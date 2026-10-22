@@ -4912,7 +4912,10 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tokio",
+ "uuid",
  "voice-to-text-core",
+ "voice-to-text-lan",
  "voice-to-text-service",
 ]
 

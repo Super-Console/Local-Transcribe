@@ -1,6 +1,6 @@
 [package]
 name = "voice-to-text-desktop"
-version = "1.0.0"
+version = "1.1.0-beta.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
@@ -22,7 +22,12 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 voice-to-text-core = { path = "../../../crates/transcription-core" }
+voice-to-text-lan = { path = "../../../crates/lan-compute" }
 voice-to-text-service = { path = "../../../crates/transcription-service" }
+# 局域网 Client：节点探测超时与任务轮询计时（复用 Tauri 自带的 tokio）。
+tokio = { version = "1", features = ["time"] }
+# 节点 id 派发 UUID v4（与 lan-compute 的任务 id 同一格式）。
+uuid = { version = "1", features = ["v4"] }
 tauri-plugin-dialog = "2"
 cpal = "0.16"
 hound = "3"

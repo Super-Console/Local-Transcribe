@@ -16,7 +16,9 @@ use voice_to_text_core::{
     InputFile, JobState, JobStatus, JobStore, LocalModel, ModelFamily, ModelLibrary, Transcript,
     inspect_model_directory, transcribe_file_streaming,
 };
+use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, TaskResult};
 
+mod lan;
 mod recording;
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
@@ -412,13 +414,33 @@ fn set_selected_model(path: String, app: AppHandle) -> Result<ModelSummary, Stri
 }
 
 #[tauri::command]
-fn start_transcription(
+async fn start_transcription(
     path: String,
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<JobStatus, String> {
     let input = InputFile::inspect(&path).map_err(|error| error.to_string())?;
-    let model = read_selected_model(&app)?
+    let selected_model = read_selected_model(&app)?;
+    // 局域网派发：prefer_lan 且存在已启用、在线的节点时把任务交给节点执行；
+    // 其余模式（以及节点不可达时）回退本机转写。
+    let dispatch_node = {
+        let settings = lan::read_lan_settings(&app)?;
+        if settings.mode == lan::LanMode::PreferLan {
+            lan::first_reachable_node(&settings).await?
+        } else {
+            None
+        }
+    };
+    if let Some(node) = dispatch_node {
+        return lan::start_lan_transcription(
+            &app,
+            state.inner(),
+            &input,
+            node,
+            selected_model.map(|model| model.id),
+        );
+    }
+    let model = selected_model
         .ok_or_else(|| "Choose a local Paraformer or SenseVoice model folder first.".to_owned())?;
     let store = JobStore::new(app_data_dir(&app)?);
     let state = Arc::clone(state.inner());
@@ -1175,6 +1197,99 @@ fn export_transcript(
     Ok(target.to_string_lossy().into_owned())
 }
 
+// ---------------------------------------------------------------------------
+// 局域网 Compute V1.1（Client 端）：实现在 lan.rs，这里是 Tauri 命令包装。
+// 设置与节点列表返回值含访问令牌（前端编辑节点需要），只在本机界面与
+// 本地配置文件之间传递，不写日志、不进事件。
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn get_lan_settings(app: AppHandle) -> Result<lan::LanSettings, String> {
+    lan::read_lan_settings(&app)
+}
+
+#[tauri::command]
+fn set_lan_settings(
+    settings: lan::LanSettings,
+    app: AppHandle,
+) -> Result<lan::LanSettings, String> {
+    lan::save_settings(&app, settings)
+}
+
+#[tauri::command]
+fn set_lan_assignment(mode: lan::LanMode, app: AppHandle) -> Result<lan::LanSettings, String> {
+    lan::set_assignment(&app, mode)
+}
+
+#[tauri::command]
+async fn lan_discover(timeout_ms: u32) -> Result<Vec<NodeInfo>, String> {
+    lan::discover_nodes(timeout_ms).await
+}
+
+#[tauri::command]
+async fn lan_node_status(node_id: String, app: AppHandle) -> Result<lan::LanNodeStatus, String> {
+    lan::node_status(&app, &node_id).await
+}
+
+#[tauri::command]
+async fn lan_submit_file(
+    node_id: String,
+    file_path: String,
+    model_id: Option<String>,
+    app: AppHandle,
+) -> Result<String, String> {
+    lan::submit_file(&app, &node_id, &file_path, model_id.as_deref()).await
+}
+
+#[tauri::command]
+async fn lan_tasks(node_id: String, app: AppHandle) -> Result<Vec<Task>, String> {
+    lan::list_tasks(&app, &node_id).await
+}
+
+#[tauri::command]
+async fn lan_task(node_id: String, task_id: String, app: AppHandle) -> Result<Task, String> {
+    lan::task_status(&app, &node_id, &task_id).await
+}
+
+#[tauri::command]
+async fn lan_cancel_task(node_id: String, task_id: String, app: AppHandle) -> Result<Task, String> {
+    lan::cancel_task(&app, &node_id, &task_id).await
+}
+
+#[tauri::command]
+async fn lan_fetch_result(
+    node_id: String,
+    task_id: String,
+    app: AppHandle,
+) -> Result<TaskResult, String> {
+    lan::fetch_result(&app, &node_id, &task_id).await
+}
+
+/// 取回节点结果并写入本地历史（历史页与结果视图直接可读）。
+#[tauri::command]
+async fn lan_save_result(
+    node_id: String,
+    task_id: String,
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Transcript, String> {
+    lan::save_result(&app, state.inner(), &node_id, &task_id).await
+}
+
+#[tauri::command]
+async fn lan_collect(
+    node_id: String,
+    output_dir: String,
+    app: AppHandle,
+) -> Result<CollectReport, String> {
+    lan::collect(&app, &node_id, &output_dir).await
+}
+
+#[tauri::command]
+async fn lan_storage(node_id: String, app: AppHandle) -> Result<StorageInfo, String> {
+    lan::node_storage(&app, &node_id).await
+}
+
 /// 侧栏折叠开关：产品决定默认不折叠。
 /// 保留完整实现，把这里改回 true 即可恢复（前端 `SIDEBAR_COLLAPSE_ENABLED` 同步打开）。
 #[cfg(target_os = "macos")]
@@ -1402,7 +1517,20 @@ pub fn run() {
             get_job_result,
             list_history,
             search_history,
-            export_transcript
+            export_transcript,
+            get_lan_settings,
+            set_lan_settings,
+            set_lan_assignment,
+            lan_discover,
+            lan_node_status,
+            lan_submit_file,
+            lan_tasks,
+            lan_task,
+            lan_cancel_task,
+            lan_fetch_result,
+            lan_save_result,
+            lan_collect,
+            lan_storage
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
