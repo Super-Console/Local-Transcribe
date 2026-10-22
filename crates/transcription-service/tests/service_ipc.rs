@@ -1,4 +1,5 @@
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -12,9 +13,14 @@ fn scratch(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    // The test data lives under /tmp: macOS limits Unix socket paths
-    // (SUN_LEN) to 104 bytes and the default temp folder is already long.
-    let path = PathBuf::from("/tmp").join(format!(
+    // Unix socket paths are limited (SUN_LEN, 104 bytes on macOS) and the
+    // default temp folder is already long, so Unix keeps the short /tmp;
+    // Windows uses the normal temp directory (loopback TCP, no path limit).
+    #[cfg(unix)]
+    let base = PathBuf::from("/tmp");
+    #[cfg(windows)]
+    let base = std::env::temp_dir();
+    let path = base.join(format!(
         "voice-to-text-{name}-{}-{nonce}",
         std::process::id()
     ));
@@ -56,7 +62,7 @@ fn spawn_ready_server(data_dir: &Path, roots: &[&Path]) -> Child {
 }
 
 fn wait_for_socket(data_dir: &Path, timeout: Duration) -> bool {
-    let socket = data_dir.join("service.sock");
+    let socket = voice_to_text_service::endpoint_file(data_dir);
     let started = Instant::now();
     while started.elapsed() < timeout {
         if socket.exists() {
@@ -86,12 +92,16 @@ fn service_is_single_instance_and_its_socket_is_owner_only() {
     let first = spawn_ready_server(&data, &[]);
 
     // Only the owner may connect: socket file permissions must be 0600.
-    let mode = fs::metadata(data.join("service.sock"))
-        .expect("socket metadata")
-        .permissions()
-        .mode()
-        & 0o777;
-    assert_eq!(mode, 0o600, "socket must be owner-read/write only");
+    // (Windows relies on the per-user data folder ACL instead of a mode.)
+    #[cfg(unix)]
+    {
+        let mode = fs::metadata(data.join("service.sock"))
+            .expect("socket metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "socket must be owner-read/write only");
+    }
 
     let mut client = ServiceClient::connect(&data).expect("connect to the running service");
     let ping = client.request(&Request::Ping).expect("ping response");

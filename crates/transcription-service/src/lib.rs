@@ -2,23 +2,25 @@
 //!
 //! One process owns the inference queue for a single user:
 //!
-//! - single instance enforced by an exclusive `fs2` lock next to the socket,
+//! - single instance enforced by an exclusive `fs2` lock next to the endpoint file,
 //! - clients connect over a Unix domain socket created with mode `0600`
-//!   (same-user isolation comes from the file permissions),
-//! - newline-delimited JSON requests; no network listener anywhere,
+//!   (same-user isolation comes from the file permissions); on Windows, where
+//!   std has no Unix socket, over a loopback-only TCP port (127.0.0.1) whose
+//!   number is written to `service.port` in the same data folder,
+//! - newline-delimited JSON requests; no non-loopback network listener anywhere,
 //! - one worker thread executes jobs strictly one at a time; jobs whose model
 //!   is not bound yet stay visible as `waiting_for_model` and are skipped by
 //!   the scheduler without changing their visible queue order.
 //!
-//! Known P0 limits (tracked for P1): the queue itself is in memory only, model
-//! identity is a directory snapshot rather than a registered model ID, and the
-//! Windows named-pipe transport is not implemented while no Windows host is
-//! available for verification.
+//! Known P0 limits (tracked for P1): the queue itself is in memory only and model
+//! identity is a directory snapshot rather than a registered model ID.
 
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -36,7 +38,20 @@ use voice_to_text_core::{
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SOCKET_FILE: &str = "service.sock";
+pub const PORT_FILE: &str = "service.port";
 pub const LOCK_FILE: &str = "service.lock";
+
+/// The platform-local stream the newline-delimited JSON protocol runs over:
+/// a Unix socket stream on macOS/Linux, a loopback TCP stream on Windows.
+#[cfg(unix)]
+pub type LocalStream = UnixStream;
+#[cfg(windows)]
+pub type LocalStream = std::net::TcpStream;
+
+#[cfg(unix)]
+type LocalListener = UnixListener;
+#[cfg(windows)]
+type LocalListener = std::net::TcpListener;
 
 /// How long the worker keeps retrying the cross-process dispatch lock before
 /// the queued job is marked failed with the real reason.
@@ -218,6 +233,24 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
     data_dir.join(SOCKET_FILE)
 }
 
+/// Windows-only endpoint file: holds the loopback TCP port of a live service.
+#[cfg(windows)]
+pub fn port_path(data_dir: &Path) -> PathBuf {
+    data_dir.join(PORT_FILE)
+}
+
+/// The file a client checks to tell "service running" from "not started yet".
+pub fn endpoint_file(data_dir: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        socket_path(data_dir)
+    }
+    #[cfg(windows)]
+    {
+        port_path(data_dir)
+    }
+}
+
 fn lock_path(data_dir: &Path) -> PathBuf {
     data_dir.join(LOCK_FILE)
 }
@@ -226,6 +259,93 @@ fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_millis() as u64)
+}
+
+// ---------------------------------------------------------------------------
+// Local IPC transport
+//
+// macOS/Linux keep the original Unix domain socket (0600). Windows binds a
+// loopback-only TCP port and records it in `service.port`; the `fs2` single
+// instance lock still guards the endpoint, so a stale port file can never be
+// mistaken for a live service. The wire protocol is identical everywhere.
+// ---------------------------------------------------------------------------
+
+fn bind_local(data_dir: &Path) -> Result<LocalListener, ServerStartError> {
+    #[cfg(unix)]
+    {
+        let socket = socket_path(data_dir);
+        // The exclusive lock proves no live server owns this socket file, so a
+        // leftover file is stale after a crash.
+        if socket.exists() {
+            let _ = fs::remove_file(&socket);
+        }
+        let listener = UnixListener::bind(&socket).map_err(|error| {
+            ServerStartError::Other(format!(
+                "Cannot bind the local service socket {} (Unix socket paths are limited to about 104 bytes, so the data folder path must stay short): {error}",
+                socket.display()
+            ))
+        })?;
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).map_err(|error| {
+            ServerStartError::Other(format!("Cannot secure the local service socket: {error}"))
+        })?;
+        Ok(listener)
+    }
+    #[cfg(windows)]
+    {
+        let port_file = port_path(data_dir);
+        // The exclusive lock proves no live server owns this endpoint file, so
+        // a leftover file is stale after a crash.
+        if port_file.exists() {
+            let _ = fs::remove_file(&port_file);
+        }
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+            ServerStartError::Other(format!(
+                "Cannot bind the loopback service port (127.0.0.1): {error}"
+            ))
+        })?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| {
+                ServerStartError::Other(format!("Cannot read the bound service port: {error}"))
+            })?
+            .port();
+        fs::write(&port_file, port.to_string()).map_err(|error| {
+            ServerStartError::Other(format!("Cannot write the service port file: {error}"))
+        })?;
+        Ok(listener)
+    }
+}
+
+fn connect_local(data_dir: &Path) -> Result<LocalStream, String> {
+    #[cfg(unix)]
+    {
+        let path = socket_path(data_dir);
+        UnixStream::connect(&path).map_err(|error| {
+            format!(
+                "Cannot reach the local service socket {}: {error}. Is the service running?",
+                path.display()
+            )
+        })
+    }
+    #[cfg(windows)]
+    {
+        let port_file = port_path(data_dir);
+        let port: u16 = fs::read_to_string(&port_file)
+            .map_err(|error| {
+                format!(
+                    "Cannot read the service port file {}: {error}. Is the service running?",
+                    port_file.display()
+                )
+            })?
+            .trim()
+            .parse()
+            .map_err(|_| "The service port file is invalid. Is the service running?".to_owned())?;
+        std::net::TcpStream::connect(("127.0.0.1", port)).map_err(|error| {
+            format!(
+                "Cannot reach the local service on 127.0.0.1:{port}: {error}. Is the service running?"
+            )
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,21 +449,7 @@ pub fn run_server(options: ServerOptions) -> Result<(), ServerStartError> {
     let _ = writeln!(lock, "pid={}", std::process::id());
     let _ = lock.sync_all();
 
-    let socket = socket_path(&data_dir);
-    // The exclusive lock proves no live server owns this socket file, so a
-    // leftover file is stale after a crash.
-    if socket.exists() {
-        let _ = fs::remove_file(&socket);
-    }
-    let listener = UnixListener::bind(&socket).map_err(|error| {
-        ServerStartError::Other(format!(
-            "Cannot bind the local service socket {} (Unix socket paths are limited to about 104 bytes, so the data folder path must stay short): {error}",
-            socket.display()
-        ))
-    })?;
-    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).map_err(|error| {
-        ServerStartError::Other(format!("Cannot secure the local service socket: {error}"))
-    })?;
+    let listener = bind_local(&data_dir)?;
 
     let shared = Arc::new(Shared {
         store: JobStore::new(&data_dir),
@@ -403,7 +509,7 @@ fn canonical_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     Ok(canonical)
 }
 
-fn handle_connection(mut stream: UnixStream, shared: &Shared) -> Result<(), String> {
+fn handle_connection(mut stream: LocalStream, shared: &Shared) -> Result<(), String> {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
@@ -1216,18 +1322,12 @@ fn execute_job(
 // ---------------------------------------------------------------------------
 
 pub struct ServiceClient {
-    stream: UnixStream,
+    stream: LocalStream,
 }
 
 impl ServiceClient {
     pub fn connect(data_dir: &Path) -> Result<Self, String> {
-        let path = socket_path(data_dir);
-        let stream = UnixStream::connect(&path).map_err(|error| {
-            format!(
-                "Cannot reach the local service socket {}: {error}. Is the service running?",
-                path.display()
-            )
-        })?;
+        let stream = connect_local(data_dir)?;
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .map_err(|error| error.to_string())?;

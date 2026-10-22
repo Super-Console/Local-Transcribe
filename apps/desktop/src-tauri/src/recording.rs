@@ -4,16 +4,19 @@
 //! 每条轨道各自写一个 WAV 文件，录完分别进入转写管线。
 
 use std::{
-    fs::{self, File},
-    io::BufWriter,
-    path::{Path, PathBuf},
+    fs,
+    path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread::{self, JoinHandle},
     time::Instant,
 };
+
+// Core Audio Process Tap 录音只在 macOS 上编译。
+#[cfg(target_os = "macos")]
+use std::{fs::File, io::BufWriter, path::Path};
 
 use serde::Serialize;
 use tauri::AppHandle;
@@ -99,7 +102,12 @@ fn empty_error() -> Arc<Mutex<Option<String>>> {
 // 输入设备（麦克风）
 // ---------------------------------------------------------------------------
 
-fn spawn_input(device_name: Option<String>, label: &str, path: PathBuf, stop: Arc<AtomicBool>) -> TrackHandle {
+fn spawn_input(
+    device_name: Option<String>,
+    label: &str,
+    path: PathBuf,
+    stop: Arc<AtomicBool>,
+) -> TrackHandle {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let level = Arc::new(AtomicU32::new(0.0f32.to_bits()));
@@ -117,12 +125,9 @@ fn spawn_input(device_name: Option<String>, label: &str, path: PathBuf, stop: Ar
 
     let host = cpal::default_host();
     let device = match device_name.as_deref() {
-        Some(name) if !name.is_empty() => host
-            .input_devices()
-            .ok()
-            .and_then(|mut devices| {
-                devices.find(|device| device.name().map(|value| value == name).unwrap_or(false))
-            }),
+        Some(name) if !name.is_empty() => host.input_devices().ok().and_then(|mut devices| {
+            devices.find(|device| device.name().map(|value| value == name).unwrap_or(false))
+        }),
         _ => host.default_input_device(),
     };
     let Some(device) = device else {
@@ -301,7 +306,7 @@ unsafe fn start_tap_session(
         AudioObjectGetPropertyData, AudioObjectPropertyAddress, CATapDescription,
         kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
     };
-    use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp};
+    use objc2_core_audio_types::{AudioBufferList, AudioTimeStamp};
     use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
 
     if let Some(parent) = path.parent() {
@@ -412,10 +417,8 @@ unsafe fn start_tap_session(
         }
         let context = &*(client as *const Context);
         let list = input.as_ref();
-        let buffers = std::slice::from_raw_parts(
-            list.mBuffers.as_ptr() as *const AudioBuffer,
-            list.mNumberBuffers as usize,
-        );
+        let buffers =
+            std::slice::from_raw_parts(list.mBuffers.as_ptr(), list.mNumberBuffers as usize);
         let Ok(mut guard) = context.writer.lock() else {
             return 0;
         };
@@ -505,12 +508,12 @@ pub fn list_devices() -> Vec<String> {
 pub fn list_apps() -> Vec<AudioApp> {
     use objc2_app_kit::NSWorkspace;
 
-    let workspace = unsafe { NSWorkspace::sharedWorkspace() };
-    let apps = unsafe { workspace.runningApplications() };
+    let workspace = NSWorkspace::sharedWorkspace();
+    let apps = workspace.runningApplications();
     let mut out = Vec::new();
     for app in apps.iter() {
-        let name = unsafe { app.localizedName() };
-        let pid = unsafe { app.processIdentifier() };
+        let name = app.localizedName();
+        let pid = app.processIdentifier();
         if pid <= 0 {
             continue;
         }
@@ -528,11 +531,7 @@ pub fn list_apps() -> Vec<AudioApp> {
     Vec::new()
 }
 
-pub fn start(
-    state: &RecordingState,
-    app: &AppHandle,
-    specs: Vec<TrackSpec>,
-) -> Result<(), String> {
+pub fn start(state: &RecordingState, app: &AppHandle, specs: Vec<TrackSpec>) -> Result<(), String> {
     if specs.is_empty() {
         return Err("请至少添加一条音轨。".to_owned());
     }
@@ -561,7 +560,13 @@ pub fn start(
         // 用来源名做文件名，历史列表里一眼能看出是哪条音轨。
         let file_stem: String = label
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .take(40)
             .collect();
         let path = dir.join(format!("{file_stem}-{safe_index}.wav"));

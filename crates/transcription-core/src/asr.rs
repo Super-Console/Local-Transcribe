@@ -513,9 +513,9 @@ pub fn transcribe_file_streaming(
     let mut cache = RECOGNIZER_CACHE
         .lock()
         .map_err(|_| "The model cache is unavailable.".to_owned())?;
-    let reusable = cache.as_ref().is_some_and(|entry| {
-        entry.model_id == model.id && entry.directory == model.directory
-    });
+    let reusable = cache
+        .as_ref()
+        .is_some_and(|entry| entry.model_id == model.id && entry.directory == model.directory);
     if !reusable {
         let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
             "sherpa-onnx could not load this model. Verify that its files are a compatible export."

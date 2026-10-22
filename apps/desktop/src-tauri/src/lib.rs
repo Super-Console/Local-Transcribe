@@ -375,21 +375,21 @@ struct ServiceStatus {
 #[tauri::command]
 fn service_status(app: AppHandle) -> Result<ServiceStatus, String> {
     let data_dir = app_data_dir(&app)?;
-    let socket = voice_to_text_service::socket_path(&data_dir);
     let mut status = ServiceStatus {
         running: false,
         pid: None,
-        socket_path: socket.to_string_lossy().into_owned(),
+        socket_path: voice_to_text_service::endpoint_file(&data_dir)
+            .to_string_lossy()
+            .into_owned(),
         data_dir: data_dir.to_string_lossy().into_owned(),
         protocol_version: voice_to_text_service::PROTOCOL_VERSION,
     };
-    if let Ok(mut client) = voice_to_text_service::ServiceClient::connect(&data_dir) {
-        if let Ok(response) = client.request(&voice_to_text_service::Request::Ping) {
-            if let Some(info) = response.service {
-                status.running = true;
-                status.pid = Some(info.pid);
-            }
-        }
+    if let Ok(mut client) = voice_to_text_service::ServiceClient::connect(&data_dir)
+        && let Ok(response) = client.request(&voice_to_text_service::Request::Ping)
+        && let Some(info) = response.service
+    {
+        status.running = true;
+        status.pid = Some(info.pid);
     }
     Ok(status)
 }
@@ -713,7 +713,6 @@ struct ModelRuntime {
     idle_unload_seconds: u64,
 }
 
-
 #[tauri::command]
 fn list_audio_devices() -> Vec<String> {
     recording::list_devices()
@@ -815,7 +814,10 @@ fn validate_retention(policy: &RetentionPolicy) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_retention_policy(policy: RetentionPolicy, app: AppHandle) -> Result<RetentionPolicy, String> {
+fn set_retention_policy(
+    policy: RetentionPolicy,
+    app: AppHandle,
+) -> Result<RetentionPolicy, String> {
     validate_retention(&policy)?;
     let path = retention_config_path(&app)?;
     let parent = path
@@ -825,7 +827,8 @@ fn set_retention_policy(policy: RetentionPolicy, app: AppHandle) -> Result<Reten
     let temporary = parent.join("retention.json.tmp");
     let contents = serde_json::to_vec_pretty(&policy)
         .map_err(|_| "Could not encode the cleanup settings.".to_owned())?;
-    fs::write(&temporary, contents).map_err(|_| "Could not save the cleanup settings.".to_owned())?;
+    fs::write(&temporary, contents)
+        .map_err(|_| "Could not save the cleanup settings.".to_owned())?;
     fs::rename(&temporary, &path).map_err(|_| "Could not save the cleanup settings.".to_owned())?;
     Ok(policy)
 }
@@ -874,7 +877,10 @@ fn apply_retention(app: &AppHandle) -> Result<RetentionOutcome, String> {
         };
         for entry in read_dir.flatten() {
             let path = entry.path();
-            let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
             // 只处理结果与状态 JSON；锁文件、取消标记、派发锁一律不动。
             if !name.ends_with(".json") {
                 continue;
@@ -891,8 +897,7 @@ fn apply_retention(app: &AppHandle) -> Result<RetentionOutcome, String> {
     }
     let mut targets: Vec<(PathBuf, u64)> = Vec::new();
     if policy.mode == "age" {
-        let cutoff = now
-            - std::time::Duration::from_secs(u64::from(policy.age_days) * 86_400);
+        let cutoff = now - std::time::Duration::from_secs(u64::from(policy.age_days) * 86_400);
         for (path, bytes, modified) in &entries {
             if *modified < cutoff {
                 targets.push((path.clone(), *bytes));
@@ -1048,8 +1053,8 @@ fn search_history(query: String, app: AppHandle) -> Result<Vec<SearchHit>, Strin
     if !directory.exists() {
         return Ok(Vec::new());
     }
-    let entries =
-        fs::read_dir(directory).map_err(|_| "Could not read local transcription history.".to_owned())?;
+    let entries = fs::read_dir(directory)
+        .map_err(|_| "Could not read local transcription history.".to_owned())?;
     let mut hits = Vec::new();
     for entry in entries.flatten() {
         if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
@@ -1184,7 +1189,7 @@ mod titlebar_toggle {
     use objc2::runtime::AnyObject;
     use objc2::{AllocAnyThread, MainThreadMarker, sel};
     use objc2_app_kit::{
-        NSBezelStyle, NSButton, NSControlSize, NSImage, NSCellImagePosition, NSLayoutAttribute,
+        NSBezelStyle, NSButton, NSCellImagePosition, NSControlSize, NSImage, NSLayoutAttribute,
         NSTitlebarAccessoryViewController, NSWindow,
     };
     use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
@@ -1237,7 +1242,8 @@ mod titlebar_toggle {
         }
     }
 
-    pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {        let _ = APP.set(window.app_handle().clone());
+    pub fn install(window: &tauri::WebviewWindow) -> Result<(), String> {
+        let _ = APP.set(window.app_handle().clone());
         let handle = window.app_handle().clone();
         let window = window.clone();
         handle
@@ -1256,9 +1262,11 @@ mod titlebar_toggle {
 
         let symbol = NSString::from_str("sidebar.left");
         let description = NSString::from_str("Toggle sidebar");
-        let image =
-            NSImage::imageWithSystemSymbolName_accessibilityDescription(&symbol, Some(&description))
-                .ok_or("SF Symbol sidebar.left is unavailable")?;
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &symbol,
+            Some(&description),
+        )
+        .ok_or("SF Symbol sidebar.left is unavailable")?;
 
         let target = ToggleTarget::new();
         let button = unsafe {
@@ -1508,7 +1516,10 @@ mod search_tests {
         let text = "开场白很多字很多字很多字很多字很多字很多字很多字关键词后面的内容还有更多更多";
         let snippet = match_snippet(text, "关键词", 4, 16);
         assert!(snippet.contains("关键词"));
-        assert!(snippet.starts_with('…'), "leading ellipsis expected: {snippet}");
+        assert!(
+            snippet.starts_with('…'),
+            "leading ellipsis expected: {snippet}"
+        );
         assert!(std::str::from_utf8(snippet.as_bytes()).is_ok());
     }
 
