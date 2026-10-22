@@ -83,7 +83,13 @@ export const de: Record<MessageKey, Message> = {
   "reader.viewLatest": "Neueste ansehen",
 
   // Modelle
-  "record.subtitle": "Direkt in der App aufnehmen — Mikrofon und Meeting-App als zwei getrennte Spuren.",
+  "record.groupInputs": "Eingänge",
+  "record.groupApps": "Apps",
+  "record.addTrack": "Spur hinzufügen",
+  "record.removeTrack": "Spur entfernen",
+  "record.trackFallback": "Spur {index}",
+  "record.noTracks": "Noch keine Spur — füge eine hinzu und wähle Eingang oder App.",
+  "record.subtitle": "Beliebig viele Spuren — jede ein Eingang oder eine App.",
   "record.micLabel": "Mikrofon",
   "record.appLabel": "Meeting-Audio",
   "record.appNone": "Nicht aufnehmen",

@@ -726,12 +726,11 @@ fn list_audio_apps() -> Vec<recording::AudioApp> {
 
 #[tauri::command]
 fn start_recording(
-    mic: Option<String>,
-    app_pid: Option<i32>,
+    tracks: Vec<recording::TrackSpec>,
     app: AppHandle,
     state: State<'_, std::sync::Arc<recording::RecordingState>>,
 ) -> Result<(), String> {
-    recording::start(&state, &app, mic, app_pid)
+    recording::start(&state, &app, tracks)
 }
 
 /// 停止录音要等音频线程收尾（可能需要几秒），必须异步执行，否则会卡住界面。

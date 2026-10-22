@@ -8,13 +8,16 @@ export type AudioApp = { pid: number; name: string };
 
 export type RecordedTrack = { path: string; label: string };
 
+export type RecordingTrackLevel = { label: string; level: number; error?: string | null };
+
 export type RecordingStatus = {
   running: boolean;
   elapsedMs: number;
-  micLevel: number;
-  appLevel: number;
-  appError?: string | null;
+  tracks: RecordingTrackLevel[];
 };
+
+/** 提交给后端的音轨：kind = input（设备）或 app（应用）。 */
+export type TrackSpec = { kind: "input" | "app"; target: string; label: string };
 
 export type ModelSummary = { id: string; displayName: string; family: string };
 

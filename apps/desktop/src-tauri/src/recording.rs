@@ -1,8 +1,7 @@
-//! 本地录音：麦克风（cpal）+ 指定应用的音频（Core Audio Process Tap）。
+//! 本地录音：任意条音轨，每条可以是输入设备（麦克风）或指定应用（Core Audio Process Tap）。
 #![allow(unsafe_op_in_unsafe_fn)]
 //!
-//! 两条音轨各自写一个 WAV 文件，录完分别进入现有转写管线；
-//! 界面按「麦克风 / 会议音频」两个独立结果呈现。
+//! 每条轨道各自写一个 WAV 文件，录完分别进入转写管线。
 
 use std::{
     fs::{self, File},
@@ -27,21 +26,25 @@ pub struct RecordingState {
 struct Session {
     stop: Arc<AtomicBool>,
     started: Instant,
-    mic: Option<MicTrack>,
-    app: Option<AppTrack>,
+    tracks: Vec<TrackHandle>,
 }
 
-struct MicTrack {
-    path: PathBuf,
-    level: Arc<AtomicU32>,
-    join: Option<JoinHandle<()>>,
-}
-
-struct AppTrack {
+/// 一条录音轨道：输入设备（麦克风）或指定应用。
+struct TrackHandle {
+    label: String,
     path: PathBuf,
     level: Arc<AtomicU32>,
     join: Option<JoinHandle<()>>,
     error: Arc<Mutex<Option<String>>>,
+}
+
+/// 前端提交的轨道描述：kind = "input" | "app"，target = 设备名或 PID。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackSpec {
+    pub kind: String,
+    pub target: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,12 +62,18 @@ pub struct RecordedTracks {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TrackLevel {
+    pub label: String,
+    pub level: f32,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecordingStatus {
     pub running: bool,
     pub elapsed_ms: u64,
-    pub mic_level: f32,
-    pub app_level: f32,
-    pub app_error: Option<String>,
+    pub tracks: Vec<TrackLevel>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,38 +91,60 @@ fn load_level(slot: &AtomicU32) -> f32 {
     f32::from_bits(slot.load(Ordering::Relaxed))
 }
 
+fn empty_error() -> Arc<Mutex<Option<String>>> {
+    Arc::new(Mutex::new(None))
+}
+
 // ---------------------------------------------------------------------------
-// 麦克风
+// 输入设备（麦克风）
 // ---------------------------------------------------------------------------
 
-fn spawn_microphone(device_name: Option<String>, path: PathBuf) -> Result<MicTrack, String> {
+fn spawn_input(device_name: Option<String>, label: &str, path: PathBuf, stop: Arc<AtomicBool>) -> TrackHandle {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    let level = Arc::new(AtomicU32::new(0.0f32.to_bits()));
+    let error = empty_error();
+    let label_owned = label.to_owned();
+    let handle_path = path.clone();
+
+    let mut handle = TrackHandle {
+        label: label_owned,
+        path: handle_path,
+        level: Arc::clone(&level),
+        join: None,
+        error: Arc::clone(&error),
+    };
 
     let host = cpal::default_host();
     let device = match device_name.as_deref() {
         Some(name) if !name.is_empty() => host
             .input_devices()
-            .map_err(|error| error.to_string())?
-            .find(|device| device.name().map(|value| value == name).unwrap_or(false))
-            .ok_or_else(|| format!("找不到麦克风「{name}」"))?,
-        _ => host
-            .default_input_device()
-            .ok_or_else(|| "没有可用的麦克风。".to_owned())?,
+            .ok()
+            .and_then(|mut devices| {
+                devices.find(|device| device.name().map(|value| value == name).unwrap_or(false))
+            }),
+        _ => host.default_input_device(),
     };
-    let config = device.default_input_config().map_err(|error| {
-        format!("无法读取麦克风配置（检查系统设置里的麦克风权限）：{error}")
-    })?;
+    let Some(device) = device else {
+        if let Ok(mut slot) = error.lock() {
+            *slot = Some("找不到该输入设备。".to_owned());
+        }
+        return handle;
+    };
+    let Ok(config) = device.default_input_config() else {
+        if let Ok(mut slot) = error.lock() {
+            *slot = Some("无法读取麦克风配置（检查麦克风权限）。".to_owned());
+        }
+        return handle;
+    };
     let sample_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
     let sample_format = config.sample_format();
 
-    let level = Arc::new(AtomicU32::new(0.0f32.to_bits()));
-    let stop = Arc::new(AtomicBool::new(false));
-
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let _ = fs::create_dir_all(parent);
     }
-    let writer = hound::WavWriter::create(
+    let writer = match hound::WavWriter::create(
         &path,
         hound::WavSpec {
             channels: 1,
@@ -121,58 +152,51 @@ fn spawn_microphone(device_name: Option<String>, path: PathBuf) -> Result<MicTra
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         },
-    )
-    .map_err(|error| format!("无法写入录音文件：{error}"))?;
+    ) {
+        Ok(writer) => writer,
+        Err(issue) => {
+            if let Ok(mut slot) = error.lock() {
+                *slot = Some(format!("无法写入录音文件：{issue}"));
+            }
+            return handle;
+        }
+    };
 
-    let mic_level = Arc::clone(&level);
-    let mic_stop = Arc::clone(&stop);
     let join = thread::Builder::new()
-        .name("recording-mic".to_owned())
+        .name("recording-input".to_owned())
         .spawn(move || {
             let writer = Arc::new(Mutex::new(Some(writer)));
-            let mut config = config.config();
-            config.buffer_size = cpal::BufferSize::Default;
-
             let sink = Arc::clone(&writer);
-            let lvl = Arc::clone(&mic_level);
+            let lvl = Arc::clone(&level);
             let mut peak: f32 = 0.0;
             let mut peak_frames: usize = 0;
 
-            let stream = match sample_format {
-                cpal::SampleFormat::F32 => device.build_input_stream(
-                    &config,
-                    move |data: &[f32], _| {
-                        let mut guard = match sink.lock() {
-                            Ok(guard) => guard,
-                            Err(_) => return,
-                        };
-                        let Some(wav) = guard.as_mut() else { return };
-                        for frame in data.chunks(channels.max(1)) {
-                            let sum: f32 = frame.iter().copied().sum();
-                            let mono = sum / channels.max(1) as f32;
-                            peak = peak.max(mono.abs());
-                            let _ = wav.write_sample((mono * i16::MAX as f32) as i16);
-                        }
-                        peak_frames += data.len() / channels.max(1);
-                        if peak_frames >= (sample_rate as usize / 20).max(1) {
-                            store_level(&lvl, peak);
-                            peak = 0.0;
-                            peak_frames = 0;
-                        }
-                    },
-                    |error| eprintln!("microphone stream error: {error}"),
-                    None,
-                ),
-                other => {
-                    eprintln!("unsupported microphone sample format: {other:?}");
-                    return;
-                }
-            };
+            let stream = device.build_input_stream(
+                &config.config(),
+                move |data: &[f32], _| {
+                    let Ok(mut guard) = sink.lock() else { return };
+                    let Some(wav) = guard.as_mut() else { return };
+                    for frame in data.chunks(channels.max(1)) {
+                        let sum: f32 = frame.iter().copied().sum();
+                        let mono = sum / channels.max(1) as f32;
+                        peak = peak.max(mono.abs());
+                        let _ = wav.write_sample((mono * i16::MAX as f32) as i16);
+                    }
+                    peak_frames += data.len() / channels.max(1);
+                    if peak_frames >= (sample_rate as usize / 20).max(1) {
+                        store_level(&lvl, peak);
+                        peak = 0.0;
+                        peak_frames = 0;
+                    }
+                },
+                |issue| eprintln!("input stream error: {issue}"),
+                None,
+            );
 
             match stream {
                 Ok(stream) => {
                     let _ = stream.play();
-                    while !mic_stop.load(Ordering::Relaxed) {
+                    while !stop.load(Ordering::Relaxed) {
                         thread::sleep(std::time::Duration::from_millis(50));
                     }
                     drop(stream);
@@ -182,16 +206,20 @@ fn spawn_microphone(device_name: Option<String>, path: PathBuf) -> Result<MicTra
                         let _ = wav.finalize();
                     }
                 }
-                Err(error) => eprintln!("cannot start microphone stream: {error}"),
+                Err(issue) => {
+                    if let Ok(mut slot) = error.lock() {
+                        *slot = Some(format!("无法启动麦克风：{issue}"));
+                    }
+                }
             }
         })
-        .map_err(|error| error.to_string())?;
+        .ok();
 
-    Ok(MicTrack {
-        path,
-        level,
-        join: Some(join),
-    })
+    if let Some(join) = join {
+        handle.join = Some(join);
+    }
+    let _ = sample_format;
+    handle
 }
 
 // ---------------------------------------------------------------------------
@@ -199,50 +227,59 @@ fn spawn_microphone(device_name: Option<String>, path: PathBuf) -> Result<MicTra
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
-fn spawn_app_audio(
-    pid: Option<i32>,
-    path: PathBuf,
-) -> (Option<AppTrack>, Arc<AtomicBool>, Arc<AtomicU32>, Arc<Mutex<Option<String>>>) {
+fn spawn_app(pid: i32, label: &str, path: PathBuf, stop: Arc<AtomicBool>) -> TrackHandle {
     let level = Arc::new(AtomicU32::new(0.0f32.to_bits()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let error = empty_error();
+    let mut handle = TrackHandle {
+        label: label.to_owned(),
+        path: path.clone(),
+        level: Arc::clone(&level),
+        join: None,
+        error: Arc::clone(&error),
+    };
 
-    let track = {
-        let thread_path = path.clone();
-        let thread_level = Arc::clone(&level);
-        let thread_stop = Arc::clone(&stop);
-        let thread_error = Arc::clone(&error);
-        match thread::Builder::new()
-            .name("recording-app".to_owned())
-            .spawn(move || run_app_tap(pid, thread_path, thread_level, thread_stop, thread_error))
-        {
-            Ok(join) => Some(AppTrack {
-                path,
-                level: Arc::clone(&level),
-                join: Some(join),
-                error: Arc::clone(&error),
-            }),
-            Err(issue) => {
-                if let Ok(mut slot) = error.lock() {
-                    *slot = Some(issue.to_string());
-                }
-                None
+    let thread_path = path;
+    let thread_level = Arc::clone(&level);
+    let thread_stop = Arc::clone(&stop);
+    let thread_error = Arc::clone(&error);
+    match thread::Builder::new()
+        .name("recording-app".to_owned())
+        .spawn(move || run_app_tap(pid, thread_path, thread_level, thread_stop, thread_error))
+    {
+        Ok(join) => handle.join = Some(join),
+        Err(issue) => {
+            if let Ok(mut slot) = error.lock() {
+                *slot = Some(issue.to_string());
             }
         }
-    };
-    (track, stop, level, error)
+    }
+    handle
+}
+
+#[cfg(not(target_os = "macos"))]
+fn spawn_app(_pid: i32, label: &str, path: PathBuf, _stop: Arc<AtomicBool>) -> TrackHandle {
+    let error = empty_error();
+    if let Ok(mut slot) = error.lock() {
+        *slot = Some("录制应用音频目前仅支持 macOS。".to_owned());
+    }
+    TrackHandle {
+        label: label.to_owned(),
+        path,
+        level: Arc::new(AtomicU32::new(0.0f32.to_bits())),
+        join: None,
+        error,
+    }
 }
 
 #[cfg(target_os = "macos")]
 fn run_app_tap(
-    pid: Option<i32>,
+    pid: i32,
     path: PathBuf,
     level: Arc<AtomicU32>,
     stop: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
 ) {
-    let result = unsafe { start_tap_session(pid, &path, &level, &stop) };
-    if let Err(message) = result
+    if let Err(message) = unsafe { start_tap_session(pid, &path, &level, &stop) }
         && let Ok(mut slot) = error.lock()
     {
         *slot = Some(message);
@@ -251,7 +288,7 @@ fn run_app_tap(
 
 #[cfg(target_os = "macos")]
 unsafe fn start_tap_session(
-    pid: Option<i32>,
+    pid: i32,
     path: &Path,
     level: &Arc<AtomicU32>,
     stop: &Arc<AtomicBool>,
@@ -271,44 +308,30 @@ unsafe fn start_tap_session(
         fs::create_dir_all(parent).map_err(|issue| issue.to_string())?;
     }
 
-    // 1) PID → AudioObjectID（进程音频对象）
+    // 1) PID → AudioObjectID
     let mut obj_id: u32 = 0;
-    if let Some(pid) = pid {
-        let mut address = AudioObjectPropertyAddress {
-            mSelector: u32::from_be_bytes(*b"id2p"),
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        };
-        let mut size = std::mem::size_of::<u32>() as u32;
-        let status = AudioObjectGetPropertyData(
-            1, // kAudioObjectSystemObject
-            std::ptr::NonNull::new(&mut address).unwrap(),
-            std::mem::size_of::<i32>() as u32,
-            &pid as *const i32 as *const std::ffi::c_void,
-            std::ptr::NonNull::new(&mut size).unwrap(),
-            std::ptr::NonNull::new(&mut obj_id as *mut u32 as *mut std::ffi::c_void).unwrap(),
-        );
-        if status != 0 {
-            return Err(format!("无法定位该应用的音频（错误 {status}）"));
-        }
+    let mut address = AudioObjectPropertyAddress {
+        mSelector: u32::from_be_bytes(*b"id2p"),
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let status = AudioObjectGetPropertyData(
+        1,
+        std::ptr::NonNull::new(&mut address).unwrap(),
+        std::mem::size_of::<i32>() as u32,
+        &pid as *const i32 as *const std::ffi::c_void,
+        std::ptr::NonNull::new(&mut size).unwrap(),
+        std::ptr::NonNull::new(&mut obj_id as *mut u32 as *mut std::ffi::c_void).unwrap(),
+    );
+    if status != 0 || obj_id == 0 {
+        return Err(format!("无法定位该应用的音频（错误 {status}）"));
     }
 
-    // 2) CATapDescription（指定进程；失败时退化为全系统输出）
-    let (description, tap_scope) = if obj_id != 0 {
-        let numbers = NSArray::from_retained_slice(&[NSNumber::new_u32(obj_id)]);
-        let desc = CATapDescription::initStereoMixdownOfProcesses(
-            CATapDescription::alloc(),
-            &numbers,
-        );
-        (desc, "app")
-    } else {
-        let empty = NSArray::<NSNumber>::new();
-        let desc = CATapDescription::initStereoGlobalTapButExcludeProcesses(
-            CATapDescription::alloc(),
-            &empty,
-        );
-        (desc, "system")
-    };
+    // 2) 描述该进程的音频
+    let numbers = NSArray::from_retained_slice(&[NSNumber::new_u32(obj_id)]);
+    let description =
+        CATapDescription::initStereoMixdownOfProcesses(CATapDescription::alloc(), &numbers);
     description.setName(&NSString::from_str("Local Transcribe recording"));
     description.setPrivate(true);
 
@@ -317,12 +340,11 @@ unsafe fn start_tap_session(
     let status = AudioHardwareCreateProcessTap(Some(&description), &mut tap_id as *mut u32);
     if status != 0 {
         return Err(format!(
-            "无法创建系统音频捕获（错误 {status}，可能需要「系统音频录制」权限）"
+            "无法创建系统音频捕获（错误 {status}，需要「系统音频录制」权限）"
         ));
     }
-    let _ = tap_scope;
 
-    // 4) 聚合成一个可用设备
+    // 4) 聚合设备
     let uid = description.UUID().UUIDString();
     let tap_entry = NSDictionary::from_slices(
         &[&*NSString::from_str("uid")],
@@ -356,11 +378,9 @@ unsafe fn start_tap_session(
         return Err(format!("无法创建录音聚合设备（错误 {status}）"));
     }
 
-    // 5) WAV 写入器 + IOProc
     struct Context {
         writer: Mutex<Option<hound::WavWriter<BufWriter<File>>>>,
         level: Arc<AtomicU32>,
-        peak: f32,
     }
     let writer = hound::WavWriter::create(
         path,
@@ -375,7 +395,6 @@ unsafe fn start_tap_session(
     let context = Box::new(Context {
         writer: Mutex::new(Some(writer)),
         level: Arc::clone(level),
-        peak: 0.0,
     });
     let context_ptr = Box::into_raw(context);
 
@@ -403,6 +422,7 @@ unsafe fn start_tap_session(
         let Some(writer) = guard.as_mut() else {
             return 0;
         };
+        let mut peak = 0.0f32;
         for buffer in buffers {
             if buffer.mData.is_null() {
                 continue;
@@ -410,10 +430,11 @@ unsafe fn start_tap_session(
             let frames = buffer.mDataByteSize as usize / std::mem::size_of::<f32>();
             let samples = std::slice::from_raw_parts(buffer.mData as *const f32, frames);
             for sample in samples {
+                peak = peak.max(sample.abs());
                 let _ = writer.write_sample((*sample * i16::MAX as f32) as i16);
             }
         }
-        store_level(&context.level, 0.5);
+        store_level(&context.level, peak);
         0
     }
 
@@ -457,19 +478,6 @@ unsafe fn start_tap_session(
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn spawn_app_audio(
-    _pid: Option<i32>,
-    _path: PathBuf,
-) -> (Option<AppTrack>, Arc<AtomicBool>, Arc<AtomicU32>, Arc<Mutex<Option<String>>>) {
-    let level = Arc::new(AtomicU32::new(0.0f32.to_bits()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(Some(
-        "录制应用音频目前仅支持 macOS。".to_owned(),
-    )));
-    (None, stop, level, error)
-}
-
 // ---------------------------------------------------------------------------
 // 命令
 // ---------------------------------------------------------------------------
@@ -480,7 +488,6 @@ pub fn list_devices() -> Vec<String> {
         .input_devices()
         .map(|devices| devices.filter_map(|device| device.name().ok()).collect())
         .unwrap_or_default();
-    // 内置麦克风优先，避免默认选中投送设备或手机麦克风。
     names.sort_by_key(|name| {
         let lower = name.to_lowercase();
         let builtin = lower.contains("macbook")
@@ -497,7 +504,6 @@ pub fn list_devices() -> Vec<String> {
 #[cfg(target_os = "macos")]
 pub fn list_apps() -> Vec<AudioApp> {
     use objc2_app_kit::NSWorkspace;
-    use objc2_foundation::NSString;
 
     let workspace = unsafe { NSWorkspace::sharedWorkspace() };
     let apps = unsafe { workspace.runningApplications() };
@@ -508,10 +514,9 @@ pub fn list_apps() -> Vec<AudioApp> {
         if pid <= 0 {
             continue;
         }
-        let label: String = name
+        let label = name
             .map(|name| name.to_string())
             .unwrap_or_else(|| format!("PID {pid}"));
-        let _ = NSString::from_str(&label);
         out.push(AudioApp { pid, name: label });
     }
     out.sort_by_key(|app| app.name.to_lowercase());
@@ -526,9 +531,11 @@ pub fn list_apps() -> Vec<AudioApp> {
 pub fn start(
     state: &RecordingState,
     app: &AppHandle,
-    mic: Option<String>,
-    app_pid: Option<i32>,
+    specs: Vec<TrackSpec>,
 ) -> Result<(), String> {
+    if specs.is_empty() {
+        return Err("请至少添加一条音轨。".to_owned());
+    }
     let mut guard = state
         .session
         .lock()
@@ -537,46 +544,44 @@ pub fn start(
         return Err("已经在录音了。".to_owned());
     }
     let data_dir = crate::app_data_dir(app)?;
-    let stamp = crate::unix_now_ms();
-    let dir = data_dir.join("recordings").join(stamp.to_string());
+    let dir = data_dir
+        .join("recordings")
+        .join(crate::unix_now_ms().to_string());
     fs::create_dir_all(&dir).map_err(|issue| issue.to_string())?;
 
     let stop = Arc::new(AtomicBool::new(false));
-    let mut session = Session {
-        stop: Arc::clone(&stop),
-        started: Instant::now(),
-        mic: None,
-        app: None,
-    };
-
-    if let Some(device) = mic.clone() {
-        session.mic = Some(spawn_microphone(Some(device), dir.join("microphone.wav"))?);
-    }
-
-    let wants_app = app_pid.is_some();
-    if wants_app {
-        let (track, app_stop, _level, error) = spawn_app_audio(app_pid, dir.join("app-audio.wav"));
-        session.app = track;
-        if session.app.is_none() {
-            let message = error
-                .lock()
-                .ok()
-                .and_then(|slot| slot.clone())
-                .unwrap_or_else(|| "无法捕获应用音频。".to_owned());
-            if session.mic.is_none() {
-                return Err(message);
-            }
-            eprintln!("app audio unavailable: {message}");
+    let mut tracks = Vec::new();
+    for (index, spec) in specs.iter().enumerate() {
+        let safe_index = index + 1;
+        let path = dir.join(format!("track-{safe_index}.wav"));
+        let label = if spec.label.trim().is_empty() {
+            format!("音轨 {safe_index}")
+        } else {
+            spec.label.clone()
+        };
+        if spec.kind == "app" {
+            let Ok(pid) = spec.target.parse::<i32>() else {
+                continue;
+            };
+            tracks.push(spawn_app(pid, &label, path, Arc::clone(&stop)));
+        } else {
+            tracks.push(spawn_input(
+                Some(spec.target.clone()),
+                &label,
+                path,
+                Arc::clone(&stop),
+            ));
         }
-        // 应用音轨用同一个停止信号
-        let _ = app_stop;
     }
 
-    if session.mic.is_none() && session.app.is_none() {
-        return Err("请至少选择一个录音来源。".to_owned());
+    if tracks.is_empty() {
+        return Err("没有可用的录音来源。".to_owned());
     }
-
-    *guard = Some(session);
+    *guard = Some(Session {
+        stop,
+        started: Instant::now(),
+        tracks,
+    });
     Ok(())
 }
 
@@ -591,33 +596,14 @@ pub fn stop(state: &RecordingState) -> Result<RecordedTracks, String> {
     session.stop.store(true, Ordering::Relaxed);
 
     let mut tracks = Vec::new();
-    if let Some(mut mic) = session.mic.take() {
-        if let Some(join) = mic.join.take() {
+    for mut track in session.tracks.drain(..) {
+        if let Some(join) = track.join.take() {
             let _ = join.join();
         }
-        if mic.path.exists() {
+        if track.path.exists() {
             tracks.push(RecordedTrack {
-                path: mic.path.to_string_lossy().into_owned(),
-                label: "麦克风".to_owned(),
-            });
-        }
-    }
-    if let Some(mut app) = session.app.take() {
-        if let Some(join) = app.join.take() {
-            let _ = join.join();
-        }
-        if app.path.exists() {
-            let label = if let Ok(slot) = app.error.lock() {
-                match slot.as_deref() {
-                    Some(message) => format!("会议音频（{message}）"),
-                    None => "会议音频".to_owned(),
-                }
-            } else {
-                "会议音频".to_owned()
-            };
-            tracks.push(RecordedTrack {
-                path: app.path.to_string_lossy().into_owned(),
-                label,
+                path: track.path.to_string_lossy().into_owned(),
+                label: track.label.clone(),
             });
         }
     }
@@ -631,9 +617,7 @@ pub fn status(state: &RecordingState) -> RecordingStatus {
             return RecordingStatus {
                 running: false,
                 elapsed_ms: 0,
-                mic_level: 0.0,
-                app_level: 0.0,
-                app_error: None,
+                tracks: Vec::new(),
             };
         }
     };
@@ -641,19 +625,20 @@ pub fn status(state: &RecordingState) -> RecordingStatus {
         Some(session) => RecordingStatus {
             running: true,
             elapsed_ms: session.started.elapsed().as_millis() as u64,
-            mic_level: session.mic.as_ref().map(|mic| load_level(&mic.level)).unwrap_or(0.0),
-            app_level: session.app.as_ref().map(|app| load_level(&app.level)).unwrap_or(0.0),
-            app_error: session
-                .app
-                .as_ref()
-                .and_then(|app| app.error.lock().ok().and_then(|slot| slot.clone())),
+            tracks: session
+                .tracks
+                .iter()
+                .map(|track| TrackLevel {
+                    label: track.label.clone(),
+                    level: load_level(&track.level),
+                    error: track.error.lock().ok().and_then(|slot| slot.clone()),
+                })
+                .collect(),
         },
         None => RecordingStatus {
             running: false,
             elapsed_ms: 0,
-            mic_level: 0.0,
-            app_level: 0.0,
-            app_error: None,
+            tracks: Vec::new(),
         },
     }
 }

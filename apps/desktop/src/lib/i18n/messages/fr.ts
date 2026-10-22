@@ -84,7 +84,13 @@ export const fr: Record<MessageKey, Message> = {
   "reader.viewLatest": "Voir le plus récent",
 
   // Modèles
-  "record.subtitle": "Enregistrez directement dans l’app : micro et application de réunion en deux pistes séparées.",
+  "record.groupInputs": "Entrées audio",
+  "record.groupApps": "Applications",
+  "record.addTrack": "Ajouter une piste",
+  "record.removeTrack": "Retirer la piste",
+  "record.trackFallback": "Piste {index}",
+  "record.noTracks": "Aucune piste : ajoutez-en une et choisissez une entrée ou une application.",
+  "record.subtitle": "Ajoutez autant de pistes que vous voulez : une entrée audio ou une application.",
   "record.micLabel": "Microphone",
   "record.appLabel": "Audio de la réunion",
   "record.appNone": "Ne pas enregistrer",

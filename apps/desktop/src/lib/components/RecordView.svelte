@@ -2,20 +2,42 @@
   import Icon from "./Icon.svelte";
   import { t } from "$lib/i18n.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import type { AudioApp, RecordedTrack, RecordingStatus } from "$lib/types";
+  import type { AudioApp, RecordedTrack, RecordingStatus, TrackSpec } from "$lib/types";
 
   let { onRecorded }: { onRecorded: (tracks: RecordedTrack[]) => void } = $props();
 
+  type Row = { id: number; key: string };
+  type Source = { key: string; kind: "input" | "app"; target: string; label: string };
+
   let devices = $state<string[]>([]);
   let apps = $state<AudioApp[]>([]);
-  let mic = $state("");
-  let appPid = $state<number | null>(null);
+  let rows = $state<Row[]>([]);
   let running = $state(false);
   let elapsedMs = $state(0);
-  let micLevel = $state(0);
-  let appLevel = $state(0);
+  let levels = $state<number[]>([]);
+  let trackErrors = $state<string[]>([]);
   let busy = $state(false);
   let error = $state("");
+  let nextId = 1;
+
+  const sources = $derived<Source[]>([
+    ...devices.map((name) => ({
+      key: `input:${name}`,
+      kind: "input" as const,
+      target: name,
+      label: name,
+    })),
+    ...apps.map((app) => ({
+      key: `app:${app.pid}`,
+      kind: "app" as const,
+      target: String(app.pid),
+      label: app.name,
+    })),
+  ]);
+
+  function labelOf(key: string): string {
+    return sources.find((source) => source.key === key)?.label ?? key;
+  }
 
   function formatElapsed(ms: number): string {
     const total = Math.floor(ms / 1000);
@@ -32,29 +54,46 @@
       ]);
       devices = nextDevices;
       apps = nextApps;
-      if (!mic && devices.length > 0) mic = devices[0];
+      // 默认给一条轨道；没有轨道时补一条可用的来源。
+      if (rows.length === 0) addTrack();
+      else rows = rows.map((row) => (row.key && sources.length > 0 ? row : row));
     } catch (issue) {
       error = String(issue);
     }
+  }
+
+  function addTrack() {
+    const used = new Set(rows.map((row) => row.key));
+    const free = sources.find((source) => !used.has(source.key));
+    if (!free) return;
+    rows = [...rows, { id: nextId++, key: free.key }];
+  }
+
+  function removeTrack(id: number) {
+    rows = rows.filter((row) => row.id !== id);
+  }
+
+  function setTrackSource(id: number, key: string) {
+    rows = rows.map((row) => (row.id === id ? { ...row, key } : row));
   }
 
   $effect(() => {
     void loadSources();
   });
 
-  // 录音中每 200ms 刷新计时与电平。
   $effect(() => {
     if (!running) return;
     const timer = window.setInterval(async () => {
       try {
         const status = await invoke<RecordingStatus>("recording_status");
         elapsedMs = status.elapsedMs;
-        micLevel = status.micLevel;
-        appLevel = status.appLevel;
+        levels = status.tracks.map((track) => track.level);
+        trackErrors = status.tracks.map((track) => track.error ?? "");
         running = status.running;
-        if (status.appError) error = status.appError;
+        const firstError = trackErrors.find((message) => message.length > 0);
+        if (firstError) error = firstError;
       } catch {
-        /* ignore transient failures */
+        /* transient */
       }
     }, 200);
     return () => window.clearInterval(timer);
@@ -68,20 +107,26 @@
       if (running) {
         const result = await invoke<{ tracks: RecordedTrack[] }>("stop_recording");
         running = false;
-        if (result.tracks.length === 0) {
-          error = t("record.empty");
-        } else {
-          onRecorded(result.tracks);
-        }
+        if (result.tracks.length === 0) error = t("record.empty");
+        else onRecorded(result.tracks);
       } else {
-        await invoke("start_recording", {
-          mic: mic || null,
-          appPid: appPid,
+        if (rows.length === 0) {
+          error = t("record.noTracks");
+          return;
+        }
+        const specs: TrackSpec[] = rows.map((row) => {
+          const source = sources.find((item) => item.key === row.key);
+          return {
+            kind: source?.kind ?? "input",
+            target: source?.target ?? "",
+            label: source?.label ?? "",
+          };
         });
+        await invoke("start_recording", { tracks: specs });
         running = true;
         elapsedMs = 0;
-        micLevel = 0;
-        appLevel = 0;
+        levels = specs.map(() => 0);
+        trackErrors = specs.map(() => "");
       }
     } catch (issue) {
       error = String(issue);
@@ -102,51 +147,64 @@
     </div>
   {/if}
 
-  <div class="sources">
-    <div class="source" class:active={micLevel > 0.02}>
-      <div class="source-head">
-        <Icon name="mic" size={16} stroke={1.5} />
-        <span>{t("record.micLabel")}</span>
+  <div class="tracks">
+    {#each rows as row, index (row.id)}
+      <div class="track" class:hot={(levels[index] ?? 0) > 0.02}>
+        <div class="track-head">
+          <span class="index">{index + 1}</span>
+          <select
+            class="pick"
+            disabled={running}
+            value={row.key}
+            onchange={(event) => setTrackSource(row.id, event.currentTarget.value)}
+          >
+            <optgroup label={t("record.groupInputs")}>
+              {#each devices as device (device)}
+                <option value={`input:${device}`}>{device}</option>
+              {/each}
+            </optgroup>
+            <optgroup label={t("record.groupApps")}>
+              {#each apps as app (app.pid)}
+                <option value={`app:${app.pid}`}>{app.name}</option>
+              {/each}
+            </optgroup>
+          </select>
+          <button
+            type="button"
+            class="remove"
+            aria-label={t("record.removeTrack")}
+            title={t("record.removeTrack")}
+            disabled={running}
+            onclick={() => removeTrack(row.id)}
+          >
+            ×
+          </button>
+        </div>
+        <div class="meter">
+          <i style:width={`${Math.round((levels[index] ?? 0) * 100)}%`}></i>
+        </div>
+        {#if trackErrors[index]}
+          <p class="track-error">{trackErrors[index]}</p>
+        {/if}
       </div>
-      <select class="pick" bind:value={mic} disabled={running}>
-        {#each devices as device (device)}
-          <option value={device}>{device}</option>
-        {/each}
-      </select>
-      <div class="meter"><i style:width={`${Math.round(micLevel * 100)}%`}></i></div>
-    </div>
+    {/each}
 
-    <div class="source" class:active={appLevel > 0.02}>
-      <div class="source-head">
-        <Icon name="transcribe" size={16} stroke={1.5} />
-        <span>{t("record.appLabel")}</span>
-      </div>
-      <select
-        class="pick"
-        disabled={running}
-        value={appPid === null ? "" : String(appPid)}
-        onchange={(event) =>
-          (appPid = event.currentTarget.value ? Number(event.currentTarget.value) : null)}
-      >
-        <option value="">{t("record.appNone")}</option>
-        {#each apps as app (app.pid)}
-          <option value={String(app.pid)}>{app.name}</option>
-        {/each}
-      </select>
-      <div class="meter"><i style:width={`${Math.round(appLevel * 100)}%`}></i></div>
-    </div>
+    {#if !running}
+      <button type="button" class="add" onclick={addTrack}>
+        <Icon name="plus" size={13} stroke={1.7} />
+        {t("record.addTrack")}
+      </button>
+    {/if}
   </div>
 
-  <p class="hint">{t("record.hint")}</p>
+  {#if rows.length === 0}
+    <p class="hint">{t("record.noTracks")}</p>
+  {:else}
+    <p class="hint">{t("record.hint")}</p>
+  {/if}
 
   <div class="transport">
-    <button
-      type="button"
-      class="record-btn"
-      class:running
-      disabled={busy}
-      onclick={toggle}
-    >
+    <button type="button" class="record-btn" class:running disabled={busy} onclick={toggle}>
       <span class="dot"></span>
       {running ? t("record.stop") : t("record.start")}
     </button>
@@ -206,40 +264,47 @@
     font-size: 13px;
   }
 
-  .sources {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 12px;
+  .tracks {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
     width: 100%;
     max-width: 940px;
     margin: 0 auto;
   }
 
-  .source {
+  .track {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 16px 18px 18px;
+    gap: 9px;
+    padding: 13px 16px 14px;
     border: 1px solid var(--hairline-2);
     border-radius: 12px;
     background: var(--card);
     transition: border-color 140ms ease;
   }
 
-  .source.active {
+  .track.hot {
     border-color: var(--accent);
   }
 
-  .source-head {
+  .track-head {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 14.5px;
-    font-weight: 600;
-    color: var(--text);
+    gap: 10px;
+  }
+
+  .index {
+    width: 20px;
+    flex: none;
+    font-size: 12px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
   }
 
   .pick {
+    flex: 1;
+    min-width: 0;
     height: 32px;
     padding: 0 8px;
     border: 0;
@@ -248,7 +313,23 @@
     color: var(--text);
     font: inherit;
     font-size: 13.5px;
-    max-width: 100%;
+  }
+
+  .remove {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-3);
+    font-size: 17px;
+    line-height: 1;
+  }
+
+  .remove:hover:not(:disabled) {
+    background: var(--hover);
+    color: var(--text);
   }
 
   .meter {
@@ -264,6 +345,31 @@
     border-radius: 2px;
     background: var(--green);
     transition: width 120ms linear;
+  }
+
+  .track-error {
+    margin: 0;
+    font-size: 12px;
+    color: var(--red);
+  }
+
+  .add {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    align-self: flex-start;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px dashed var(--hairline-2);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-2);
+    font-size: 13.5px;
+  }
+
+  .add:hover {
+    border-color: var(--text-3);
+    color: var(--text);
   }
 
   .hint {
