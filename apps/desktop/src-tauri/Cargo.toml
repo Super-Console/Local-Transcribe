@@ -22,4 +22,9 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 voice-to-text-core = { path = "../../../crates/transcription-core" }
+voice-to-text-service = { path = "../../../crates/transcription-service" }
 tauri-plugin-dialog = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"

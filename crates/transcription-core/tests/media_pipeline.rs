@@ -79,8 +79,16 @@ fn discovers_a_paraformer_model_only_when_its_required_assets_exist() {
     let model = inspect_model_directory(&model_dir).unwrap();
 
     assert_eq!(model.family, ModelFamily::Paraformer);
-    assert!(model.model_path.ends_with("model.int8.onnx"));
-    assert!(model.tokens_path.ends_with("tokens.txt"));
+    match &model.files {
+        voice_to_text_core::ModelFiles::SingleFile {
+            model: graph,
+            tokens,
+        } => {
+            assert!(graph.ends_with("model.int8.onnx"));
+            assert!(tokens.ends_with("tokens.txt"));
+        }
+        other => panic!("expected a single-file layout, got {other:?}"),
+    }
 }
 
 #[test]

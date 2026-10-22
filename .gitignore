@@ -27,6 +27,7 @@ Thumbs.db
 # User media, model weights, and generated transcripts/results
 /media/
 /models/
+/.models/
 /output/
 *.wav
 *.mp3

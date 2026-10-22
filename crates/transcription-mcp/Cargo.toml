@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 voice-to-text-core = { path = "../transcription-core" }
+voice-to-text-service = { path = "../transcription-service" }
 rmcp = { version = "=3.6.0", default-features = false, features = ["macros", "server", "transport-io"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1,14 +1,17 @@
 mod asr;
 mod input_file;
 mod jobs;
+mod library;
 mod media;
 
 pub use asr::{
-    inspect_model_directory, transcribe_file, transcribe_file_cancellable, LocalModel, ModelFamily,
-    TranscriptionProgress,
+    inspect_model_directory, transcribe_file, transcribe_file_cancellable,
+    transcribe_file_streaming, LocalModel, ModelFamily, ModelFiles, TranscriptionProgress,
+    TranscriptionSegmentUpdate,
 };
 pub use input_file::{InputFile, InputFileError};
 pub use jobs::{JobLease, JobState, JobStatus, JobStore};
+pub use library::{default_trash_dir, LibraryModel, ModelLibrary};
 pub use media::{decode_audio_file, DecodedAudio};
 
 use serde::{Deserialize, Serialize};
@@ -32,7 +35,7 @@ pub struct Transcript {
     pub segments: Option<Vec<TranscriptSegment>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptSegment {
     pub start_ms: u64,

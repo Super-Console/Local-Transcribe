@@ -4407,6 +4407,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "voice-to-text-cli"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "voice-to-text-service",
+]
+
+[[package]]
 name = "voice-to-text-core"
 version = "0.1.0"
 dependencies = [
@@ -4421,12 +4429,15 @@ dependencies = [
 name = "voice-to-text-desktop"
 version = "0.1.0"
 dependencies = [
+ "objc2",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "voice-to-text-core",
+ "voice-to-text-service",
 ]
 
 [[package]]
@@ -4438,6 +4449,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "voice-to-text-core",
+ "voice-to-text-service",
+]
+
+[[package]]
+name = "voice-to-text-service"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "serde",
+ "serde_json",
  "voice-to-text-core",
 ]
 

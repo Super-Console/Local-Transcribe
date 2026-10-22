@@ -1,0 +1,13 @@
+[package]
+name = "voice-to-text-cli"
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+
+[[bin]]
+name = "local-transcribe"
+path = "src/main.rs"
+
+[dependencies]
+voice-to-text-service = { path = "../transcription-service" }
+serde_json = "1"

@@ -13,11 +13,12 @@ use tauri::{
     menu::{Menu, MenuItem, MenuItemKind},
 };
 use voice_to_text_core::{
-    InputFile, JobState, JobStatus, JobStore, LocalModel, ModelFamily, Transcript,
-    inspect_model_directory, transcribe_file_cancellable,
+    InputFile, JobState, JobStatus, JobStore, LocalModel, ModelFamily, ModelLibrary, Transcript,
+    inspect_model_directory, transcribe_file_streaming,
 };
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
+const SEGMENT_EVENT: &str = "voice-to-text:transcript-segment";
 
 #[derive(Default)]
 struct AppState {
@@ -32,6 +33,39 @@ struct ModelSummary {
     id: String,
     display_name: String,
     family: String,
+}
+
+/// One stable segment pushed to the UI while a job is still running.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SegmentEvent {
+    job_id: String,
+    index: usize,
+    total_chunks: usize,
+    start_ms: u64,
+    end_ms: u64,
+    text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryModelSummary {
+    id: String,
+    display_name: String,
+    family: String,
+    bytes: u64,
+    selected: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageSummary {
+    library_path: String,
+    library_bytes: u64,
+    library_count: usize,
+    history_path: String,
+    history_bytes: u64,
+    history_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +86,9 @@ fn summarize_model(model: &LocalModel) -> ModelSummary {
         family: match model.family {
             ModelFamily::Paraformer => "Paraformer".to_owned(),
             ModelFamily::SenseVoice => "SenseVoice".to_owned(),
+            ModelFamily::Whisper => "Whisper".to_owned(),
+            ModelFamily::Qwen3Asr => "Qwen3-ASR".to_owned(),
+            ModelFamily::FireRedAsr => "FireRedASR".to_owned(),
         },
     }
 }
@@ -242,6 +279,160 @@ fn prepare_export_path(
     Ok(target)
 }
 
+fn family_label(family: ModelFamily) -> &'static str {
+    match family {
+        ModelFamily::Paraformer => "Paraformer",
+        ModelFamily::SenseVoice => "SenseVoice",
+        ModelFamily::Whisper => "Whisper",
+        ModelFamily::Qwen3Asr => "Qwen3-ASR",
+        ModelFamily::FireRedAsr => "FireRedASR",
+    }
+}
+
+fn library_summary(
+    app: &AppHandle,
+    entry: voice_to_text_core::LibraryModel,
+) -> Result<LibraryModelSummary, String> {
+    let selected = read_selected_model(app)?.map(|model| model.id);
+    Ok(LibraryModelSummary {
+        id: entry.model.id.clone(),
+        display_name: entry.model.display_name.clone(),
+        family: family_label(entry.model.family).to_owned(),
+        bytes: entry.bytes,
+        selected: selected.as_deref() == Some(entry.model.id.as_str()),
+    })
+}
+
+/// 让窗口外观（系统材质、标题栏）跟随应用主题。
+#[tauri::command]
+fn sync_window_theme(dark: bool, window: tauri::WebviewWindow) -> Result<(), String> {
+    let theme = if dark {
+        tauri::Theme::Dark
+    } else {
+        tauri::Theme::Light
+    };
+    window
+        .set_theme(Some(theme))
+        .map_err(|error| error.to_string())
+}
+
+/// Overlay 标题栏会关掉原生拖动；把窗口设为「可拖背景」，
+/// 这样任何非交互区域的空白处都能移动窗口，标题栏条也一样。
+#[cfg(target_os = "macos")]
+fn enable_window_background_drag(app: &tauri::App) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use tauri::Manager;
+
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Ok(pointer) = window.ns_window() {
+        unsafe {
+            let ns_window = pointer as *mut AnyObject;
+            // 不再使用 setMovableByWindowBackground：它会把内容区的按住拖动
+            // 吃成窗口拖动，导致正文无法拖选。窗口拖动由工具栏/侧栏拖拽条的
+            // startDragging 显式承担。
+            let _ = ns_window;
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn enable_window_background_drag(_app: &tauri::App) {}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServiceStatus {
+    running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pid: Option<u32>,
+    socket_path: String,
+    data_dir: String,
+    protocol_version: u32,
+}
+
+/// 供设置·集成展示：本地服务是否在跑、socket 与数据目录在哪。
+#[tauri::command]
+fn service_status(app: AppHandle) -> Result<ServiceStatus, String> {
+    let data_dir = app_data_dir(&app)?;
+    let socket = voice_to_text_service::socket_path(&data_dir);
+    let mut status = ServiceStatus {
+        running: false,
+        pid: None,
+        socket_path: socket.to_string_lossy().into_owned(),
+        data_dir: data_dir.to_string_lossy().into_owned(),
+        protocol_version: voice_to_text_service::PROTOCOL_VERSION,
+    };
+    if let Ok(mut client) = voice_to_text_service::ServiceClient::connect(&data_dir) {
+        if let Ok(response) = client.request(&voice_to_text_service::Request::Ping) {
+            if let Some(info) = response.service {
+                status.running = true;
+                status.pid = Some(info.pid);
+            }
+        }
+    }
+    Ok(status)
+}
+
+/// 三个标准按钮的绝对位置（窗口坐标）：左侧 30、间距 20，
+/// 让它们落在浮起侧栏内部、离圆角有足够净空。
+/// macOS 会在获得焦点/缩放时重置按钮 frame，所以每次事件都重新摆放。
+#[cfg(target_os = "macos")]
+fn place_traffic_lights(window: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::NSPoint;
+
+    let Ok(pointer) = window.ns_window() else {
+        return;
+    };
+    unsafe {
+        let ns_window = pointer as *mut AnyObject;
+        for kind in 0..3usize {
+            let button: *mut AnyObject = msg_send![ns_window, standardWindowButton: kind];
+            if button.is_null() {
+                continue;
+            }
+            let target = NSPoint {
+                // 绝对坐标，避免每次事件读到被自己改过的 frame 后逐次漂移；
+                // 侧栏卡片左 12、上 8，按钮统一留 12px 内边距：x=24、顶边=20（标题栏高 28、按钮高 12）
+                x: 24.0 + (kind as f64) * 20.0,
+                y: -4.0,
+            };
+            let _: () = msg_send![button, setFrameOrigin: target];
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn place_traffic_lights(_window: &tauri::WebviewWindow) {}
+
+/// 缩放期间 macOS 会持续把按钮 frame 重置回原生位置，逐次强摆会和它互相打架，
+/// 造成红绿灯抖动。这里按“代际计数”防抖：只有停手 PLACE_SETTLE_MS 后才真正摆放一次。
+#[cfg(target_os = "macos")]
+static PLACE_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "macos")]
+const PLACE_SETTLE_MS: u64 = 150;
+
+#[cfg(target_os = "macos")]
+fn schedule_place_traffic_lights(window: tauri::WebviewWindow) {
+    use std::sync::atomic::Ordering;
+    let generation = PLACE_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(PLACE_SETTLE_MS));
+        if PLACE_GENERATION.load(Ordering::SeqCst) == generation {
+            // AppKit 只能在主线程调用：后台线程直接 setFrameOrigin 会抛异常崩溃
+            let app = window.app_handle().clone();
+            let target = window.clone();
+            let _ = app.run_on_main_thread(move || place_traffic_lights(&target));
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn schedule_place_traffic_lights(_window: tauri::WebviewWindow) {}
+
 #[tauri::command]
 fn inspect_input(path: String) -> Result<InputFile, String> {
     InputFile::inspect(path).map_err(|error| error.to_string())
@@ -306,7 +497,7 @@ fn start_transcription(
         let worker = thread::Builder::new()
             .name(format!("transcribe-{job_id}"))
             .spawn(move || {
-                let result = transcribe_file_cancellable(
+                let result = transcribe_file_streaming(
                     &source_path,
                     &model,
                     || {
@@ -330,6 +521,19 @@ fn start_transcription(
                         };
                         let _ = lease.save_status(progress_status.clone());
                         update_job(&worker_app, &worker_state, progress_status);
+                    },
+                    |update| {
+                        let _ = worker_app.emit(
+                            SEGMENT_EVENT,
+                            SegmentEvent {
+                                job_id: worker_job_id.clone(),
+                                index: update.index,
+                                total_chunks: update.total_chunks,
+                                start_ms: update.segment.start_ms,
+                                end_ms: update.segment.end_ms,
+                                text: update.segment.text,
+                            },
+                        );
                     },
                 );
                 let mut transcript = match result {
@@ -412,6 +616,128 @@ fn start_transcription(
         }
         Ok(response_status)
     }
+}
+
+#[tauri::command]
+fn cancel_transcription(job_id: String, app: AppHandle) -> Result<bool, String> {
+    let store = JobStore::new(app_data_dir(&app)?);
+    store.request_cancel(&job_id)
+}
+
+#[tauri::command]
+fn library_directory(app: AppHandle) -> Result<String, String> {
+    Ok(ModelLibrary::new(app_data_dir(&app)?)
+        .directory()
+        .to_string_lossy()
+        .into_owned())
+}
+
+#[tauri::command]
+fn library_models(app: AppHandle) -> Result<Vec<LibraryModelSummary>, String> {
+    let library = ModelLibrary::new(app_data_dir(&app)?);
+    let selected = read_selected_model(&app)?.map(|model| model.id);
+    Ok(library
+        .list()?
+        .into_iter()
+        .map(|entry| LibraryModelSummary {
+            id: entry.model.id.clone(),
+            display_name: entry.model.display_name.clone(),
+            family: family_label(entry.model.family).to_owned(),
+            bytes: entry.bytes,
+            selected: selected.as_deref() == Some(entry.model.id.as_str()),
+        })
+        .collect())
+}
+
+/// Import = validate + copy into the app-managed library; the download stays.
+#[tauri::command]
+fn import_model(path: String, app: AppHandle) -> Result<LibraryModelSummary, String> {
+    let library = ModelLibrary::new(app_data_dir(&app)?);
+    let imported = library.import(&path)?;
+    if read_selected_model(&app)?.is_none() {
+        save_selected_model(&app, &imported.model)?;
+    }
+    library_summary(&app, imported)
+}
+
+#[tauri::command]
+fn select_library_model(id: String, app: AppHandle) -> Result<LibraryModelSummary, String> {
+    let library = ModelLibrary::new(app_data_dir(&app)?);
+    let path = library.path_for(&id)?;
+    let model = inspect_model_directory(&path)?;
+    save_selected_model(&app, &model)?;
+    let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+    library_summary(&app, voice_to_text_core::LibraryModel { model, bytes })
+}
+
+#[tauri::command]
+fn delete_library_model(id: String, app: AppHandle) -> Result<String, String> {
+    if let Some(selected) = read_selected_model(&app)?
+        && selected.id == id
+    {
+        return Err("这是当前默认模型，请先把默认模型换成其他模型再删除。".to_owned());
+    }
+    let library = ModelLibrary::new(app_data_dir(&app)?);
+    let moved = library.delete(&id)?;
+    Ok(moved.to_string_lossy().into_owned())
+}
+
+fn directory_usage(directory: &Path) -> (u64, usize) {
+    let mut bytes = 0u64;
+    let mut files = 0usize;
+    if let Ok(entries) = fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata()
+                && metadata.is_file()
+            {
+                bytes = bytes.saturating_add(metadata.len());
+                files += 1;
+            }
+        }
+    }
+    (bytes, files)
+}
+
+/// 设置·存储 使用的路径与占用信息（模型库、历史结果）。
+#[tauri::command]
+fn storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
+    let data_dir = app_data_dir(&app)?;
+    let library = ModelLibrary::new(&data_dir);
+    let models = library.list()?;
+    let library_bytes = models.iter().map(|entry| entry.bytes).sum();
+    let history = data_dir.join("transcripts");
+    let (history_bytes, history_count) = directory_usage(&history);
+    Ok(StorageSummary {
+        library_path: library.directory().to_string_lossy().into_owned(),
+        library_bytes,
+        library_count: models.len(),
+        history_path: history.to_string_lossy().into_owned(),
+        history_bytes,
+        history_count,
+    })
+}
+
+/// 用系统文件管理器打开一个已存在的目录。
+#[tauri::command]
+fn open_directory(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    let canonical = target
+        .canonicalize()
+        .map_err(|_| "这个目录当前不可访问。".to_owned())?;
+    if !canonical.is_dir() {
+        return Err("这个路径不是目录。".to_owned());
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = std::process::Command::new("explorer");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    command
+        .arg(&canonical)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开目录：{error}"))
 }
 
 #[tauri::command]
@@ -549,6 +875,23 @@ pub fn menu_event_for_id(id: &str) -> Option<&'static str> {
 pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(AppState::default()))
+        .setup(|app| {
+            enable_window_background_drag(app);
+            if let Some(window) = app.get_webview_window("main") {
+                place_traffic_lights(&window);
+                let watched = window.clone();
+                window.on_window_event(move |event| match event {
+                    // 获得焦点时 macOS 才重置按钮，立即摆放一次
+                    tauri::WindowEvent::Focused(true) => place_traffic_lights(&watched),
+                    // 缩放过程中不抢，停手后落位一次，避免抖动
+                    tauri::WindowEvent::Resized(_) => {
+                        schedule_place_traffic_lights(watched.clone())
+                    }
+                    _ => {}
+                });
+            }
+            Ok(())
+        })
         .menu(|app| {
             let menu = Menu::default(app)?;
             let open_media =
@@ -581,7 +924,17 @@ pub fn run() {
             get_selected_model,
             set_selected_model,
             start_transcription,
+            cancel_transcription,
             get_active_job_status,
+            library_directory,
+            library_models,
+            import_model,
+            select_library_model,
+            delete_library_model,
+            storage_summary,
+            open_directory,
+            sync_window_theme,
+            service_status,
             get_job_status,
             get_job_result,
             list_history,
