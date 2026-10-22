@@ -70,7 +70,7 @@ jobs:
         working-directory: apps/desktop
         run: npm run tauri -- build --bundles msi
 
-      - name: Verify MSI output (not uploaded)
+      - name: Verify and stage Windows installer
         shell: pwsh
         run: |
           $candidates = @(
@@ -81,8 +81,22 @@ jobs:
           if (-not $msiDir) { throw "No MSI bundle directory found. Checked: $($candidates -join ', ')" }
           $packages = @(Get-ChildItem -LiteralPath $msiDir -Filter '*.msi' -File)
           if ($packages.Count -lt 1) { throw "No MSI was produced in $msiDir" }
-          $packages | ForEach-Object { "MSI=$($_.Name) SIZE=$($_.Length) PATH=$($_.FullName)" }
           $exe = Join-Path $env:GITHUB_WORKSPACE 'target/release/voice-to-text-desktop.exe'
           if (-not (Test-Path -LiteralPath $exe)) { throw "Windows executable missing at $exe" }
-          $info = Get-Item -LiteralPath $exe
-          "EXE=$($info.Name) SIZE=$($info.Length)"
+          $stage = Join-Path $env:RUNNER_TEMP 'voice-to-text-windows'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath $packages[0].FullName -Destination $stage
+          Copy-Item -LiteralPath $exe -Destination $stage
+          Get-ChildItem -LiteralPath $stage | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "STAGED=$($_.Name) SIZE=$($_.Length) SHA256=$hash"
+          }
+
+      - name: Upload Windows installer (expires in 7 days)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: voice-to-text-windows
+          path: ${{ runner.temp }}/voice-to-text-windows/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
