@@ -38,6 +38,26 @@
 
 - 检查：`which llvm-rc` 无、`brew list llvm` 无；
 - 安装：`brew install llvm`（Homebrew，含 llvm-rc；用途：在 macOS 交叉编译 Windows 资源，等价 CI 的 rc.exe。本地验证用，不影响发布产物）。路径：`/opt/homebrew/opt/llvm/bin`。
-- 代理备忘：sherpa-onnx-sys 下载脚本不支持 SOCKS，构建时需 `env -u ALL_PROXY`（保留 HTTP(S)_PROXY）。
+- 检查：`which git-filter-repo` / brew / pip 均无；
+- 安装：`brew install git-filter-repo`（2.47.0，纯 Python 361 KB；用途：公开前 git 历史隐私脱敏）。
+- 代理备忘：sherpa-onnx-sys 下载脚本不支持 SOCKS，构建时需 `env -u ALL_PROXY`（保留 HTTP(S)_PROXY）；Mac 上 curl 访问 Tailscale 地址需 `--noproxy '*'`（Clash 代理会吞掉直连流量）。
 
 待实证（Phase 5）：GitHub Actions windows-2022 真实构建 MSI + 真机安装启动。
+
+## Phase 2/3 · LAN Compute V1.1（2026-10-23 完成核心 + GUI 集成）
+
+- 核心库 `crates/lan-compute`（`voice-to-text-lan`）：九态任务状态机（非法迁移拒绝）、任务 JSON 持久化/崩溃恢复（中断任务→FAILED/interrupted）、axum HTTP API `/api/v1`（分块上传+断点续传、Bearer 令牌恒定时间比较、collect 防路径穿越、ZIP+sha256 清单导出）、mDNS 注册/发现（`_localtranscribe._tcp.local.`）、`local-transcribe-node` 程序（token 自动生成 0600、Ctrl-C 优雅退出）。23 测试全绿。
+- GUI Client 集成（apps/desktop）：`LanView.svelte`（模式切换/节点管理/扫描配对/任务表九态/发送/取消/取回/收集，标注临时 UI）、`lan.rs` 命令层（设置持久化、发现、4 MiB 分块提交、`lan://progress` 事件、结果回写本地历史）、`start_transcription` 自动派发（优先局域网→可达节点，失败回落本机）、i18n 104 键×5 语言、6 个 TDD 单测。workspace 测试 45 项全绿，双平台 clippy 零告警，svelte-check 零告警。
+- **跨设备真机实测（Mac → Windows Node，8 步全绿）**：health/401 认证/capabilities(`platform:"windows"`)/创建任务/分片上传+断点续传逐值核对/Windows CPU 真实 paraformer 转写（queued→completed，8.67 s 音频出稿）/结果取回/collect 导出。mDNS 真机广播日志确认。详见 `docs/testing/windows-early-beta-test-report.md` §4.1。
+- Windows 真机安装验证：MSI 静默安装返回码 0、安装产物/注册表/ProductVersion 核对；交互会话 GUI 启动（PID 4836、窗口标题 `Local Transcribe`）+ 真实截图 `docs/testing/screenshots/windows-11-app-window.png`。
+
+## Phase 4 · 测试与文档（2026-10-23）
+
+- 测试报告：`docs/testing/windows-early-beta-test-report.md`（严格区分已验证/待验证/不支持，含真机实测记录）。
+- README 双语更新；Windows Early Beta 冻结灰度设计稿 `design/windows-early-beta.html`；PROJECT_STATUS 里程碑追加。
+- 版本定格 `1.1.0-beta.1`（tauri.conf/Cargo/package.json；MSI 数字版由 bundler 自动截取 1.1.0）。
+
+## Phase 5 · 发布（进行中）
+
+- Gate G4 敏感信息扫描：git 历史无凭据类泄漏；内网 IP/主机名/SSH 用户/MAC/真名 1 处 → 已定脱敏规则（temp/redact-rules.txt），公开前用 git-filter-repo 全历史脱敏后 force push。
+- 待办：历史脱敏 → 仓库公开 → GitHub Release（Windows MSI + 程序 + macOS dmg + 校验和 + 双语 release notes）。
