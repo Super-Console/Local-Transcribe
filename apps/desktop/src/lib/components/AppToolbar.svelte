@@ -23,6 +23,15 @@
   } = $props();
 
   let open = $state(false);
+  // 搜索框默认收起成放大镜，点击展开；有查询词时保持展开。
+  let searchOpen = $state(false);
+  let searchField = $state<HTMLInputElement | null>(null);
+  $effect(() => {
+    if (search) searchOpen = true;
+  });
+  $effect(() => {
+    if (searchOpen) searchField?.focus();
+  });
 
   function toggleTheme() {
     theme.preference = theme.resolved === "dark" ? "light" : "dark";
@@ -38,30 +47,53 @@
 
 <div class="toolbar" role="toolbar" aria-label={t("toolbar.ariaLabel")} tabindex="-1">
   <div class="spacer"></div>
-  <div class="search">
-    <Icon name="search" size={14} stroke={1.6} />
-    <input
-      type="text"
-      autocomplete="off"
-      autocorrect="off"
-      spellcheck="false"
-      value={search}
-      placeholder={t("search.placeholder")}
-      aria-label={t("search.placeholder")}
-      oninput={(event) => onSearchChange(event.currentTarget.value)}
-    />
-    {#if search}
+  {#if searchOpen}
+    <div class="search">
+      <Icon name="search" size={14} stroke={1.6} />
+      <input
+        type="text"
+        autocomplete="off"
+        autocorrect="off"
+        spellcheck="false"
+        value={search}
+        placeholder={t("search.placeholder")}
+        aria-label={t("search.placeholder")}
+        bind:this={searchField}
+        oninput={(event) => onSearchChange(event.currentTarget.value)}
+        onkeydown={(event) => {
+          if (event.key === "Escape") {
+            onSearchChange("");
+            searchOpen = false;
+          }
+        }}
+        onblur={() => {
+          if (!search) searchOpen = false;
+        }}
+      />
       <button
         type="button"
         class="search-clear"
         aria-label={t("search.clear")}
         title={t("search.clear")}
-        onclick={() => onSearchChange("")}
+        onclick={() => {
+          onSearchChange("");
+          searchOpen = false;
+        }}
       >
         ×
       </button>
-    {/if}
-  </div>
+    </div>
+  {:else}
+    <button
+      type="button"
+      class="icon-btn"
+      aria-label={t("search.placeholder")}
+      title={t("search.placeholder")}
+      onclick={() => (searchOpen = true)}
+    >
+      <Icon name="search" size={15} stroke={1.6} />
+    </button>
+  {/if}
   <button
     type="button"
     class="icon-btn theme"

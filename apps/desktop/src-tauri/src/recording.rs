@@ -553,12 +553,18 @@ pub fn start(
     let mut tracks = Vec::new();
     for (index, spec) in specs.iter().enumerate() {
         let safe_index = index + 1;
-        let path = dir.join(format!("track-{safe_index}.wav"));
         let label = if spec.label.trim().is_empty() {
             format!("音轨 {safe_index}")
         } else {
             spec.label.clone()
         };
+        // 用来源名做文件名，历史列表里一眼能看出是哪条音轨。
+        let file_stem: String = label
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .take(40)
+            .collect();
+        let path = dir.join(format!("{file_stem}-{safe_index}.wav"));
         if spec.kind == "app" {
             let Ok(pid) = spec.target.parse::<i32>() else {
                 continue;
