@@ -68,12 +68,21 @@ impl std::fmt::Debug for LanClient {
 
 impl LanClient {
     /// Build a client for the node at `host:port`.
+    ///
+    /// LAN node traffic must go direct: ambient `HTTP(S)_PROXY` / `ALL_PROXY`
+    /// (Clash, corporate proxies, …) routinely swallow private and tailnet
+    /// addresses (100.x / 192.168.x). Nodes are only ever reached on the local
+    /// network, so environment proxies are unconditionally bypassed; see the
+    /// `proxy_policy` integration test.
     pub fn new(host: impl Into<String>, port: u16, token: String) -> Self {
         ensure_crypto_provider();
         Self {
             base_url: format!("http://{}:{}", host.into(), port),
             token,
-            http: reqwest::Client::builder().build().unwrap_or_default(),
+            http: reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap_or_default(),
         }
     }
 

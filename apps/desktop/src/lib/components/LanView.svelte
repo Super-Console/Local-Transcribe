@@ -220,14 +220,19 @@
 
   async function loadStatus(node: LanNodeConfig) {
     try {
+      // One atomic call: storage and capability probes are independent and
+      // their failures must never overwrite the reachability result.
       const status = await invoke<LanNodeStatus>("lan_node_status", { nodeId: node.id });
       statuses = { ...statuses, [node.id]: status };
-      if (status.reachable) {
-        const storage = await invoke<LanStorageInfo>("lan_storage", { nodeId: node.id });
-        storages = { ...storages, [node.id]: storage };
+      if (status.storage) {
+        storages = { ...storages, [node.id]: status.storage };
       }
-    } catch {
-      statuses = { ...statuses, [node.id]: { reachable: false, capabilities: null, latency_ms: null } };
+      if (status.warning) {
+        error = `${node.name}: ${status.warning}`;
+      }
+    } catch (issue) {
+      statuses = { ...statuses, [node.id]: { reachable: false, capabilities: null, latency_ms: null, storage: null, warning: null } };
+      error = String(issue);
     }
   }
 

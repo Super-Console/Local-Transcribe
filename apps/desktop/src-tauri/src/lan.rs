@@ -81,6 +81,48 @@ pub struct LanNodeStatus {
     pub reachable: bool,
     pub capabilities: Option<Capabilities>,
     pub latency_ms: Option<u64>,
+    /// Storage probe result; independent from reachability.
+    pub storage: Option<StorageInfo>,
+    /// Non-fatal probe problem (e.g. storage rejected the token), kept
+    /// separate so it can never overwrite a reachable node as offline.
+    pub warning: Option<String>,
+}
+
+/// Assemble the node overview from independent probes. Reachability is
+/// decided by the health probe alone: a node that answers but refuses a
+/// later call (bad token, storage endpoint down) is still online, and the
+/// caller gets the specific problem in `warning`.
+fn assemble_status(
+    health: Result<bool, String>,
+    latency_ms: u64,
+    capabilities: Option<Capabilities>,
+    storage: Result<StorageInfo, String>,
+) -> LanNodeStatus {
+    if !matches!(health, Ok(true)) {
+        return LanNodeStatus {
+            reachable: false,
+            capabilities: None,
+            latency_ms: None,
+            storage: None,
+            warning: None,
+        };
+    }
+    match storage {
+        Ok(storage) => LanNodeStatus {
+            reachable: true,
+            capabilities,
+            latency_ms: Some(latency_ms),
+            storage: Some(storage),
+            warning: None,
+        },
+        Err(warning) => LanNodeStatus {
+            reachable: true,
+            capabilities,
+            latency_ms: Some(latency_ms),
+            storage: None,
+            warning: Some(warning),
+        },
+    }
 }
 
 /// `lan://progress` 事件载荷：某个节点任务的传输进度。
@@ -316,19 +358,27 @@ pub(crate) async fn node_status(app: &AppHandle, node_id: &str) -> Result<LanNod
     let node = find_node(app, node_id)?;
     let client = client_for(&node);
     let started = Instant::now();
-    if !matches!(timed(client.health()).await, Ok(true)) {
-        return Ok(LanNodeStatus {
-            reachable: false,
-            capabilities: None,
-            latency_ms: None,
-        });
-    }
+    let health = timed(client.health()).await;
     let latency_ms = started.elapsed().as_millis() as u64;
-    Ok(LanNodeStatus {
-        reachable: true,
-        capabilities: timed(client.capabilities()).await.ok(),
-        latency_ms: Some(latency_ms),
-    })
+    // Probes stay independent: only the health probe decides reachability,
+    // and later probes run solely for reachable nodes (they would just burn
+    // timeouts otherwise).
+    let storage = if matches!(health, Ok(true)) {
+        timed(client.storage()).await.map_err(|error| error.to_string())
+    } else {
+        Err(String::new()) // not probed; the unreachable branch discards it
+    };
+    let capabilities = if matches!(health, Ok(true)) {
+        timed(client.capabilities()).await.ok()
+    } else {
+        None
+    };
+    Ok(assemble_status(
+        health.map_err(|error| error.to_string()),
+        latency_ms,
+        capabilities,
+        storage,
+    ))
 }
 
 /// 发送一个文件到节点并返回节点任务 id（上传进度走 `lan://progress` 事件）。
@@ -674,6 +724,46 @@ mod tests {
             token: "secret-token".to_owned(),
             enabled,
         }
+    }
+
+    fn storage_ok() -> StorageInfo {
+        StorageInfo {
+            free_bytes: 100,
+            total_bytes: 200,
+            data_dir: "/tmp/data".to_owned(),
+        }
+    }
+
+    /// A failing storage probe must not flip a reachable node to offline:
+    /// a wrong token is an auth problem, not a connectivity problem.
+    #[test]
+    fn storage_failure_keeps_node_reachable() {
+        let status = assemble_status(
+            Ok(true),
+            12,
+            None,
+            Err("node returned status 401: unauthorized".to_owned()),
+        );
+        assert!(status.reachable, "node answered the health probe: it is online");
+        assert_eq!(status.latency_ms, Some(12));
+        assert!(status.storage.is_none());
+        assert!(status.warning.as_deref().is_some_and(|w| w.contains("401")));
+    }
+
+    #[test]
+    fn health_failure_marks_node_unreachable() {
+        let status = assemble_status(Err("timeout".to_owned()), 0, None, Ok(storage_ok()));
+        assert!(!status.reachable);
+        assert!(status.storage.is_none());
+        assert!(status.capabilities.is_none());
+    }
+
+    #[test]
+    fn independent_probes_all_ok() {
+        let status = assemble_status(Ok(true), 5, None, Ok(storage_ok()));
+        assert!(status.reachable);
+        assert!(status.storage.is_some());
+        assert!(status.warning.is_none());
     }
 
     #[test]

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI · BYOK — Local Transcribe（设计草稿）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,560;9..144,640&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="draft-bar">设计草稿 · <strong>产品名为工作名，视觉设计未定稿</strong> · 非最终发布物 · 2026-10</div>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="wordmark" href="index.html"><span class="glyph">✳</span> Local&nbsp;Transcribe <small>工作名</small></a>
+    <nav class="nav">
+      <a href="index.html">首页</a>
+      <a href="features.html">功能</a>
+      <a href="lan.html">局域网计算</a>
+      <a href="ai.html" aria-current="page">AI · BYOK</a>
+      <a href="download.html">下载</a>
+      <a href="privacy.html">隐私</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">计划中 <span class="tag soon">已立项 · 未发布</span></p>
+      <h1>文字稿之上，<br>再加一层理解。</h1>
+      <p class="lead" style="margin-top: 22px;">
+        转写给你原文，AI 帮你提炼。总结、纪要、笔记、问答——用<b>你自己的</b> API 地址、Key 和模型：
+        BYOK（Bring Your Own Key），我们不提供、也不代管任何 AI 服务。
+      </p>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">能力</p>
+        <h2>转写结果页上的「AI」入口。</h2>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <span class="idx">01</span>
+          <h3>AI 总结</h3>
+          <p>简短、标准、详细三档，适配「快速过一眼」到「归档备查」的不同需求。</p>
+        </div>
+        <div class="card featured">
+          <span class="idx">02</span>
+          <h3>会议纪要</h3>
+          <p>议题、结论、待办分栏整理——不编造责任人与时间，原文没有的就不写。</p>
+        </div>
+        <div class="card">
+          <span class="idx">03</span>
+          <h3>课程笔记</h3>
+          <p>按章节、知识点、重点概念组织，长课时录音也能变成可复习的笔记。</p>
+        </div>
+        <div class="card">
+          <span class="idx">04</span>
+          <h3>AI 问答</h3>
+          <p>针对当前转写内容提问，优先依据原文回答；回答带段落引用，可回溯。</p>
+        </div>
+        <div class="card">
+          <span class="idx">05</span>
+          <h3>自定义提示词</h3>
+          <p>创建、编辑、保存、复用你的处理模板——法学课一种模板，周会另一种。</p>
+        </div>
+        <div class="card">
+          <span class="idx">长文本</span>
+          <h3>数小时录音也接得住</h3>
+          <p>按模型上下文容量与 Token 预算智能分段、分段处理、整合结果；带进度、可取消、失败可重试，尽量保留原文段落引用。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">BYOK 配置</p>
+        <h2>你的 Key，你的模型。</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <tr><th>配置项</th><th>说明</th></tr>
+          <tr><td>API Base URL</td><td>支持自定义第三方中转地址</td></tr>
+          <tr><td>API Key</td><td>存入系统安全存储（macOS 钥匙串 / Windows 凭据管理器 / iOS·Android Keystore），绝不明文入库</td></tr>
+          <tr><td>模型 Model ID</td><td>任意 OpenAI-compatible 模型名</td></tr>
+          <tr><td>多配置切换</td><td>保存多套 API 配置并快速切换，一键测试连接</td></tr>
+          <tr><td>协议</td><td>优先支持 OpenAI-compatible Chat Completions，适配器架构可扩展其他协议</td></tr>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">安全与边界</p>
+        <h2>AI 请求，从你的设备直达你的服务商。</h2>
+      </div>
+      <ul class="bullets">
+        <li>仅在你主动使用 AI 功能时发送必要的转写文本；原始音视频永不上传。</li>
+        <li>首次调用外部 AI 前明确告知：文本将发送到你配置的服务商。</li>
+        <li>API Key 不写入数据库、日志或 Git；不向局域网计算节点下发，请求默认由发起操作的设备执行。</li>
+        <li>超时、取消、限流与有限重试，避免无限消耗 Token。</li>
+        <li>AI 结果单独保存，绝不覆盖原始识别文本；未配置 AI 服务时，离线转写功能完整可用。</li>
+        <li>四端（macOS / Windows / iOS / Android）统一功能定义与结果数据结构。</li>
+      </ul>
+      <p class="faint" style="margin-top: 18px;">状态：已立项（任务书归档于仓库 <code>taskbook/</code>），尚未发布；本页为需求的设计预览。</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <span>Local Transcribe 为工作名 · 本页为设计草稿 · 最终视觉与命名未定稿</span>
+    <span>MIT License · <a href="privacy.html">隐私与数据边界</a> · <a href="download.html">下载</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

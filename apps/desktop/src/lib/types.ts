@@ -163,6 +163,10 @@ export type LanNodeStatus = {
   reachable: boolean;
   capabilities: LanCapabilities | null;
   latency_ms: number | null;
+  /** Storage probe result; independent from reachability. */
+  storage: LanStorageInfo | null;
+  /** Non-fatal probe problem (e.g. storage rejected the token). */
+  warning: string | null;
 };
 
 export type LanTaskState =
