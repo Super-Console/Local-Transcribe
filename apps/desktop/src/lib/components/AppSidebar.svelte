@@ -33,6 +33,18 @@
       <Icon name="home" />
       <span class="label">{t("nav.home")}</span>
     </button>
+    <button
+      type="button"
+      class="nav-item"
+      class:active={view === "record"}
+      aria-current={view === "record" ? "page" : undefined}
+      aria-label={t("nav.record")}
+      title={t("nav.record")}
+      onclick={() => onNavigate("record")}
+    >
+      <Icon name="mic" />
+      <span class="label">{t("nav.record")}</span>
+    </button>
   </nav>
   <div class="bottom">
     <div class="section">{t("nav.manage")}</div>

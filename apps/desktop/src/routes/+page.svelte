@@ -13,6 +13,7 @@
   import HistoryView from "$lib/components/HistoryView.svelte";
   import ModelView from "$lib/components/ModelView.svelte";
   import SettingsView from "$lib/components/SettingsView.svelte";
+  import RecordView from "$lib/components/RecordView.svelte";
   import { t } from "$lib/i18n.svelte";
   import type {
     HistoryEntry,
@@ -20,6 +21,7 @@
     LibraryModelSummary,
     ModelRuntime,
     ModelSummary,
+    RecordedTrack,
     RetentionPolicy,
     SearchHit,
     ServiceStatus,
@@ -78,6 +80,8 @@
   let sidebarCollapsed = $state(false);
   let appVersion = $state("0.2.0");
   let loadedModelId = $state<string | null>(null);
+  // 录音结束后按轨道依次转写（两条音轨分别成记录）。
+  let pendingTracks = $state<string[]>([]);
   let searchQuery = $state("");
   let searchHits = $state<SearchHit[] | null>(null);
   let searchBusy = $state(false);
@@ -261,6 +265,20 @@
     } finally {
       busy = false;
     }
+  }
+
+  function handleRecorded(tracks: RecordedTrack[]) {
+    pendingTracks = tracks.map((track) => track.path);
+    view = "home";
+    void startNextTrack();
+  }
+
+  async function startNextTrack() {
+    if (job?.state === "running") return;
+    const next = pendingTracks.shift();
+    if (!next) return;
+    pendingTracks = [...pendingTracks];
+    await startTranscription(next);
   }
 
   async function cancelJob() {
@@ -461,6 +479,9 @@
           if (event.payload.state === "completed") {
             void loadResult(event.payload.jobId);
           }
+          if (event.payload.state !== "running" && pendingTracks.length > 0) {
+            window.setTimeout(() => void startNextTrack(), 400);
+          }
         }),
         listen<SegmentEvent>(SEGMENT_EVENT, (event) => upsertSegment(event.payload)),
         listen(OPEN_EVENT, () => void pickFile()),
@@ -579,6 +600,8 @@
           {dropping}
         />
       {/if}
+    {:else if view === "record"}
+      <RecordView onRecorded={handleRecorded} />
     {:else if view === "model"}
       <ModelView
         models={libraryModels}

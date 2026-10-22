@@ -1,6 +1,6 @@
 [package]
 name = "voice-to-text-desktop"
-version = "0.2.0"
+version = "1.0.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
@@ -24,6 +24,12 @@ serde_json = "1"
 voice-to-text-core = { path = "../../../crates/transcription-core" }
 voice-to-text-service = { path = "../../../crates/transcription-service" }
 tauri-plugin-dialog = "2"
+cpal = "0.16"
+hound = "3"
+core-foundation = "0.10"
+objc2-core-audio = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-audio-types = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -17,6 +17,8 @@ use voice_to_text_core::{
     inspect_model_directory, transcribe_file_streaming,
 };
 
+mod recording;
+
 const JOB_EVENT: &str = "voice-to-text:job-status";
 const SEGMENT_EVENT: &str = "voice-to-text:transcript-segment";
 
@@ -97,7 +99,7 @@ fn summarize_model(model: &LocalModel) -> ModelSummary {
     }
 }
 
-fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_local_data_dir()
         .map_err(|_| "The app's local data folder is unavailable.".to_owned())
@@ -107,7 +109,7 @@ fn model_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("selected-model.json"))
 }
 
-fn unix_now_ms() -> u64 {
+pub(crate) fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as u64)
@@ -711,6 +713,45 @@ struct ModelRuntime {
     idle_unload_seconds: u64,
 }
 
+
+#[tauri::command]
+fn list_audio_devices() -> Vec<String> {
+    recording::list_devices()
+}
+
+#[tauri::command]
+fn list_audio_apps() -> Vec<recording::AudioApp> {
+    recording::list_apps()
+}
+
+#[tauri::command]
+fn start_recording(
+    mic: Option<String>,
+    app_pid: Option<i32>,
+    app: AppHandle,
+    state: State<'_, std::sync::Arc<recording::RecordingState>>,
+) -> Result<(), String> {
+    recording::start(&state, &app, mic, app_pid)
+}
+
+/// 停止录音要等音频线程收尾（可能需要几秒），必须异步执行，否则会卡住界面。
+#[tauri::command]
+async fn stop_recording(
+    state: State<'_, std::sync::Arc<recording::RecordingState>>,
+) -> Result<recording::RecordedTracks, String> {
+    let state = std::sync::Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || recording::stop(&state))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn recording_status(
+    state: State<'_, std::sync::Arc<recording::RecordingState>>,
+) -> recording::RecordingStatus {
+    recording::status(&state)
+}
+
 #[tauri::command]
 fn model_runtime() -> ModelRuntime {
     ModelRuntime {
@@ -1274,6 +1315,7 @@ pub fn menu_event_for_id(id: &str) -> Option<&'static str> {
 pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(AppState::default()))
+        .manage(std::sync::Arc::new(recording::RecordingState::default()))
         .menu(|app| {
             let menu = Menu::default(app)?;
             let open_media =
@@ -1338,6 +1380,11 @@ pub fn run() {
             delete_library_model,
             storage_summary,
             open_directory,
+            list_audio_devices,
+            list_audio_apps,
+            start_recording,
+            stop_recording,
+            recording_status,
             model_runtime,
             get_retention_policy,
             set_retention_policy,

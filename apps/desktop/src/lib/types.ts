@@ -1,8 +1,20 @@
 /** Shared frontend types mirroring the Rust command/event payloads. */
 
-export type View = "home" | "model" | "settings";
+export type View = "home" | "record" | "model" | "settings";
 
 export type InputFile = { path: string; fileName: string; sizeBytes: number };
+
+export type AudioApp = { pid: number; name: string };
+
+export type RecordedTrack = { path: string; label: string };
+
+export type RecordingStatus = {
+  running: boolean;
+  elapsedMs: number;
+  micLevel: number;
+  appLevel: number;
+  appError?: string | null;
+};
 
 export type ModelSummary = { id: string; displayName: string; family: string };
 
