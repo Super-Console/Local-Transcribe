@@ -72,7 +72,6 @@
     <Icon name={theme.resolved === "dark" ? "sun" : "moon"} />
   </button>
   <div class="model-pick">
-    <span class="label">{t("toolbar.defaultModel")}</span>
     <button
       type="button"
       class="select"
@@ -223,13 +222,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .label {
-    font-size: 12.5px;
-    color: var(--text-3);
-    letter-spacing: 0.01em;
-    white-space: nowrap;
   }
 
   .select {
