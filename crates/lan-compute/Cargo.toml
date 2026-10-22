@@ -1,0 +1,40 @@
+[package]
+name = "voice-to-text-lan"
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+
+[[bin]]
+name = "local-transcribe-node"
+path = "src/bin/local-transcribe-node.rs"
+
+[features]
+# HTTPS support via rustls + ring. Off by default: the V1.1 LAN protocol is
+# plain HTTP with bearer-token auth, and every TLS provider is C code that
+# cannot be cross-compiled for windows-msvc from this macOS host (no MSVC
+# sysroot). Enable on hosts with a full target toolchain (native macOS,
+# Linux or Windows builds) when an https endpoint exists.
+tls = ["dep:rustls", "reqwest/rustls-no-provider"]
+
+[dependencies]
+voice-to-text-core = { path = "../transcription-core" }
+axum = "0.8"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "query"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"], optional = true }
+mdns-sd = "0.21"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "signal", "fs", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+thiserror = "2"
+fs2 = "=0.4.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
