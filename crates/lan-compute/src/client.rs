@@ -382,7 +382,7 @@ mod tests {
             MDNS_SERVICE_TYPE,
             "study-room",
             "study-room.local.",
-            "REDACTED-LAN-IP",
+            "192.0.2.10",
             7878,
             properties,
         )

@@ -164,6 +164,17 @@ ffplay「存活但无声」（疑 SDL 落 dummy 驱动，未逐层隔离证实�
   - `cargo check --target x86_64-pc-windows-msvc`（lib 与 `--tests`）✅
   - `cargo clippy --target x86_64-pc-windows-msvc --tests` 0 警告 ✅；`cargo fmt` ✅
   - macOS 目标 `cargo check`/`clippy` 回归 ✅（录制 macOS 路径未触碰）
+  - **PC 真机整包链接与冒烟（2026-10-23 Phase C）**：Tims-Gaming-PC 本机 `cargo build`
+    （debug）成功——全工作区首次真链接（`voice-to-text-desktop.exe` 46.7 MB）；本机
+    git/node 24/npm/Rust+MSVC 均既有（事前核查，未新装任何工具）。sherpa-onnx-sys 从
+    GitHub releases 下载预编译库在 PC 直连超时（10060），改由 Mac 代理下载官方
+    v1.13.8 win-x64 静态库归档（14 个 .lib）经 LAN 传输，以 `SHERPA_ONNX_LIB_DIR`
+    跳过下载。冒烟（SSH 上下文）：进程存活 10 s、WebView2 子进程 12 个（UI 真实渲染）、
+    无 panic 输出、正常终止；收尾核查残留 6 个 WebView2 归属 session 1 的系统
+    SearchHost（非冒烟遗留，保持未动）。
+  - CI 预检（本机等价执行 CI 同款步骤）：`cargo fmt --all -- --check` 0 行；
+    `cargo clippy --workspace --all-targets --locked -- -D warnings` exit 0；
+    `cargo test --workspace --locked` exit 0。
   - 构建环境备注：Mac 上交叉检查需 `llvm-rc`（brew llvm，已在 PATH）与
     `http(s)_proxy` 指向本机代理（sherpa-onnx-sys 下载器）；`ALL_PROXY` 须 unset（isahc 误解析空值）。
   - **边界**：`mod tests` 在 Mac 只能类型检查（无法链接执行 Windows 测试二进制）；
@@ -178,10 +189,11 @@ ffplay「存活但无声」（疑 SDL 落 dummy 驱动，未逐层隔离证实�
    端点），因果未在重连会话中单独复测。**产品真机验收须在 Timmy 活跃登录会话中进行**
    （Phase C/D 前提）；当前全部绿数据取自 SSH 上下文（同机、同混音引擎、同代码），
    交互会话实测待补。
-2. **验证状态分层（如实标注）**：✅ 已验证（真机探针级）：T02 隔离、T08 退出后继续录制
-   与封口、激活/初始化故障链修复（§3.4）。⏳ 未验证：T03 麦克风；生产端
-   `recording_windows.rs` 自身的真机运行（代码与探针逐段对齐但无自身运行记录）；
-   UI/状态与 T09–T14（Phase D）。在生产端真机实测通过前，不得宣称 Windows 应用录音
+2. **验证状态分层（如实标注）**：✅ 已验证（真机）：T02 隔离、T08 退出后继续录制与封口、
+   激活/初始化故障链修复（§3.4，探针级）；生产端整包在 PC 链接成功并冒烟启动
+   （进程存活、WebView2 渲染，SSH 上下文）。⏳ 未验证：T03 麦克风与录音音频实跑、
+   活跃交互会话下的 UI/状态（切页、隐藏、队列）、T09–T14（Phase D）。
+   **链接+冒烟 ≠ 音频链路可用**——在活跃会话实测通过前，不得宣称 Windows 应用录音
    整体可用。
 3. `list_apps` 仅列带可见窗口的进程：无窗口的音频进程（如 `ffplay -nodisp`、后台服务）
    不出现在列表；但按契约 `TrackSpec.target` 接受任意 PID 字符串，API 调用不受限。
@@ -199,4 +211,6 @@ ffplay「存活但无声」（疑 SDL 落 dummy 驱动，未逐层隔离证实�
    （T03 麦克风、生产端真机、活跃交互会话）并入 Phase C/D。
 2. Phase C：RecordView 集成（Windows 应用选择、逐轨状态显示含「目标应用已退出」）、
    录后直接转写联动（T10）。
-3. Phase D：T01–T14 真机测试矩阵、回归（T14）、安装器（T13）、测试报告与双语 README 更新。
+3. Phase D：T01–T14 真机测试矩阵、回归（T14）、安装器（T13，由既有 CI
+   `windows-validation.yml` 的 `workflow_dispatch` 在本分支 ref 构建 MSI 产物）、
+   测试报告与双语 README 更新。
