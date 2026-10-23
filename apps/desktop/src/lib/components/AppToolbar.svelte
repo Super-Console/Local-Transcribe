@@ -48,7 +48,7 @@
 </script>
 
 <div class="toolbar" role="toolbar" aria-label={t("toolbar.ariaLabel")} tabindex="-1">
-  <div class="spacer" data-tauri-drag-region></div>
+  <div class="spacer"></div>
 
   <div class="search" class:open={searchOpen}>
     <button

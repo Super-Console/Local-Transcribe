@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../src/routes/+page.svelte");
 const sidebar = read("../src/lib/components/AppSidebar.svelte");
+const toolbar = read("../src/lib/components/AppToolbar.svelte");
 
 const desktopLockPattern = (version) =>
   new RegExp(`name = "voice-to-text-desktop"\\r?\\nversion = "${version.replaceAll('.', '\\.') }"`);
@@ -41,9 +42,20 @@ test("sidebar toggle remains outside the collapsible navigation", () => {
   assert.match(page, /aria-expanded=\{!sidebarCollapsed\}/);
   assert.match(page, /aria-controls="app-sidebar"/);
   assert.match(page, /onclick=\{toggleSidebar\}/);
-  assert.match(page, /data-tauri-drag-region/);
+  assert.match(page, /onmousedown=\{headerPointerDown\}/);
   assert.match(sidebar, /id="app-sidebar"/);
   assert.match(sidebar, /inert=\{collapsed\}/);
+});
+
+test("window header starts dragging programmatically for non-interactive targets", () => {
+  // macOS Overlay 标题栏下 data-tauri-drag-region 不生效（tauri#9503），且其属性值
+  // 只认直接命中；标题栏必须改用显式 mousedown -> startDragging()，并放行可交互控件。
+  assert.match(page, /<header class="window-header" role="presentation" onmousedown=\{headerPointerDown\}>/);
+  assert.match(page, /getCurrentWindow\(\)/);
+  assert.match(page, /startDragging\(\)/);
+  assert.match(page, /headerPointerDown[\s\S]*?closest\(/);
+  assert.doesNotMatch(page, /<[a-z][^>]*\sdata-tauri-drag-region/);
+  assert.doesNotMatch(toolbar, /<[a-z][^>]*\sdata-tauri-drag-region/);
 });
 
 test("navigation preserves all existing destinations", () => {

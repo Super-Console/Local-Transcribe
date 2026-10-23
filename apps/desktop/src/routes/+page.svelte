@@ -4,6 +4,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 
   import AppSidebar from "$lib/components/AppSidebar.svelte";
@@ -179,6 +180,30 @@
       localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "collapsed" : "expanded");
     } catch {
       /* ignore storage errors */
+    }
+  }
+
+  // macOS Overlay 标题栏下 data-tauri-drag-region 不生效（tauri#9503 上游 bug），
+  // 且该属性只认直接命中，工具栏等子元素会挡住拖动；改为在标题栏统一显式
+  // startDragging()，可交互控件（按钮/输入等）保持原有点击行为。
+  function headerPointerDown(event: MouseEvent) {
+    if (!tauriAvailable || event.button !== 0 || event.detail > 1) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (
+      target.closest(
+        'a, button, input, select, textarea, label, summary, [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"]), [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="checkbox"], [role="radio"], [role="switch"], [role="option"], [role="listbox"], [role="menu"]',
+      )
+    ) {
+      return;
+    }
+    event.preventDefault();
+    try {
+      void getCurrentWindow().startDragging().catch(() => {
+        /* 权限缺失或非窗口环境时静默降级 */
+      });
+    } catch {
+      /* 非 Tauri 环境没有窗口对象 */
     }
   }
 
@@ -563,8 +588,8 @@
 </script>
 
 <div class="app" class:collapsed={sidebarCollapsed}>
-  <header class="window-header">
-    <div class="sidebar-header" data-tauri-drag-region>
+  <header class="window-header" role="presentation" onmousedown={headerPointerDown}>
+    <div class="sidebar-header">
       <button
         type="button"
         class="sidebar-toggle"
@@ -575,7 +600,7 @@
         onclick={toggleSidebar}
       ><Icon name="panel" size={18} /></button>
     </div>
-    <div class="header-tools" data-tauri-drag-region>
+    <div class="header-tools">
     <AppToolbar
       {model}
       models={libraryModels}
