@@ -58,7 +58,7 @@ impl HostState {
             .unwrap_or_default())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub fn start(
         &self,
         root: &Path,
