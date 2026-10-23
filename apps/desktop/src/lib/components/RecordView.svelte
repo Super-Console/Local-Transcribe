@@ -196,7 +196,7 @@
     {/each}
 
     {#if !running}
-      <button type="button" class="add" onclick={addTrack}>
+      <button type="button" class="btn-secondary" onclick={addTrack}>
         <Icon name="plus" size={13} stroke={1.7} />
         {t("record.addTrack")}
       </button>
@@ -210,7 +210,7 @@
   {/if}
 
   <div class="transport">
-    <button type="button" class="record-btn" class:running disabled={busy} onclick={toggle}>
+    <button type="button" class="btn-primary" class:running disabled={busy} onclick={toggle}>
       <span class="dot"></span>
       {running ? t("record.stop") : t("record.start")}
     </button>
@@ -221,7 +221,7 @@
     {/if}
     <div class="spacer"></div>
     {#if !running}
-      <button type="button" class="link" onclick={() => void loadSources()}>
+      <button type="button" class="link-action" onclick={() => void loadSources()}>
         {t("record.refresh")}
       </button>
     {/if}
@@ -359,23 +359,8 @@
     color: var(--red);
   }
 
-  .add {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
+  .tracks > :global(.btn-secondary) {
     align-self: flex-start;
-    height: 34px;
-    padding: 0 14px;
-    border: 1px dashed var(--hairline-2);
-    border-radius: 10px;
-    background: transparent;
-    color: var(--text-2);
-    font-size: 13.5px;
-  }
-
-  .add:hover {
-    border-color: var(--text-3);
-    color: var(--text);
   }
 
   .hint {
@@ -398,28 +383,14 @@
     background: var(--fill);
   }
 
-  .record-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    height: 38px;
-    padding: 0 18px;
-    border: 0;
-    border-radius: 10px;
-    background: var(--text);
-    color: var(--bg);
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .record-btn .dot {
+  .transport .dot {
     width: 9px;
     height: 9px;
     border-radius: 50%;
     background: var(--red);
   }
 
-  .record-btn.running .dot {
+  .transport .running .dot {
     animation: pulse 1.2s ease-in-out infinite;
   }
 
@@ -442,14 +413,6 @@
 
   .spacer {
     flex: 1;
-  }
-
-  .link {
-    border: 0;
-    background: none;
-    padding: 0;
-    font-size: 13px;
-    color: var(--accent-ink);
   }
 
   .note {

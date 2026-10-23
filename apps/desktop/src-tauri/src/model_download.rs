@@ -57,6 +57,8 @@ pub struct CatalogEntry {
     pub repository: &'static str,
     pub kind: CatalogKind,
     pub tier: CatalogTier,
+    /// 语言标签，只用于列表副标题；空字符串表示清单原本没写语言（不补猜）。
+    pub languages: &'static str,
     pub bytes: u64,
     /// (仓库内路径, 本地文件名, 字节数)
     pub files: &'static [(&'static str, &'static str, u64)],
@@ -115,8 +117,9 @@ pub const CATALOG: &[CatalogEntry] = &[
     // ---- 准确优先（实测 CER 从低到高）----
     CatalogEntry {
         id: "x-asr-zh-en",
-        name: "X-ASR Zipformer · zh/en",
+        name: "X-ASR Zipformer",
         family: "X-ASR",
+        languages: "zh/en",
         directory: "sherpa-onnx-x-asr-zipformer-transducer-zh-en-int8-2026-06-03",
         repository: "csukuangfj2/sherpa-onnx-x-asr-zipformer-transducer-zh-en-int8-2026-06-03",
         kind: CatalogKind::Asr,
@@ -126,8 +129,9 @@ pub const CATALOG: &[CatalogEntry] = &[
     },
     CatalogEntry {
         id: "fire-red-asr2",
-        name: "FireRedASR2 (int8) · zh/en",
+        name: "FireRedASR2 (int8)",
         family: "FireRedASR",
+        languages: "zh/en",
         directory: "sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26",
         repository: "csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26",
         kind: CatalogKind::Asr,
@@ -139,6 +143,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         id: "qwen3-asr-0.6b",
         name: "Qwen3-ASR 0.6B (int8)",
         family: "Qwen3-ASR",
+        languages: "",
         directory: "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
         repository: "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
         kind: CatalogKind::Asr,
@@ -149,8 +154,9 @@ pub const CATALOG: &[CatalogEntry] = &[
     // ---- 速度优先 ----
     CatalogEntry {
         id: "sensevoice-small",
-        name: "SenseVoice small · zh/en/ja/ko/yue（2025）",
+        name: "SenseVoice small（2025）",
         family: "SenseVoice",
+        languages: "zh/en/ja/ko/yue",
         directory: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
         repository: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
         kind: CatalogKind::Asr,
@@ -160,8 +166,9 @@ pub const CATALOG: &[CatalogEntry] = &[
     },
     CatalogEntry {
         id: "paraformer-zh",
-        name: "Paraformer zh · 2023-09-14",
+        name: "Paraformer · 2023-09-14",
         family: "Paraformer",
+        languages: "zh",
         directory: "sherpa-onnx-paraformer-zh-2023-09-14",
         repository: "csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14",
         kind: CatalogKind::Asr,
@@ -171,8 +178,9 @@ pub const CATALOG: &[CatalogEntry] = &[
     },
     CatalogEntry {
         id: "zipformer-ctc-small-zh",
-        name: "Zipformer CTC small · zh（体积最小）",
+        name: "Zipformer CTC small（体积最小）",
         family: "Zipformer CTC",
+        languages: "zh",
         directory: "sherpa-onnx-zipformer-ctc-small-zh-int8-2025-07-16",
         repository: "csukuangfj/sherpa-onnx-zipformer-ctc-small-zh-int8-2025-07-16",
         kind: CatalogKind::Asr,
@@ -183,8 +191,9 @@ pub const CATALOG: &[CatalogEntry] = &[
     // ---- 辅助 ----
     CatalogEntry {
         id: "punctuation-zh-en",
-        name: "CT-Transformer punctuation · zh/en",
+        name: "CT-Transformer punctuation",
         family: "Punctuation",
+        languages: "zh/en",
         directory: "punctuation-ct-transformer",
         repository: "csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12",
         kind: CatalogKind::Punctuation,
@@ -194,14 +203,24 @@ pub const CATALOG: &[CatalogEntry] = &[
     },
 ];
 
+/// Language label of a catalog entry by its exact directory name.
+pub fn languages_for_directory(directory: &str) -> Option<&'static str> {
+    CATALOG
+        .iter()
+        .find(|entry| entry.directory == directory)
+        .map(|entry| entry.languages)
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogState {
     pub id: String,
     pub name: String,
+    pub directory: String,
     pub family: String,
     pub kind: String,
     pub tier: String,
+    pub languages: String,
     pub bytes: u64,
     pub installed: bool,
 }
@@ -297,6 +316,7 @@ pub fn states(app_data: &Path) -> Vec<CatalogState> {
             CatalogState {
                 id: entry.id.to_owned(),
                 name: entry.name.to_owned(),
+                directory: entry.directory.to_owned(),
                 family: entry.family.to_owned(),
                 kind: match entry.kind {
                     CatalogKind::Asr => "asr",
@@ -304,6 +324,7 @@ pub fn states(app_data: &Path) -> Vec<CatalogState> {
                 }
                 .to_owned(),
                 tier: entry.tier.as_str().to_owned(),
+                languages: entry.languages.to_owned(),
                 bytes: entry.bytes,
                 installed,
             }

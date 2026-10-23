@@ -147,6 +147,9 @@ fn submit_fails_closed_without_an_authorized_root_and_outside_one() {
                 model_dir: None,
                 model_id: None,
                 owner: Some("cli".to_owned()),
+                node: None,
+                lan_model: None,
+                fallback_local: false,
             })
             .expect("submit response");
         assert!(!response.ok, "no roots must mean deny");
@@ -168,6 +171,9 @@ fn submit_fails_closed_without_an_authorized_root_and_outside_one() {
                 model_dir: None,
                 model_id: None,
                 owner: Some("cli".to_owned()),
+                node: None,
+                lan_model: None,
+                fallback_local: false,
             })
             .expect("submit response");
         assert!(!response.ok, "outside-root must be denied");
@@ -212,6 +218,9 @@ fn concurrent_clients_share_exactly_one_inference_worker() {
                     model_dir: Some(model_dir.to_string_lossy().into_owned()),
                     model_id: None,
                     owner: Some("cli".to_owned()),
+                    node: None,
+                    lan_model: None,
+                    fallback_local: false,
                 })
                 .expect("submit response");
             assert!(

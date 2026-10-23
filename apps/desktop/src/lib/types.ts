@@ -27,6 +27,7 @@ export type LibraryModelSummary = {
   id: string;
   displayName: string;
   family: string;
+  languages?: string | null;
   bytes: number;
   selected: boolean;
 };
@@ -34,9 +35,11 @@ export type LibraryModelSummary = {
 export type CatalogModel = {
   id: string;
   name: string;
+  directory: string;
   family: string;
   kind: "asr" | "punctuation";
   tier: "quality" | "speed" | "punctuation";
+  languages: string;
   bytes: number;
   installed: boolean;
 };
@@ -50,6 +53,30 @@ export type ModelDownloadEvent = {
   libraryId?: string;
 };
 
+export type AppPermissionStatus = {
+  microphone: "authorized" | "denied" | "restricted" | "not_determined" | "unknown";
+  screenCapture: "granted" | "denied" | "unknown";
+};
+
+export type LanDiagnostics = {
+  access: "granted" | "denied" | "no_network";
+  errno: number | null;
+  gateway: string | null;
+  tcpResult: string;
+  tcpErrno: number | null;
+  verdict: "ok" | "multicast_blocked" | "no_network" | "permission";
+  interfaces: LanHostInterface[];
+  version: string;
+  identifier: string;
+  executable: string;
+};
+
+export type LanHostRetention = {
+  mode: "off" | "age" | "size";
+  ageDays: number;
+  maxBytes: number;
+};
+
 export type StorageSummary = {
   libraryPath: string;
   libraryBytes: number;
@@ -60,6 +87,11 @@ export type StorageSummary = {
   jobsPath: string;
   jobsBytes: number;
   jobsCount: number;
+  lanHostPath: string;
+  lanHostBytes: number;
+  lanHostCount: number;
+  logsPath: string;
+  logsBytes: number;
   dataPath: string;
 };
 
@@ -145,7 +177,12 @@ export type SegmentEvent = {
 
 export type LanMode = "local_only" | "prefer_lan";
 
-export type LanHostInterface = { name: string; address: string; mask: string };
+export type LanHostInterface = {
+  name: string;
+  address: string;
+  mask: string;
+  kind: "lan" | "vpn" | "tailscale" | "other";
+};
 export type LanHostStatus = {
   supported: boolean;
   running: boolean;
@@ -153,6 +190,9 @@ export type LanHostStatus = {
   address: string;
   port: number;
   model: string;
+  mask: string;
+  subnet_filter: "same_subnet" | "none";
+  notice?: string | null;
 };
 
 export type LanNodeConfig = {
@@ -167,6 +207,14 @@ export type LanNodeConfig = {
 export type LanSettings = {
   mode: LanMode;
   nodes: LanNodeConfig[];
+  idle_unload_gui: number;
+  idle_unload_node: number;
+  share_on_launch: boolean;
+  lan_consent_acknowledged: boolean;
+  keep_running_in_background: boolean;
+  host_name: string;
+  host_address: string;
+  host_port: number;
 };
 
 export type LanNodeInfo = {

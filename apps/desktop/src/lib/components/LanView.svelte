@@ -4,10 +4,12 @@
   import { confirm } from "@tauri-apps/plugin-dialog";
 
   import Icon from "./Icon.svelte";
+import LanDiagnosticsPanel from "./LanDiagnosticsPanel.svelte";
   import { t } from "$lib/i18n.svelte";
   import type { MessageKey } from "$lib/i18n/messages/zh";
   import type {
     LanCollectReport,
+    LanDiagnostics,
     LanHostInterface,
     LanHostStatus,
     LanNodeConfig,
@@ -69,11 +71,62 @@
   let hostPort = $state(7878);
   let hostBusy = $state(false);
 
+  const hostChoices = $derived([
+    ...hostInterfaces.map((item) => ({
+      value: item.address,
+      label: `${item.name} · ${hostKindLabel(item.kind)} · ${item.address}`,
+    })),
+    { value: "0.0.0.0", label: t("lan.hostAllInterfaces") },
+  ]);
+
+  function hostKindLabel(kind: LanHostInterface["kind"]): string {
+    if (kind === "tailscale") return t("lan.hostKindTailscale");
+    if (kind === "vpn") return t("lan.hostKindVpn");
+    if (kind === "lan") return t("lan.hostKindLan");
+    return t("lan.hostKindOther");
+  }
+
+  /// 前缀长度；掩码保证是连续的 1。
+  function maskPrefix(mask: string): number {
+    return mask
+      .split(".")
+      .reduce((total, part) => total + ((Number(part) >>> 0).toString(2).match(/1/g)?.length ?? 0), 0);
+  }
+
+  function selectedScope(): string {
+    if (hostAddress === "0.0.0.0") return t("lan.hostScopeAll");
+    const item = hostInterfaces.find((entry) => entry.address === hostAddress);
+    return item && maskPrefix(item.mask) >= 31
+      ? t("lan.hostScopePointToPoint")
+      : t("lan.hostScopeSubnet");
+  }
+
+  function runningScope(): string {
+    if (!host) return "";
+    if (host.subnet_filter === "same_subnet") return t("lan.hostScopeSubnet");
+    return host.address === "0.0.0.0" ? t("lan.hostScopeAll") : t("lan.hostScopePointToPoint");
+  }
+
+  let restartNeeded = $state(false);
+  let lanHostUsage = $state<{ bytes: number; count: number } | null>(null);
+
   async function refreshHost() {
     if (!tauriAvailable) return;
     try {
       host = await invoke<LanHostStatus>("lan_host_status");
+      restartNeeded = await invoke<boolean>("lan_host_restart_needed");
+      try {
+        const storage = await invoke<{ lanHostBytes: number; lanHostCount: number }>("storage_summary");
+        lanHostUsage = { bytes: storage.lanHostBytes, count: storage.lanHostCount };
+      } catch {
+        lanHostUsage = null;
+      }
       hostInterfaces = await invoke<LanHostInterface[]>("lan_host_interfaces");
+      if (settings) {
+        if (!hostAddress) hostAddress = settings.host_address;
+        if (hostPort === 7878 && settings.host_port) hostPort = settings.host_port;
+        if (hostName === "Local Transcribe Mac" && settings.host_name) hostName = settings.host_name;
+      }
       if (!hostAddress || !hostInterfaces.some((item) => item.address === hostAddress)) {
         hostAddress = hostInterfaces[0]?.address ?? "";
       }
@@ -85,11 +138,26 @@
     hostBusy = true;
     error = "";
     try {
+      if (!host?.running && settings && !settings.lan_consent_acknowledged) {
+        const accepted = await confirm(t("lan.consentBody"), {
+          title: t("lan.consentTitle"),
+          kind: "warning",
+          okLabel: t("lan.consentAccept"),
+          cancelLabel: t("common.cancel"),
+        });
+        if (!accepted) return;
+        const saved = await invoke<LanSettings>("set_lan_settings", {
+          settings: { ...settings, lan_consent_acknowledged: true },
+        });
+        onSettingsSaved(saved);
+      }
       host = host?.running
         ? await invoke<LanHostStatus>("stop_lan_host")
         : await invoke<LanHostStatus>("start_lan_host", {
             name: hostName, address: hostAddress, port: Number(hostPort),
           });
+      const refreshed = await invoke<LanSettings>("get_lan_settings");
+      onSettingsSaved(refreshed);
     } catch (issue) { error = String(issue); }
     finally { hostBusy = false; }
   }
@@ -110,7 +178,7 @@
 
   async function saveNodes(nextNodes: LanNodeConfig[]): Promise<void> {
     const saved = await invoke<LanSettings>("set_lan_settings", {
-      settings: { mode: settings?.mode ?? "local_only", nodes: nextNodes },
+      settings: { ...settings, mode: settings?.mode ?? "local_only", nodes: nextNodes },
     });
     onSettingsSaved(saved);
   }
@@ -134,13 +202,28 @@
     }
   }
 
-  async function checkLocalAccess() {
+  let diag = $state<LanDiagnostics | null>(null);
+  let showDiag = $state(false);
+
+  async function refreshDiagnostics() {
     try {
-      localAccess = await invoke<"granted" | "denied" | "no_network">("lan_local_access");
+      diag = await invoke<LanDiagnostics>("lan_diagnostics");
+      // macOS 在授权后可能要过一会儿才把决定应用到新进程，单次探针失败
+      // 并不等于没授权；隔 700ms 再确认一次，避免误报。
+      if (diag.verdict === "permission") {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        diag = await invoke<LanDiagnostics>("lan_diagnostics");
+      }
+      localAccess = diag.access;
     } catch {
-      localAccess = null;
+      diag = null;
     }
   }
+
+  async function checkLocalAccess() {
+    await refreshDiagnostics();
+  }
+
 
   async function openLocalNetworkSettings() {
     error = "";
@@ -360,7 +443,7 @@
   onMount(() => {
     if (!tauriAvailable) return;
     void refreshHost();
-    void checkLocalAccess();
+    void refreshDiagnostics();
     refreshStatuses();
     // 任务状态 2 秒一轮（页面可见时才发请求）；节点在线状态 10 秒一轮。
     const taskTimer = window.setInterval(() => {
@@ -381,11 +464,26 @@
 <section class="content">
   <div class="title-row">
     <h1 class="page-title">{t("lan.title")}</h1>
-    <span class="temp">{t("lan.tempUi")}</span>
   </div>
   <p class="subtitle">{t("lan.subtitle")}</p>
 
-  {#if localAccess === "denied"}
+  {#if diag?.verdict === "multicast_blocked"}
+    <div class="perm" role="status">
+      <div class="perm-head">
+        <Icon name="warn" size={14} />
+        <span>{t("lan.multicastTitle")}</span>
+      </div>
+      <p class="perm-body">{t("lan.multicastBody")}</p>
+      <div class="perm-actions">
+        <button type="button" class="btn-secondary" onclick={() => void checkLocalAccess()}>
+          {t("lan.permissionRecheck")}
+        </button>
+        <button type="button" class="btn-secondary" onclick={() => (showDiag = true)}>
+          {t("lan.troubleshoot")}
+        </button>
+      </div>
+    </div>
+  {:else if localAccess === "denied"}
     <div class="perm" role="alert">
       <div class="perm-head">
         <Icon name="warn" size={14} />
@@ -393,14 +491,21 @@
       </div>
       <p class="perm-body">{t("lan.permissionBody")}</p>
       <div class="perm-actions">
-        <button type="button" class="btn primary" onclick={() => void openLocalNetworkSettings()}>
+        <button type="button" class="btn-secondary" onclick={() => void openLocalNetworkSettings()}>
           {t("lan.permissionAction")}
         </button>
-        <button type="button" class="btn" onclick={() => void checkLocalAccess()}>
+        <button type="button" class="btn-secondary" onclick={() => void checkLocalAccess()}>
           {t("lan.permissionRecheck")}
+        </button>
+        <button type="button" class="btn-secondary" onclick={() => (showDiag = true)}>
+          {t("lan.troubleshoot")}
         </button>
       </div>
     </div>
+  {/if}
+
+  {#if showDiag}
+    <LanDiagnosticsPanel onclose={() => (showDiag = false)} />
   {/if}
 
   {#if error}
@@ -414,7 +519,7 @@
     <div class="group host-sharing" aria-busy={hostBusy}>
       <div class="group-head">
         <div class="group-title" id="host-sharing-label">{t("lan.hostTitle")}</div>
-        <button type="button" class="btn" role="switch"
+        <button type="button" class="btn-secondary" role="switch"
           aria-labelledby="host-sharing-label" aria-describedby="host-sharing-description"
           aria-checked={host.running} disabled={hostBusy || (!host.running && !hostAddress)}
           onclick={() => void toggleHost()}>
@@ -422,8 +527,39 @@
         </button>
       </div>
       <p class="note" id="host-sharing-description">{t("lan.hostDesc")}</p>
+      <p class="note subtle">{t("lan.memoryHint")}</p>
+      {#if host.notice}
+        <p class="note scope warn" role="status">{host.notice}</p>
+      {/if}
+      {#if lanHostUsage}
+        <p class="note" role="status">{t("lan.hostUsage", { count: lanHostUsage.count, size: sizeLabel(lanHostUsage.bytes) })}</p>
+      {/if}
+      {#if restartNeeded}
+        <div class="banner" role="status">
+          <span>{t("lan.restartNeeded")}</span>
+          <button
+            type="button"
+            class="link-action"
+            disabled={hostBusy}
+            onclick={async () => {
+              hostBusy = true;
+              try {
+                await invoke("stop_lan_host");
+                host = await invoke<LanHostStatus>("start_lan_host", {
+                  name: hostName, address: hostAddress, port: Number(hostPort),
+                });
+                restartNeeded = false;
+              } catch (issue) {
+                error = String(issue);
+              } finally {
+                hostBusy = false;
+              }
+            }}>{t("lan.restartSharing")}</button>
+        </div>
+      {/if}
       {#if host.running}
         <div class="meta" role="status">{t("lan.hostRunning", { name: host.name, address: host.address, port: host.port })}</div>
+        <p class="note scope" class:warn={host.subnet_filter === "none"}>{runningScope()}</p>
       {:else}
         <div class="form-grid">
           <label class="field"><span>{t("lan.nodeFormName")}</span>
@@ -431,8 +567,8 @@
           </label>
           <label class="field"><span>{t("lan.hostInterface")}</span>
             <select bind:value={hostAddress} disabled={hostBusy}>
-              {#each hostInterfaces as item (item.address)}
-                <option value={item.address}>{item.name} · {item.address}</option>
+              {#each hostChoices as item (item.value)}
+                <option value={item.value}>{item.label}</option>
               {/each}
             </select>
           </label>
@@ -440,7 +576,8 @@
             <input type="number" min="1" max="65535" bind:value={hostPort} disabled={hostBusy} />
           </label>
         </div>
-        <button type="button" class="act" onclick={() => void refreshHost()} disabled={hostBusy}>{t("lan.hostRefresh")}</button>
+        <p class="note scope" class:warn={hostAddress === "0.0.0.0"}>{selectedScope()}</p>
+        <button type="button" class="link-action" onclick={() => void refreshHost()} disabled={hostBusy}>{t("lan.hostRefresh")}</button>
         {#if hostInterfaces.length === 0}<p class="note">{t("lan.hostNoInterface")}</p>{/if}
       {/if}
     </div>
@@ -449,7 +586,7 @@
   <div class="group">
     <div class="group-head">
       <div class="group-title">{t("lan.nodesTitle")}</div>
-      <button type="button" class="btn" onclick={() => void scan()} disabled={scanning}>
+      <button type="button" class="btn-secondary" onclick={() => void scan()} disabled={scanning}>
         <Icon name="search" size={12} stroke={1.8} />
         {scanning ? t("lan.scanning") : t("lan.scan")}
       </button>
@@ -473,7 +610,7 @@
               </div>
             </div>
             <div class="row-actions">
-              <button type="button" class="act" onclick={() => void addDiscovered(info)}>
+              <button type="button" class="link-action" onclick={() => void addDiscovered(info)}>
                 {t("lan.addDiscovered")}
               </button>
             </div>
@@ -483,6 +620,7 @@
     {:else if scanned}
       <p class="note">{t("lan.scanEmpty")}</p>
       <p class="note">{t("lan.scanEmptyHint")}</p>
+      <p class="note">{t("lan.scanEmptyTailnet")}</p>
     {/if}
 
     <div class="form">
@@ -494,7 +632,7 @@
         </label>
         <label class="field">
           <span>{t("lan.nodeFormHost")}</span>
-          <input type="text" bind:value={draft.host} placeholder="REDACTED-LAN-IP" />
+          <input type="text" bind:value={draft.host} placeholder="192.168.1.20" />
         </label>
         <label class="field small">
           <span>{t("lan.nodeFormPort")}</span>
@@ -502,11 +640,11 @@
         </label>
       </div>
       <div class="form-actions">
-        <button type="button" class="btn primary" onclick={() => void submitDraft()}>
+        <button type="button" class="btn-primary" onclick={() => void submitDraft()}>
           {draft.id === "" ? t("lan.saveNode") : t("lan.saveChanges")}
         </button>
         {#if draft.id !== ""}
-          <button type="button" class="btn" onclick={() => clearDraft()}>{t("common.cancel")}</button>
+          <button type="button" class="btn-secondary" onclick={() => clearDraft()}>{t("common.cancel")}</button>
         {/if}
       </div>
     </div>
@@ -563,22 +701,22 @@
             <div class="row-actions">
               <button
                 type="button"
-                class="act"
+                class="link-action"
                 onclick={() => void testNode(node)}
                 disabled={testingId === node.id}
               >
                 {testingId === node.id ? t("lan.testing") : t("lan.test")}
               </button>
-              <button type="button" class="act" onclick={() => fillDraft(node)}>{t("lan.editNode")}</button>
+              <button type="button" class="link-action" onclick={() => fillDraft(node)}>{t("lan.editNode")}</button>
               <button
                 type="button"
-                class="act"
+                class="link-action"
                 aria-label={t("lan.toggleEnable")}
                 onclick={() => void toggleNode(node)}
               >
                 {node.enabled ? t("lan.disabled") : t("lan.enabled")}
               </button>
-              <button type="button" class="act danger" onclick={() => void removeNode(node)}>
+              <button type="button" class="link-action link-danger" onclick={() => void removeNode(node)}>
                 {t("common.delete")}
               </button>
             </div>
@@ -627,12 +765,12 @@
             </div>
             <div class="td right" role="cell">
               {#if !["completed", "failed", "cancelled"].includes(task.state) && task.state !== "cancel_requested"}
-                <button type="button" class="act" onclick={() => void cancelTask(task)}>
+                <button type="button" class="link-action" onclick={() => void cancelTask(task)}>
                   {t("lan.actionCancel")}
                 </button>
               {/if}
               {#if task.state === "completed"}
-                <button type="button" class="act" onclick={() => void fetchResult(task)}>
+                <button type="button" class="link-action" onclick={() => void fetchResult(task)}>
                   {t("lan.actionFetch")}
                 </button>
               {/if}
@@ -648,7 +786,7 @@
           <span>{t("lan.collectLabel")}</span>
           <input type="text" bind:value={collectDir} placeholder={storages[selectedNode.id]?.data_dir ?? "/path/on/node"} />
         </label>
-        <button type="button" class="btn" onclick={() => void runCollect()} disabled={collecting}>
+        <button type="button" class="btn-secondary" onclick={() => void runCollect()} disabled={collecting}>
           <Icon name="download" size={12} stroke={1.8} />
           {collecting ? t("lan.collecting") : t("lan.collect")}
         </button>
@@ -665,7 +803,7 @@
         <div class="form-title">{t("lan.resultTitle")}</div>
         <pre class="snippet">{result.transcript}</pre>
         <div class="form-actions">
-          <button type="button" class="btn primary" onclick={() => void saveResult()}>
+          <button type="button" class="btn-secondary" onclick={() => void saveResult()}>
             {t("lan.actionSave")}
           </button>
           {#if savedNote}
@@ -702,17 +840,6 @@
     letter-spacing: -0.02em;
   }
 
-  /* 临时 UI 标注：视觉设计未定稿（macOS 设计未冻结是产品约束） */
-  .temp {
-    margin-left: auto;
-    padding: 3px 9px;
-    border-radius: 999px;
-    background: var(--chip);
-    color: var(--text-3);
-    font-size: 11px;
-    white-space: nowrap;
-  }
-
   .subtitle {
     width: 100%;
     max-width: 940px;
@@ -747,7 +874,7 @@
     margin: 14px auto 0;
     padding: 12px 14px;
     border-radius: 10px;
-    background: color-mix(in srgb, var(--orange, #d98b2b) 10%, transparent);
+    background: color-mix(in srgb, var(--permission-warning) 10%, transparent);
     color: var(--text-2);
   }
 
@@ -793,6 +920,10 @@
     color: var(--text-3);
   }
 
+  .note.subtle {
+    color: var(--text-3);
+  }
+
   .note {
     margin: 8px 2px 0;
     font-size: 11px;
@@ -805,29 +936,13 @@
     align-self: center;
   }
 
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 32px;
-    padding: 0 14px;
-    border-radius: 9px;
-    border: 1px solid var(--hairline-2);
-    background: var(--panel);
-    font-size: 13px;
-    color: var(--text);
-    cursor: default;
+  .note.scope {
+    margin-top: 2px;
+    font-size: 12px;
   }
 
-  .btn.primary {
-    border-color: transparent;
-    background: var(--accent);
-    color: #fff;
-    font-weight: 500;
-  }
-
-  .btn:disabled {
-    opacity: 0.55;
+  .note.scope.warn {
+    color: var(--red);
   }
 
   .list {
@@ -933,23 +1048,6 @@
     align-items: center;
     gap: 6px;
     flex: none;
-  }
-
-  .act {
-    border: 0;
-    background: none;
-    padding: 3px 6px;
-    font-size: 12px;
-    color: var(--accent-ink);
-    cursor: default;
-  }
-
-  .act.danger {
-    color: var(--red);
-  }
-
-  .act:disabled {
-    color: var(--text-3);
   }
 
   .form,

@@ -6,10 +6,11 @@ mod media;
 mod punctuation;
 
 pub use asr::{
-    idle_unload_seconds, inspect_model_directory, loaded_model_id, transcribe_file,
-    transcribe_file_cancellable, transcribe_file_streaming, transcribe_file_streaming_with_options,
-    LocalModel, ModelFamily, ModelFiles, TranscriptionOptions, TranscriptionProgress,
-    TranscriptionSegmentUpdate,
+    idle_unload_seconds, inspect_model_directory, loaded_model_id, set_idle_unload,
+    transcribe_file, transcribe_file_cancellable, transcribe_file_streaming,
+    transcribe_file_streaming_with_options, LocalModel, ModelFamily, ModelFiles,
+    TranscriptionOptions, TranscriptionProgress, TranscriptionSegmentUpdate,
+    DEFAULT_IDLE_UNLOAD_SECONDS, IDLE_UNLOAD_CHOICES,
 };
 pub use input_file::{InputFile, InputFileError};
 pub use jobs::{JobLease, JobState, JobStatus, JobStore};

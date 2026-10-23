@@ -46,6 +46,9 @@ struct TranscribeArgs {
         description = "Optional model id from list_models; omitted uses the selected model"
     )]
     model_id: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "Optional saved LAN node id from list_nodes; omitted runs locally")]
+    node_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -206,6 +209,36 @@ impl VoiceToTextServer {
         })
     }
 
+    /// Reject anything that is not a saved, enabled node id before any IPC or
+    /// network request. The MCP surface never accepts host/port/url.
+    fn validate_node(&self, node_id: &str) -> Result<(), String> {
+        let path = self.data_dir.join("lan-settings.json");
+        let bytes = fs::read(&path).map_err(|_| {
+            "No saved LAN node matches this id; add the node in the app first.".to_owned()
+        })?;
+        let settings: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| "The saved LAN settings are invalid.".to_owned())?;
+        let nodes = settings
+            .get("nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let node = nodes
+            .iter()
+            .find(|node| node.get("id").and_then(Value::as_str) == Some(node_id));
+        let Some(node) = node else {
+            return Err(format!("Unknown LAN node id: {node_id}"));
+        };
+        if !node
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(format!("The LAN node {node_id} is disabled."));
+        }
+        Ok(())
+    }
+
     fn connect(&self) -> Result<ServiceClient, String> {
         if let Ok(client) = ServiceClient::connect(&self.data_dir) {
             return Ok(client);
@@ -344,6 +377,17 @@ impl VoiceToTextServer {
         Ok(Json(reply))
     }
 
+    /// List saved LAN nodes with a short reachability probe.
+    #[tool(
+        name = "list_nodes",
+        description = "List saved LAN nodes, whether each is reachable, and its current model."
+    )]
+    async fn list_nodes(&self) -> Result<Json<serde_json::Value>, String> {
+        let mut client = self.connect()?;
+        let data = Self::data_of(client.request(&Request::LanNodes)?)?;
+        Ok(Json(data))
+    }
+
     /// Submit a local media file; returns immediately with a job ID.
     #[tool(
         name = "transcribe_file",
@@ -353,6 +397,9 @@ impl VoiceToTextServer {
         &self,
         Parameters(args): Parameters<TranscribeArgs>,
     ) -> Result<Json<JobReply>, String> {
+        if let Some(node_id) = args.node_id.as_deref() {
+            self.validate_node(node_id)?;
+        }
         let path = self.authorize_input(&args.path)?;
         let mut client = self.connect()?;
         let response = client.request(&Request::Submit {
@@ -360,6 +407,9 @@ impl VoiceToTextServer {
             model_dir: None,
             model_id: args.model_id,
             owner: Some("mcp".to_owned()),
+            node: args.node_id,
+            lan_model: None,
+            fallback_local: false,
         })?;
         if !response.ok {
             return Err(response
@@ -622,10 +672,92 @@ mod tests {
                 "get_job_status",
                 "list_jobs",
                 "list_models",
+                "list_nodes",
                 "retry_job",
                 "transcribe_file",
             ]
         );
+    }
+
+    #[test]
+    fn unknown_and_disabled_nodes_are_rejected_without_starting_a_service() {
+        let base = temp_root();
+        let allowed = base.join("allowed");
+        fs::create_dir_all(&allowed).unwrap();
+        let media = allowed.join("voice.wav");
+        fs::write(&media, b"x").unwrap();
+        let data = base.join("data");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(
+            data.join("lan-settings.json"),
+            r#"{"nodes":[
+                {"id":"known","name":"desk","host":"127.0.0.1","port":9,"enabled":true},
+                {"id":"off","name":"off","host":"127.0.0.1","port":9,"enabled":false}
+            ]}"#,
+        )
+        .unwrap();
+        let server = VoiceToTextServer::new(data.clone(), vec![allowed]).unwrap();
+        assert!(server.validate_node("known").is_ok());
+        assert!(server.validate_node("missing").is_err());
+        assert!(server.validate_node("off").is_err());
+
+        let args = TranscribeArgs {
+            path: media.to_string_lossy().into_owned(),
+            model_id: None,
+            node_id: Some("missing".to_owned()),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(server.transcribe_file(Parameters(args)));
+        assert!(result.is_err(), "unknown node must be rejected");
+        // Nothing tried to start the local service (no socket/port file).
+        assert!(!data.join("service.sock").exists());
+        assert!(!data.join("service.port").exists());
+    }
+
+    #[test]
+    fn unknown_node_id_makes_no_network_request() {
+        let base = temp_root();
+        let allowed = base.join("allowed");
+        fs::create_dir_all(&allowed).unwrap();
+        let media = allowed.join("voice.wav");
+        fs::write(&media, b"x").unwrap();
+        let data = base.join("data");
+        fs::create_dir_all(&data).unwrap();
+
+        // A real listener on the configured node address: any connection would
+        // be accepted here, so the test can prove the request never happened.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        fs::write(
+            data.join("lan-settings.json"),
+            format!(
+                r#"{{"nodes":[{{"id":"known","name":"desk","host":"127.0.0.1","port":{port},"enabled":true}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let server = VoiceToTextServer::new(data, vec![allowed]).unwrap();
+        let args = TranscribeArgs {
+            path: media.to_string_lossy().into_owned(),
+            model_id: None,
+            node_id: Some("missing".to_owned()),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = runtime.block_on(server.transcribe_file(Parameters(args)));
+        assert!(result.is_err(), "unknown node must be rejected");
+
+        listener.set_nonblocking(true).unwrap();
+        match listener.accept() {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Ok(_) => panic!("unknown node id must not open a network connection"),
+            Err(error) => panic!("unexpected accept error: {error}"),
+        }
     }
 
     #[test]

@@ -1,8 +1,11 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -117,28 +120,79 @@ pub struct TranscriptionSegmentUpdate {
 /// 整个进程空闲 120 秒后释放（见任务书：模型空闲卸载默认两分钟）。
 struct CachedRecognizer {
     model_id: String,
-    directory: std::path::PathBuf,
+    directory: PathBuf,
     recognizer: OfflineRecognizer,
-    last_used: std::time::Instant,
+    /// 最后一次使用结束的时间（进程启动以来的毫秒）。任务结束、成功、失败、
+    /// 取消都会刷新；空闲卸载只认这个值。
+    last_used_ms: Arc<AtomicU64>,
 }
 
-static RECOGNIZER_CACHE: std::sync::Mutex<Option<CachedRecognizer>> = std::sync::Mutex::new(None);
+static RECOGNIZER_CACHE: Mutex<Option<CachedRecognizer>> = Mutex::new(None);
+/// 驻留模型 id，供界面查询。独立于识别器缓存，因此转写期间查询不会阻塞。
+static CURRENT_MODEL: Mutex<Option<String>> = Mutex::new(None);
 static IDLE_UNLOADER: std::sync::Once = std::sync::Once::new();
+static CLOCK: OnceLock<Instant> = OnceLock::new();
 
-const IDLE_UNLOAD: std::time::Duration = std::time::Duration::from_secs(120);
+/// 五个闭合档位（秒）。永不提供「不卸载」。
+pub const IDLE_UNLOAD_CHOICES: [u64; 5] = [20, 120, 600, 1800, 7200];
+pub const DEFAULT_IDLE_UNLOAD_SECONDS: u64 = 120;
+
+static IDLE_UNLOAD: OnceLock<Duration> = OnceLock::new();
+
+/// 进程内一次性设定空闲卸载时长；必须在任何推理开始前调用。
+pub fn set_idle_unload(seconds: u64) -> Result<(), String> {
+    if !IDLE_UNLOAD_CHOICES.contains(&seconds) {
+        return Err(format!(
+            "idle unload must be one of {IDLE_UNLOAD_CHOICES:?} seconds; 'never' is not supported"
+        ));
+    }
+    IDLE_UNLOAD
+        .set(Duration::from_secs(seconds))
+        .map_err(|_| "idle unload was already set for this process".to_owned())
+}
+
+fn idle_unload() -> Duration {
+    *IDLE_UNLOAD.get_or_init(|| Duration::from_secs(DEFAULT_IDLE_UNLOAD_SECONDS))
+}
+
+fn now_ms() -> u64 {
+    CLOCK
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+/// 持有到一次转写结束；无论成功、失败还是取消，Drop 都会刷新使用时间。
+struct UseGuard(Arc<AtomicU64>);
+
+impl Drop for UseGuard {
+    fn drop(&mut self) {
+        self.0.store(now_ms(), Ordering::Relaxed);
+    }
+}
+
+fn expired(last_used_ms: u64, now_ms: u64, idle: Duration) -> bool {
+    now_ms.saturating_sub(last_used_ms) >= idle.as_millis() as u64
+}
 
 fn spawn_idle_unloader() {
     IDLE_UNLOADER.call_once(|| {
         std::thread::Builder::new()
             .name("model-idle-unload".to_owned())
             .spawn(|| loop {
-                std::thread::sleep(std::time::Duration::from_secs(5));
+                std::thread::sleep(Duration::from_secs(1));
+                let idle = idle_unload();
                 if let Ok(mut cache) = RECOGNIZER_CACHE.lock() {
-                    let expired = cache
-                        .as_ref()
-                        .is_some_and(|entry| entry.last_used.elapsed() >= IDLE_UNLOAD);
-                    if expired {
+                    let stale = cache.as_ref().is_some_and(|entry| {
+                        expired(entry.last_used_ms.load(Ordering::Relaxed), now_ms(), idle)
+                    });
+                    if stale {
                         *cache = None;
+                        if let Ok(mut current) = CURRENT_MODEL.lock() {
+                            *current = None;
+                        }
+                        eprintln!("[model] idle unload after {}s", idle_unload().as_secs());
                     }
                 }
             })
@@ -148,14 +202,14 @@ fn spawn_idle_unloader() {
 
 /// 当前确实驻留在内存中的模型 id（顶部绿点只认这个值）。
 pub fn loaded_model_id() -> Option<String> {
-    RECOGNIZER_CACHE
+    CURRENT_MODEL
         .lock()
         .ok()
-        .and_then(|cache| cache.as_ref().map(|entry| entry.model_id.clone()))
+        .and_then(|current| current.clone())
 }
 
 pub fn idle_unload_seconds() -> u64 {
-    IDLE_UNLOAD.as_secs()
+    idle_unload().as_secs()
 }
 
 const SUPPORTED_LAYOUTS: &str = "Supported layouts: sherpa-onnx Whisper ONNX exports (encoder + decoder + tokens.txt), sherpa-onnx Qwen3-ASR exports (conv_frontend.onnx + encoder/decoder + tokenizer/), sherpa-onnx FunASR Nano exports (embedding + encoder_adaptor + llm + tokenizer/), sherpa-onnx FireRedASR exports (encoder + decoder + tokens.txt), offline transducers (encoder + decoder + joiner + tokens.txt), and single-graph CTC exports: Paraformer, SenseVoice, FireRedASR2 CTC, Zipformer CTC, Dolphin or TeleSpeech (model.onnx + tokens.txt, keep the original folder name).";
@@ -806,13 +860,17 @@ pub fn transcribe_file_streaming_with_options(
             model_id: model.id.clone(),
             directory: model.directory.clone(),
             recognizer,
-            last_used: std::time::Instant::now(),
+            last_used_ms: Arc::new(AtomicU64::new(now_ms())),
         });
+        if let Ok(mut current) = CURRENT_MODEL.lock() {
+            *current = Some(model.id.clone());
+        }
     }
-    let recognizer = &cache
+    let entry = cache
         .as_ref()
-        .ok_or_else(|| "The model cache is unavailable.".to_owned())?
-        .recognizer;
+        .ok_or_else(|| "The model cache is unavailable.".to_owned())?;
+    let recognizer = &entry.recognizer;
+    let _use_guard = UseGuard(Arc::clone(&entry.last_used_ms));
     if is_cancelled() {
         return Err("Transcription was cancelled.".to_owned());
     }
@@ -868,9 +926,6 @@ pub fn transcribe_file_streaming_with_options(
         .map(|segment| segment.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    if let Some(entry) = cache.as_mut() {
-        entry.last_used = std::time::Instant::now();
-    }
     drop(cache);
 
     Ok(Transcript {
@@ -906,7 +961,11 @@ pub fn transcribe_file_streaming_with_options(
 
 #[cfg(test)]
 mod tests {
-    use super::{collapse_degenerate_repetitions, inspect_model_directory, ModelFamily};
+    use super::{
+        collapse_degenerate_repetitions, expired, inspect_model_directory, set_idle_unload,
+        ModelFamily, UseGuard, IDLE_UNLOAD_CHOICES,
+    };
+    use std::time::Duration;
     use std::{fs, path::PathBuf};
 
     fn fixture(name: &str) -> PathBuf {
@@ -988,6 +1047,40 @@ mod tests {
         touch(directory.join("model.int8.onnx"));
         touch(directory.join("tokens.txt"));
         assert!(inspect_model_directory(&directory).is_err());
+    }
+
+    #[test]
+    fn idle_unload_accepts_only_the_five_closed_values() {
+        for seconds in IDLE_UNLOAD_CHOICES {
+            assert!(seconds > 0);
+        }
+        // A process may set it only once, so the rejection path is asserted
+        // before any successful set in this test binary.
+        assert!(set_idle_unload(0).is_err());
+        assert!(set_idle_unload(999_999).is_err());
+        assert!(set_idle_unload(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn dropping_the_use_guard_refreshes_last_used() {
+        let last_used = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let _ = super::now_ms();
+        {
+            let _guard = UseGuard(std::sync::Arc::clone(&last_used));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(last_used.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn idle_expiry_uses_the_last_use_not_the_load_time() {
+        let idle = Duration::from_millis(200);
+        // Last use 150 ms ago: still resident.
+        assert!(!expired(1_000, 1_150, idle));
+        // Last use 250 ms ago: expires.
+        assert!(expired(1_000, 1_250, idle));
+        // Refreshing the timestamp resets the window.
+        assert!(!expired(1_250, 1_300, idle));
     }
 
     #[test]

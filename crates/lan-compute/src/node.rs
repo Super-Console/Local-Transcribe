@@ -57,6 +57,8 @@ pub struct NodeConfig {
     pub model_dir: Option<PathBuf>,
     /// Only paths inside this root may be written by `POST /api/v1/collect`.
     pub media_root: Option<PathBuf>,
+    /// Optional cleanup for received media (terminal tasks only, Trash).
+    pub retention_policy: Option<crate::retention::LanRetentionPolicy>,
 }
 
 impl Default for NodeConfig {
@@ -69,6 +71,7 @@ impl Default for NodeConfig {
             role: "auto".to_owned(),
             model_dir: None,
             media_root: None,
+            retention_policy: None,
         }
     }
 }
@@ -230,24 +233,33 @@ impl NodeServer {
             .port();
 
         let stopping = Arc::new(AtomicBool::new(false));
+        if let Some(policy) = &config.retention_policy {
+            if let Err(error) = crate::retention::apply(&config.data_dir, policy) {
+                eprintln!("[lan-node] retention skipped: {error}");
+            }
+        }
         let worker_thread = {
             let store = Arc::clone(&store);
             let stopping = Arc::clone(&stopping);
             let compute_enabled = config.compute_enabled;
             let models = Arc::clone(&models);
+            let retention = config.retention_policy.clone();
             std::thread::Builder::new()
                 .name("lan-compute-worker".to_owned())
-                .spawn(move || worker_loop(store, models, compute_enabled, stopping))
+                .spawn(move || worker_loop(store, models, compute_enabled, stopping, retention))
                 .map_err(|error| NodeError::Io(error.to_string()))?
         };
 
         // A loopback-only listener is never reachable through the LAN, so it
         // is not announced; registration failures are non-fatal either way.
-        let mdns = if config.listen.ip().is_loopback() {
-            eprintln!("[lan-node] loopback listener: mDNS announcement skipped");
-            None
-        } else {
-            register_mdns(&config, port, model_id.as_deref())
+        let mdns = match mdns_plan(config.listen.ip()) {
+            MdnsPlan::Announce(address) => {
+                register_mdns(&config, port, model_id.as_deref(), address)
+            }
+            MdnsPlan::Skip(reason) => {
+                eprintln!("[lan-node] mDNS announcement skipped ({reason})");
+                None
+            }
         };
 
         let shutdown = Arc::new(Notify::new());
@@ -343,6 +355,27 @@ impl NodeServer {
     }
 }
 
+/// Subnet filter actually applied to peers.
+///
+/// `/1`–`/30` keep the same-subnet rule (home/office LAN). `/31` and `/32`
+/// are point-to-point links (Tailscale, some VPNs) where "same subnet" has no
+/// meaning, so they allow every peer that can route to the bound address. A
+/// wildcard bind (`0.0.0.0`) is not scoped at all and never reaches here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubnetFilter {
+    SameSubnet,
+    None,
+}
+
+impl SubnetFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SubnetFilter::SameSubnet => "same_subnet",
+            SubnetFilter::None => "none",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct LanScope {
     address: Ipv4Addr,
@@ -352,17 +385,39 @@ struct LanScope {
 impl LanScope {
     fn new(address: Ipv4Addr, mask: Ipv4Addr) -> Result<Self, NodeError> {
         let bits = u32::from(mask);
-        if !address.is_private() || bits == 0 || (!bits & (!bits).wrapping_add(1)) != 0 {
+        // Any non-loopback IPv4 interface may be bound (Wi-Fi, Ethernet, USB,
+        // VPN, Tailscale). Wildcard binds use no scope at all.
+        if address.is_loopback()
+            || address.is_unspecified()
+            || bits == 0
+            || (!bits & (!bits).wrapping_add(1)) != 0
+        {
             return Err(NodeError::Configuration(
-                "Choose a private LAN address with a valid subnet mask.".into(),
+                "Choose a non-loopback IPv4 address with a valid subnet mask.".into(),
             ));
         }
         Ok(Self { address, mask })
     }
 
+    fn filter(self) -> SubnetFilter {
+        if u32::from(self.mask).leading_ones() >= 31 {
+            SubnetFilter::None
+        } else {
+            SubnetFilter::SameSubnet
+        }
+    }
+
     fn allows(self, peer: IpAddr) -> bool {
-        matches!(peer, IpAddr::V4(ip) if ip.is_private()
-            && (u32::from(ip) & u32::from(self.mask)) == (u32::from(self.address) & u32::from(self.mask)))
+        let IpAddr::V4(ip) = peer else {
+            return false;
+        };
+        match self.filter() {
+            SubnetFilter::None => true,
+            SubnetFilter::SameSubnet => {
+                (u32::from(ip) & u32::from(self.mask))
+                    == (u32::from(self.address) & u32::from(self.mask))
+            }
+        }
     }
 }
 
@@ -877,6 +932,7 @@ fn worker_loop(
     models: Arc<Vec<LocalModel>>,
     compute_enabled: bool,
     stopping: Arc<AtomicBool>,
+    retention: Option<crate::retention::LanRetentionPolicy>,
 ) {
     let mut cancel_seen: HashMap<String, Instant> = HashMap::new();
     while !stopping.load(Ordering::SeqCst) {
@@ -919,6 +975,11 @@ fn worker_loop(
                         },
                     );
                 }
+            }
+        }
+        if let Some(policy) = &retention {
+            if let Err(error) = crate::retention::apply(store.data_dir(), policy) {
+                eprintln!("[lan-node] retention skipped: {error}");
             }
         }
         std::thread::sleep(WORKER_POLL);
@@ -1013,10 +1074,102 @@ fn payload_path(store: &TaskStore, id: &str) -> PathBuf {
 // mDNS
 // ---------------------------------------------------------------------------
 
+/// Whether (and with which address) the node should announce itself.
+///
+/// mDNS is multicast and only reaches the local segment. Announcing a 100.x
+/// tailnet address to LAN neighbours would create a node they can see but
+/// never reach, so non-RFC1918 binds stay silent. A wildcard bind announces
+/// exactly one RFC1918 address and never `enable_addr_auto()` (which would
+/// publish every interface, tailnet included).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MdnsPlan {
+    Announce(Ipv4Addr),
+    Skip(&'static str),
+}
+
+fn mdns_plan(listen: IpAddr) -> MdnsPlan {
+    let IpAddr::V4(address) = listen else {
+        return MdnsPlan::Skip("ipv6");
+    };
+    if address.is_loopback() {
+        return MdnsPlan::Skip("loopback");
+    }
+    if address.is_private() {
+        return MdnsPlan::Announce(address);
+    }
+    if address.is_unspecified() {
+        return match wildcard_mdns_address() {
+            Some(candidate) => MdnsPlan::Announce(candidate),
+            None => MdnsPlan::Skip("no rfc1918 address"),
+        };
+    }
+    MdnsPlan::Skip("non-rfc1918")
+}
+
+/// One RFC1918 address to publish for a `0.0.0.0` bind: the routing-table
+/// choice when it is private, otherwise the first `en*` private address.
+fn wildcard_mdns_address() -> Option<Ipv4Addr> {
+    if let Some(IpAddr::V4(primary)) = detect_primary_ipv4() {
+        if primary.is_private() {
+            return Some(primary);
+        }
+    }
+    private_interface_addresses().into_iter().next()
+}
+
+#[cfg(unix)]
+fn private_interface_addresses() -> Vec<Ipv4Addr> {
+    use std::ffi::CStr;
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs owns the list until freeifaddrs.
+    unsafe {
+        if libc::getifaddrs(&mut head) != 0 {
+            return Vec::new();
+        }
+        let mut preferred = Vec::new();
+        let mut others = Vec::new();
+        let mut cursor = head;
+        while !cursor.is_null() {
+            let entry = &*cursor;
+            if !entry.ifa_addr.is_null()
+                && !entry.ifa_name.is_null()
+                && (*entry.ifa_addr).sa_family as i32 == libc::AF_INET
+                && entry.ifa_flags & libc::IFF_UP as u32 != 0
+                && entry.ifa_flags & libc::IFF_LOOPBACK as u32 == 0
+            {
+                let name = CStr::from_ptr(entry.ifa_name).to_string_lossy();
+                let address = Ipv4Addr::from(
+                    (*(entry.ifa_addr as *const libc::sockaddr_in))
+                        .sin_addr
+                        .s_addr
+                        .to_ne_bytes(),
+                );
+                if address.is_private() {
+                    if name.starts_with("en") {
+                        preferred.push(address);
+                    } else {
+                        others.push(address);
+                    }
+                }
+            }
+            cursor = entry.ifa_next;
+        }
+        libc::freeifaddrs(head);
+        preferred.extend(others);
+        preferred
+    }
+}
+
+#[cfg(not(unix))]
+fn private_interface_addresses() -> Vec<Ipv4Addr> {
+    Vec::new()
+}
+
 fn register_mdns(
     config: &NodeConfig,
     port: u16,
     model_id: Option<&str>,
+    address: Ipv4Addr,
 ) -> Option<(ServiceDaemon, String)> {
     let daemon = match ServiceDaemon::new() {
         Ok(daemon) => daemon,
@@ -1052,31 +1205,14 @@ fn register_mdns(
         sanitize_hostname(instance),
         uuid::Uuid::new_v4().simple()
     );
-    let address = if config.listen.ip().is_unspecified() {
-        detect_primary_ipv4()
-    } else {
-        Some(config.listen.ip())
-    };
-    let info = match address {
-        Some(address) => ServiceInfo::new(
-            MDNS_SERVICE_TYPE,
-            instance,
-            &hostname,
-            address,
-            port,
-            &properties[..],
-        ),
-        None => ServiceInfo::new(
-            MDNS_SERVICE_TYPE,
-            instance,
-            &hostname,
-            (),
-            port,
-            &properties[..],
-        ),
-    };
-    let info = match info {
-        Ok(info) if config.listen.ip().is_unspecified() => info.enable_addr_auto(),
+    let info = match ServiceInfo::new(
+        MDNS_SERVICE_TYPE,
+        instance,
+        &hostname,
+        IpAddr::V4(address),
+        port,
+        &properties[..],
+    ) {
         Ok(info) => info,
         Err(error) => {
             eprintln!("[lan-node] cannot build mDNS record: {error}");
@@ -1092,7 +1228,7 @@ fn register_mdns(
         let _ = daemon.shutdown();
         return None;
     }
-    eprintln!("[lan-node] announced {fullname}");
+    eprintln!("[lan-node] announced {fullname} at {address}:{port}");
     Some((daemon, fullname))
 }
 
@@ -1147,6 +1283,22 @@ fn unix_now_ms() -> u64 {
 mod lan_scope_tests {
     use super::*;
 
+    #[test]
+    fn mdns_plan_skips_non_rfc1918_loopback_and_announces_private() {
+        assert_eq!(
+            mdns_plan("100.64.0.1".parse().unwrap()),
+            MdnsPlan::Skip("non-rfc1918")
+        );
+        assert_eq!(
+            mdns_plan("127.0.0.1".parse().unwrap()),
+            MdnsPlan::Skip("loopback")
+        );
+        assert_eq!(
+            mdns_plan("192.168.1.2".parse().unwrap()),
+            MdnsPlan::Announce("192.168.1.2".parse().unwrap())
+        );
+    }
+
     #[tokio::test]
     async fn subnet_gate_rejects_real_http_and_ignores_forwarded_headers() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1181,14 +1333,8 @@ mod lan_scope_tests {
     }
 
     #[test]
-    fn scope_rejects_wildcard_loopback_public_vpn_and_invalid_masks() {
-        for ip in [
-            "0.0.0.0",
-            "127.0.0.1",
-            "8.8.8.8",
-            "100.64.0.1",
-            "169.254.1.1",
-        ] {
+    fn scope_rejects_wildcard_loopback_and_invalid_masks() {
+        for ip in ["0.0.0.0", "127.0.0.1"] {
             assert!(LanScope::new(ip.parse().unwrap(), "255.255.255.0".parse().unwrap()).is_err());
         }
         for mask in ["0.0.0.0", "255.0.255.0", "128.128.0.0"] {
@@ -1197,15 +1343,44 @@ mod lan_scope_tests {
     }
 
     #[test]
-    fn scope_allows_only_private_peers_in_the_selected_subnet() {
+    fn scope_accepts_tailscale_and_public_interface_addresses() {
+        // The addendum opens every non-loopback IPv4 interface, including
+        // Tailscale's 100.64/10 range and public tunnel addresses.
+        assert!(LanScope::new(
+            "100.64.0.1".parse().unwrap(),
+            "255.255.255.255".parse().unwrap()
+        )
+        .is_ok());
+        assert!(
+            LanScope::new("8.8.8.8".parse().unwrap(), "255.255.255.0".parse().unwrap()).is_ok()
+        );
+    }
+
+    #[test]
+    fn a_slash_24_scope_keeps_the_same_subnet_filter() {
         let scope = LanScope::new(
             "192.168.10.2".parse().unwrap(),
             "255.255.255.0".parse().unwrap(),
         )
         .unwrap();
+        assert_eq!(scope.filter(), SubnetFilter::SameSubnet);
+        assert_eq!(scope.filter().as_str(), "same_subnet");
         assert!(scope.allows("192.168.10.3".parse().unwrap()));
         for ip in ["192.168.11.3", "10.0.0.1", "8.8.8.8", "127.0.0.1", "::1"] {
             assert!(!scope.allows(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn point_to_point_masks_do_not_filter_peers() {
+        for mask in ["255.255.255.255", "255.255.255.254"] {
+            let scope =
+                LanScope::new("100.64.0.1".parse().unwrap(), mask.parse().unwrap()).unwrap();
+            assert_eq!(scope.filter(), SubnetFilter::None);
+            assert_eq!(scope.filter().as_str(), "none");
+            assert!(scope.allows("100.64.0.2".parse().unwrap()), "{mask}");
+            assert!(scope.allows("100.101.5.6".parse().unwrap()), "{mask}");
+            assert!(!scope.allows("::1".parse().unwrap()));
         }
     }
 }

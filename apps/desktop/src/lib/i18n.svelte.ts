@@ -70,6 +70,13 @@ function resolved(): Locale {
   return preference === "system" ? SYSTEM_LOCALE : preference;
 }
 
+function syncTrayLocale(): void {
+  const short = resolved().split("-")[0];
+  void invoke("set_tray_locale", { locale: short }).catch(() => {
+    /* browser preview or tray unavailable */
+  });
+}
+
 function applyDocumentLang(): void {
   if (typeof document !== "undefined") document.documentElement.lang = resolved();
 }
@@ -137,6 +144,8 @@ export function formatDayLabel(timestamp: number): string {
 }
 
 /** 列表时间：按语言习惯的小时制。 */
+import { invoke } from "@tauri-apps/api/core";
+
 export function formatClock(timestamp: number): string {
   return dateFormatter({ hour: "2-digit", minute: "2-digit" }).format(new Date(timestamp));
 }
@@ -154,8 +163,12 @@ export const locale = {
       /* ignore quota/privacy errors */
     }
     applyDocumentLang();
+    syncTrayLocale();
   },
   get resolved(): Locale {
     return resolved();
   },
 };
+
+// 原生托盘菜单不跟随 i18n，启动时同步一次。
+syncTrayLocale();

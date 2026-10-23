@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>局域网计算 — Local Transcribe（设计草稿）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,560;9..144,640&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="draft-bar">设计草稿 · <strong>产品名为工作名，视觉设计未定稿</strong> · 非最终发布物 · 2026-10</div>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="wordmark" href="index.html"><span class="glyph">✳</span> Local&nbsp;Transcribe <small>工作名</small></a>
+    <nav class="nav">
+      <a href="index.html">首页</a>
+      <a href="features.html">功能</a>
+      <a href="lan.html" aria-current="page">局域网计算</a>
+      <a href="ai.html">AI · BYOK</a>
+      <a href="download.html">下载</a>
+      <a href="privacy.html">隐私</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow">实验性功能 · 默认关闭</p>
+        <h1>把重活，交给<br>家里的另一台电脑。</h1>
+        <p class="lead">
+          笔记本收音、台式机出稿。局域网计算（V1.1）把转写任务交给同一网络里的另一台电脑——
+          文件只上传到你自己配对的节点，流量直连，没有云。
+        </p>
+        <div class="cta-row">
+          <a class="btn" href="download.html">获取节点程序</a>
+          <a class="btn btn-ghost" href="#security">安全边界</a>
+        </div>
+      </div>
+      <figure class="figure">
+        <svg viewBox="0 0 420 250" role="img" aria-label="笔记本配对台式机的示意">
+          <g fill="none" stroke="#211f1b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="26" y="66" width="128" height="88" rx="10"/>
+            <path d="M14 168 h152 l-12 -14 H26 z"/>
+            <rect x="266" y="52" width="128" height="132" rx="10"/>
+            <path d="M316 184 v14 M344 184 v14 M300 198 h60"/>
+            <path d="M170 118 h68" stroke-dasharray="5 7" stroke="#c0603a"/>
+            <circle cx="204" cy="118" r="13" fill="#e6dbc2" stroke="#c0603a"/>
+            <path d="M199 118 h10 M204 113 v10" stroke="#c0603a" stroke-width="2"/>
+          </g>
+          <g fill="#211f1b" opacity="0.8">
+            <rect x="48" y="88" width="84" height="6" rx="3"/>
+            <rect x="48" y="102" width="66" height="6" rx="3" opacity="0.6"/>
+            <rect x="48" y="116" width="76" height="6" rx="3" opacity="0.7"/>
+          </g>
+          <g fill="#c0603a">
+            <circle cx="296" cy="86" r="5"/><circle cx="312" cy="86" r="5" opacity="0.6"/><circle cx="328" cy="86" r="5" opacity="0.35"/>
+          </g>
+          <g fill="#211f1b" opacity="0.8">
+            <rect x="288" y="112" width="84" height="6" rx="3"/>
+            <rect x="288" y="126" width="70" height="6" rx="3" opacity="0.6"/>
+          </g>
+        </svg>
+        <figcaption>配对一次，此后发送、进度、取回都在应用里完成。</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">四步配对</p>
+        <h2>从两台机器到一个节点。</h2>
+      </div>
+      <ol class="steps">
+        <li>
+          <div>
+            <h3>在算力机上运行节点</h3>
+            <p><code>local-transcribe-node</code>：指定监听地址、数据目录、模型目录，节点自动生成或由你指定配对令牌。</p>
+            <pre><code>local-transcribe-node --name gaming-pc --listen 0.0.0.0:7878 \
+  --token &lt;你的配对令牌&gt; --compute on --role cpu \
+  --model-dir /path/to/paraformer</code></pre>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>在发送机上添加节点</h3>
+            <p>应用「局域网」视图：填名称、主机、端口、令牌；也可用 mDNS 自动发现（协议名 <code>_localtranscribe._tcp</code>）。</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>测试连接</h3>
+            <p>一眼看到节点是否在线、延迟多少、可用模型与角色、存储余量——每一项独立探测，令牌错误会明确显示，而不是含糊地「离线」。</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>发送与取回</h3>
+            <p>选择文件发送，分块上传支持断点续传；队列里看进度、可取消；完成后取回文字稿并归入本地历史。</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="security">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">安全边界</p>
+        <h2>只连你配对过的机器。</h2>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <span class="idx">认证</span>
+          <h3>Bearer 令牌</h3>
+          <p>节点的一切任务接口都要令牌；令牌只在配对时由你交换，不广播、不上传。</p>
+        </div>
+        <div class="card">
+          <span class="idx">网络</span>
+          <h3>局域网内直连</h3>
+          <p>明文 HTTP 仅用于受信局域网；客户端流量一律直连节点，不经过系统代理（Clash 等代理环境下同样可用）。</p>
+        </div>
+        <div class="card">
+          <span class="idx">范围</span>
+          <h3>只传媒体文件</h3>
+          <p>上传的只有你选择的媒体；模型不上传（节点用它自己的模型目录）；未来 AI 功能的 API Key 也不会下发到节点。</p>
+        </div>
+      </div>
+      <p class="faint" style="margin-top: 18px;">V1.1 为实验性功能、默认关闭。完整测试记录见仓库 <code>docs/testing/windows-early-beta-test-report.md</code>。</p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <span>Local Transcribe 为工作名 · 本页为设计草稿 · 最终视觉与命名未定稿</span>
+    <span>MIT License · <a href="privacy.html">隐私与数据边界</a> · <a href="download.html">下载</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -54,6 +54,21 @@ jobs:
       - name: Build Rust workspace (release)
         run: cargo build --workspace --release --locked
 
+      - name: Stage node sidecar for the MSI bundle
+        shell: pwsh
+        run: |
+          # Tauri externalBin 把 binaries/local-transcribe-node 解析为
+          # binaries/local-transcribe-node-<target-triple>（Windows 加 .exe）。
+          # 不拷贝则 MSI 不含节点，安装后无法监听 7878。
+          $src = Join-Path $env:GITHUB_WORKSPACE 'target/release/local-transcribe-node.exe'
+          if (-not (Test-Path -LiteralPath $src)) { throw "node sidecar missing at $src" }
+          $destDir = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/src-tauri/binaries'
+          New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+          $dest = Join-Path $destDir 'local-transcribe-node-x86_64-pc-windows-msvc.exe'
+          Copy-Item -LiteralPath $src -Destination $dest -Force
+          $hash = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLowerInvariant()
+          "SIDECAR=$dest SIZE=$((Get-Item -LiteralPath $dest).Length) SHA256=$hash"
+
       - name: Install frontend dependencies
         working-directory: apps/desktop
         run: npm ci

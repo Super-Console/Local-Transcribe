@@ -1,15 +1,20 @@
-//! macOS opt-in sharing. No startup listener or auto-start preference.
+//! macOS opt-in sharing. The GUI supervises a `local-transcribe-node` child
+//! process; it never hosts the node in-process.
 use std::{net::Ipv4Addr, path::Path, sync::Mutex};
 
 use serde::Serialize;
-use voice_to_text_core::LocalModel;
-use voice_to_text_lan::node::{NodeConfig, NodeServer, RunningNode};
+use voice_to_text_lan::node::SubnetFilter;
 
-#[derive(Clone, Serialize)]
+use crate::node_supervisor::NodeSupervisor;
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LanInterface {
     pub name: String,
     pub address: Ipv4Addr,
     pub mask: Ipv4Addr,
+    /// `lan`, `vpn`, `tailscale` or `other`; shown next to the address so the
+    /// user can tell a Wi-Fi/Ethernet interface from a tunnel.
+    pub kind: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -20,6 +25,13 @@ pub struct HostStatus {
     pub address: String,
     pub port: u16,
     pub model: String,
+    /// Mask actually in effect, e.g. `255.255.255.0` or `255.255.255.255`.
+    pub mask: String,
+    /// `same_subnet` (/1–/30) or `none` (/31, /32, 0.0.0.0).
+    pub subnet_filter: String,
+    /// Non-fatal notice, e.g. the saved interface disappeared at launch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
 }
 
 // 手动实现是有意的：`supported` 在 macOS 上必须为 true，而 `#[derive(Default)]`
@@ -35,103 +47,85 @@ impl Default for HostStatus {
             address: String::new(),
             port: 0,
             model: String::new(),
+            mask: String::new(),
+            subnet_filter: SubnetFilter::None.as_str().to_owned(),
+            notice: None,
         }
     }
 }
 
-struct HostedNode {
-    node: RunningNode,
-    status: HostStatus,
-}
-
 #[derive(Default)]
-pub struct HostState(Mutex<Option<HostedNode>>);
+pub struct HostState {
+    supervisor: Mutex<Option<NodeSupervisor>>,
+    notice: Mutex<Option<String>>,
+}
 
 impl HostState {
     pub fn status(&self) -> Result<HostStatus, String> {
-        Ok(self
-            .0
+        let mut guard = self
+            .supervisor
             .lock()
-            .map_err(|_| "Node state unavailable.")?
-            .as_ref()
-            .map(|host| host.status.clone())
-            .unwrap_or_default())
+            .map_err(|_| "Node state unavailable.")?;
+        let mut status = match guard.as_mut() {
+            Some(supervisor) => supervisor.status()?,
+            None => HostStatus::default(),
+        };
+        status.notice = self.notice.lock().ok().and_then(|notice| notice.clone());
+        Ok(status)
     }
 
-    #[cfg(all(test, target_os = "macos"))]
+    pub fn set_notice(&self, notice: Option<String>) {
+        if let Ok(mut current) = self.notice.lock() {
+            *current = notice;
+        }
+    }
+
+    /// Validate settings, then spawn the sidecar. Models are scanned by the
+    /// child itself; the GUI no longer assembles a model list.
     pub fn start(
         &self,
         root: &Path,
+        log_dir: &Path,
         name: String,
         address: String,
         port: u16,
-        model: LocalModel,
+        idle_unload: u64,
     ) -> Result<HostStatus, String> {
-        self.start_models(root, name, address, port, vec![model])
-    }
-
-    pub fn start_models(
-        &self,
-        root: &Path,
-        name: String,
-        address: String,
-        port: u16,
-        models: Vec<LocalModel>,
-    ) -> Result<HostStatus, String> {
-        let mut current = self.0.lock().map_err(|_| "Node state unavailable.")?;
-        if current.is_some() {
+        let mut guard = self
+            .supervisor
+            .lock()
+            .map_err(|_| "Node state unavailable.")?;
+        if guard.is_some() {
             return Err("Sharing is already running. Stop it before changing settings.".into());
         }
         if name.trim().is_empty() || name.len() > 80 || port == 0 {
             return Err("Enter a node name (1–80 bytes) and a port (1–65535).".into());
         }
-        let interface = interfaces()?
-            .into_iter()
-            .find(|item| item.address.to_string() == address)
-            .ok_or("Choose a currently connected private LAN interface.")?;
-        let data_dir = root.join("lan-host");
-        std::fs::create_dir_all(&data_dir).map_err(|_| "Cannot prepare node storage.")?;
-        let model_names = models
-            .iter()
-            .map(|model| model.display_name.clone())
-            .collect::<Vec<_>>()
-            .join(" · ");
-        let node = NodeServer::start_on_lan_with_models(
-            NodeConfig {
-                name: name.trim().into(),
-                data_dir,
-                listen: (interface.address, port).into(),
-                compute_enabled: true,
-                role: "cpu".into(),
-                model_dir: None,
-                media_root: None,
-            },
-            interface.mask,
-            models,
-        )
-        .map_err(|error| error.to_string())?;
-        let status = HostStatus {
-            supported: true,
-            running: true,
-            name: name.trim().into(),
-            address,
-            port: node.port(),
-            model: model_names,
-        };
-        *current = Some(HostedNode {
-            node,
-            status: status.clone(),
-        });
+        let mask = resolve_mask(&address)?;
+        let mut supervisor = NodeSupervisor::start(
+            root,
+            log_dir,
+            name.trim(),
+            &address,
+            port,
+            mask,
+            idle_unload,
+        )?;
+        let status = supervisor.status()?;
+        *guard = Some(supervisor);
+        self.set_notice(None);
         Ok(status)
     }
 
     pub fn stop(&self) -> Result<HostStatus, String> {
-        // Keep the lock until the socket and worker have stopped; no racing restart.
-        let mut current = self.0.lock().map_err(|_| "Node state unavailable.")?;
-        if let Some(host) = current.take() {
-            host.node.shutdown();
-            host.node.wait();
+        let mut guard = self
+            .supervisor
+            .lock()
+            .map_err(|_| "Node state unavailable.")?;
+        if let Some(supervisor) = guard.as_mut() {
+            supervisor.stop()?;
         }
+        *guard = None;
         Ok(HostStatus::default())
     }
 }
@@ -140,6 +134,56 @@ impl Drop for HostState {
     fn drop(&mut self) {
         let _ = self.stop();
     }
+}
+
+/// The mask comes from the selected interface. `0.0.0.0` is the explicit
+/// "all interfaces" choice and carries no scope; anything else must match a
+/// connected interface, so a vanished adapter can never be silently replaced.
+fn resolve_mask(address: &str) -> Result<Ipv4Addr, String> {
+    if address == "0.0.0.0" {
+        return Ok(Ipv4Addr::UNSPECIFIED);
+    }
+    // Test-only: loopback never appears in `interfaces()` and cannot be picked
+    // in the UI, but supervisor tests bind it to avoid touching the LAN.
+    if address == "127.0.0.1" {
+        return Ok(Ipv4Addr::new(255, 255, 255, 255));
+    }
+    interfaces()?
+        .into_iter()
+        .find(|item| item.address.to_string() == address)
+        .map(|item| item.mask)
+        .ok_or_else(|| "Choose a currently connected network interface.".to_owned())
+}
+
+/// Classify one IPv4 interface. Link-local and loopback addresses are not
+/// usable for sharing and are dropped here.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn classify(name: &str, address: Ipv4Addr) -> Option<&'static str> {
+    if address.is_loopback() || address.is_unspecified() || address.is_link_local() {
+        return None;
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower.starts_with("utun") && is_tailscale_cgnat(address) {
+        return Some("tailscale");
+    }
+    if lower.starts_with("utun")
+        || lower.starts_with("tun")
+        || lower.starts_with("tap")
+        || lower.starts_with("ppp")
+        || lower.starts_with("ipsec")
+    {
+        return Some("vpn");
+    }
+    if lower.starts_with("en") || lower.starts_with("eth") {
+        return Some("lan");
+    }
+    Some("other")
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn is_tailscale_cgnat(address: Ipv4Addr) -> bool {
+    let octets = address.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
 }
 
 #[cfg(target_os = "macos")]
@@ -178,18 +222,19 @@ pub fn interfaces() -> Result<Vec<LanInterface>, String> {
                         .s_addr
                         .to_ne_bytes(),
                 );
-                // en*: physical Ethernet / Wi-Fi, not VPN/tunnel/bridge listeners.
-                if name.starts_with("en") && address.is_private() {
+                if let Some(kind) = classify(&name, address) {
                     result.push(LanInterface {
                         name,
                         address,
                         mask,
+                        kind: kind.to_owned(),
                     });
                 }
             }
             cursor = entry.ifa_next;
         }
         libc::freeifaddrs(head);
+        result.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(result)
     }
 }
@@ -199,183 +244,34 @@ pub fn interfaces() -> Result<Vec<LanInterface>, String> {
     Ok(Vec::new())
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{HostStatus, classify, resolve_mask};
 
     #[test]
-    fn sharing_is_off_by_default_and_stop_is_idempotent() {
-        let state = HostState::default();
-        assert!(!state.status().unwrap().running);
-        assert!(!state.stop().unwrap().running);
-        assert!(!state.stop().unwrap().running);
-    }
-
-    #[test]
-    #[ignore = "opens a short-lived listener on a real Mac LAN interface; no real inference"]
-    fn mac_host_start_auth_stop_restart_and_port_conflict() {
-        use voice_to_text_lan::client::LanClient;
-        let interface = interfaces()
-            .unwrap()
-            .into_iter()
-            .next()
-            .expect("a private Wi-Fi/Ethernet interface");
-        let root = std::env::temp_dir().join(format!("lan-host-{}", uuid::Uuid::new_v4()));
-        let model_dir = root.join("paraformer-fixture");
-        std::fs::create_dir_all(&model_dir).unwrap();
-        std::fs::write(
-            model_dir.join("model.onnx"),
-            b"layout-only fixture, not a real model",
-        )
-        .unwrap();
-        std::fs::write(model_dir.join("tokens.txt"), b"a 1\n").unwrap();
-        let model = voice_to_text_core::inspect_model_directory(&model_dir).unwrap();
-        let port = {
-            let reservation = std::net::TcpListener::bind((interface.address, 0)).unwrap();
-            reservation.local_addr().unwrap().port()
-        };
-        let state = HostState::default();
-        assert!(
-            state
-                .start(&root, "test".into(), "0.0.0.0".into(), port, model.clone())
-                .is_err()
-        );
-        let status = state
-            .start(
-                &root,
-                "test".into(),
-                interface.address.to_string(),
-                port,
-                model.clone(),
-            )
-            .unwrap();
-        assert!(status.running);
-        std::net::TcpStream::connect_timeout(
-            &(interface.address, port).into(),
-            std::time::Duration::from_secs(3),
-        )
-        .expect("the newly bound private-address socket must accept a TCP connection");
-        assert!(
-            state
-                .start(
-                    &root,
-                    "test".into(),
-                    interface.address.to_string(),
-                    port,
-                    model.clone()
-                )
-                .is_err()
-        );
-        let client = LanClient::new(interface.address.to_string(), port);
-        tauri::async_runtime::block_on(async {
-            assert!(client.health().await.unwrap());
-            assert!(client.capabilities().await.unwrap().compute_enabled);
-            assert_eq!(client.models().await.unwrap().len(), 1);
-        });
-        assert!(!state.stop().unwrap().running);
-        assert!(
-            std::net::TcpStream::connect_timeout(
-                &(interface.address, port).into(),
-                std::time::Duration::from_secs(1)
-            )
-            .is_err()
-        );
-        let occupied = std::net::TcpListener::bind((interface.address, port)).unwrap();
-        assert!(
-            state
-                .start(
-                    &root,
-                    "test".into(),
-                    interface.address.to_string(),
-                    port,
-                    model.clone()
-                )
-                .is_err()
-        );
-        assert!(!state.status().unwrap().running);
-        drop(occupied);
-        assert!(
-            state
-                .start(
-                    &root,
-                    "test".into(),
-                    interface.address.to_string(),
-                    port,
-                    model
-                )
-                .unwrap()
-                .running
-        );
-        assert!(!root.join("lan-host/pairing-token").exists());
-        state.stop().unwrap();
-    }
-
-    #[test]
-    #[ignore = "real Mac LAN interface, installed model and approved local media fixture required"]
-    fn mac_host_transcribes_an_upload_with_a_real_model() {
-        use voice_to_text_lan::{client::LanClient, protocol::TaskState};
-        let interface = interfaces()
-            .unwrap()
-            .into_iter()
-            .next()
-            .expect("a private LAN interface");
-        let model = voice_to_text_core::inspect_model_directory(
-            std::env::var_os("VOICE_TO_TEXT_TEST_MODEL_DIR").expect("model fixture"),
-        )
-        .unwrap();
-        let media = std::path::PathBuf::from(
-            std::env::var_os("VOICE_TO_TEXT_TEST_MEDIA").expect("media fixture"),
-        );
-        let original = std::fs::read(&media).unwrap();
-        let root = std::env::temp_dir().join(format!("lan-host-real-{}", uuid::Uuid::new_v4()));
-        let port = std::net::TcpListener::bind((interface.address, 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let state = HostState::default();
-        state
-            .start(
-                &root,
-                "local-validation".into(),
-                interface.address.to_string(),
-                port,
-                model,
-            )
-            .unwrap();
-        let client = LanClient::new(interface.address.to_string(), port);
-        tauri::async_runtime::block_on(async {
-            let task = client
-                .create_task("fixture.wav", original.len() as u64, 1, None)
-                .await
-                .unwrap();
-            client
-                .upload_file(&task.id, &media, 4 * 1024 * 1024, |_, _| {})
-                .await
-                .unwrap();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-            loop {
-                let current = client.task(&task.id).await.unwrap();
-                if current.state.is_terminal() {
-                    assert_eq!(current.state, TaskState::Completed);
-                    break;
-                }
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "transcription timed out"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
-            let result = client.result(&task.id).await.unwrap();
-            assert!(!result.transcript.trim().is_empty());
-            assert!(result.duration_ms > 0);
-        });
+    fn tailscale_and_lan_interfaces_are_listed_and_loopback_is_not() {
         assert_eq!(
-            original,
-            std::fs::read(media).unwrap(),
-            "source media stays unchanged"
+            classify("utun4", "100.64.0.1".parse().unwrap()),
+            Some("tailscale")
         );
-        state.stop().unwrap();
-        assert!(!state.status().unwrap().running);
+        assert_eq!(
+            classify("en0", "192.168.1.20".parse().unwrap()),
+            Some("lan")
+        );
+        assert_eq!(classify("utun0", "10.8.0.2".parse().unwrap()), Some("vpn"));
+        assert_eq!(classify("lo0", "127.0.0.1".parse().unwrap()), None);
+        assert_eq!(classify("en5", "169.254.10.2".parse().unwrap()), None);
+    }
+
+    #[test]
+    fn status_defaults_to_stopped_without_filtering_text() {
+        let status = HostStatus::default();
+        assert!(!status.running);
+        assert_eq!(status.subnet_filter, "none");
+    }
+
+    #[test]
+    fn wildcard_address_needs_no_interface() {
+        assert_eq!(resolve_mask("0.0.0.0").unwrap().to_string(), "0.0.0.0");
     }
 }

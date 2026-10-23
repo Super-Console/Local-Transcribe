@@ -14,6 +14,8 @@ Thumbs.db
 /dist/
 /.tauri/
 /src-tauri/target/
+# 编译出的 sidecar 二进制（CI 与本地构建各自产出，不入库）
+/apps/desktop/src-tauri/binaries/
 
 # Local secrets and runtime state
 .env

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick, type Snippet } from "svelte";
   import Icon from "./Icon.svelte";
   import { t } from "$lib/i18n.svelte";
   import type { Segment } from "$lib/types";
@@ -8,19 +9,35 @@
     segments,
     running = false,
     initialFollow = true,
+    onBack,
+    heading,
+    actions,
   }: {
     jobId: string | null;
     segments: Segment[];
     running?: boolean;
     /** 历史详情等静态场景传 false：从顶部开始，不自动跟随到底部。 */
     initialFollow?: boolean;
+    onBack?: () => void;
+    heading?: Snippet;
+    actions?: Snippet;
   } = $props();
 
   let scroller = $state<HTMLDivElement | null>(null);
+  let bodyEl = $state<HTMLDivElement | null>(null);
+  let findInput = $state<HTMLInputElement | null>(null);
   let following = $state(true);
   let programmatic = false;
   let restoredFor = $state<string | null>(null);
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let findOpen = $state(false);
+  let query = $state("");
+  let current = $state(0);
+
+  let atTop = $state(true);
+  let atBottom = $state(false);
+  let short = $state(false);
 
   const key = $derived(jobId ? `lt.reader.${jobId}` : null);
   const prefersReducedMotion =
@@ -65,7 +82,17 @@
     }
   }
 
+  function measure() {
+    if (!scroller) return;
+    const top = scroller.scrollTop;
+    const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    atTop = top <= 2;
+    atBottom = max - top <= 2;
+    short = max <= 2;
+  }
+
   function onScroll() {
+    measure();
     if (!scroller || programmatic) return;
     const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
     if (distance > 48 && following) {
@@ -86,6 +113,7 @@
     requestAnimationFrame(() => {
       restore();
       if (following && scroller) scrollToBottom("auto");
+      measure();
     });
   });
 
@@ -96,79 +124,261 @@
     requestAnimationFrame(() => scrollToBottom(prefersReducedMotion ? "auto" : "smooth"));
   });
 
+  // 内容或窗口尺寸变化后重新判定两端与是否可滚动。
+  $effect(() => {
+    segments.length;
+    requestAnimationFrame(measure);
+    if (typeof window === "undefined") return;
+    const onResize = () => measure();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  });
+
   const showLatest = $derived(!following);
 
-  // ---- 本文内搜索：过滤命中段落并高亮 ----
-  let query = $state("");
-  const needle = $derived(query.trim().toLowerCase());
-  const visible = $derived(
-    needle ? segments.filter((segment) => segment.text.toLowerCase().includes(needle)) : segments,
-  );
-  const matchCount = $derived(visible.length);
+  // ---- 本篇内查找：所有命中都保留在正文里，当前命中单独描边 ----
+  type Piece = { text: string; hit: boolean; index: number };
 
-  function parts(text: string, target: string): Array<{ text: string; hit: boolean }> {
-    if (!target) return [{ text, hit: false }];
-    const lowered = text.toLowerCase();
-    const out: Array<{ text: string; hit: boolean }> = [];
+  const needle = $derived(query.trim().toLowerCase());
+  const model = $derived.by(() => {
     let index = 0;
-    while (index < text.length) {
-      const found = lowered.indexOf(target, index);
-      if (found === -1) {
-        out.push({ text: text.slice(index), hit: false });
-        break;
+    const rows = segments.map((segment) => {
+      const text = segment.text;
+      const pieces: Piece[] = [];
+      if (!needle) {
+        pieces.push({ text, hit: false, index: -1 });
+        return { pieces };
       }
-      if (found > index) out.push({ text: text.slice(index, found), hit: false });
-      out.push({ text: text.slice(found, found + target.length), hit: true });
-      index = found + target.length;
-    }
-    return out;
+      const lowered = text.toLowerCase();
+      let cursor = 0;
+      while (cursor < text.length) {
+        const found = lowered.indexOf(needle, cursor);
+        if (found === -1) {
+          pieces.push({ text: text.slice(cursor), hit: false, index: -1 });
+          break;
+        }
+        if (found > cursor) {
+          pieces.push({ text: text.slice(cursor, found), hit: false, index: -1 });
+        }
+        pieces.push({
+          text: text.slice(found, found + needle.length),
+          hit: true,
+          index: index++,
+        });
+        cursor = found + needle.length;
+      }
+      return { pieces };
+    });
+    return { rows, total: index };
+  });
+  const totalHits = $derived(model.total);
+
+  $effect(() => {
+    needle;
+    current = 0;
+  });
+
+  async function scrollToCurrent() {
+    await tick();
+    if (!scroller) return;
+    const el = bodyEl?.querySelector<HTMLElement>(`mark[data-hit="${current}"]`);
+    if (!el) return;
+    const mark = el.getBoundingClientRect();
+    const frame = scroller.getBoundingClientRect();
+    scroller.scrollTop += mark.top - frame.top - scroller.clientHeight / 2 + mark.height / 2;
+    measure();
   }
+
+  $effect(() => {
+    current;
+    totalHits;
+    if (findOpen && totalHits > 0) void scrollToCurrent();
+  });
+
+  async function openFind() {
+    findOpen = true;
+    await tick();
+    findInput?.focus();
+    findInput?.select();
+    if (totalHits > 0) void scrollToCurrent();
+  }
+
+  function closeFind() {
+    findOpen = false;
+    query = "";
+    current = 0;
+    scroller?.focus();
+  }
+
+  function step(delta: number) {
+    if (totalHits === 0) return;
+    current = (current + delta + totalHits) % totalHits;
+  }
+
+  function onFindKeydown(event: KeyboardEvent) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeFind();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      step(event.shiftKey ? -1 : 1);
+    }
+  }
+
+  function onWindowKeydown(event: KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      void openFind();
+    } else if (event.key === "Escape" && findOpen) {
+      event.preventDefault();
+      closeFind();
+    }
+  }
+
+  // Native listener + ResizeObserver: the class toggles must follow the real
+  // scroll position even when the reader restores a saved position.
+  $effect(() => {
+    const element = scroller;
+    if (!element) return;
+    const onNativeScroll = () => measure();
+    element.addEventListener("scroll", onNativeScroll, { passive: true });
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(element);
+    requestAnimationFrame(measure);
+    return () => {
+      element.removeEventListener("scroll", onNativeScroll);
+      observer.disconnect();
+    };
+  });
+
+  $effect(() => {
+    window.addEventListener("keydown", onWindowKeydown);
+    return () => window.removeEventListener("keydown", onWindowKeydown);
+  });
 </script>
 
 <div class="reader-wrap">
-  {#if segments.length > 0}
-    <div class="reader-tools">
-      {#if needle}
-        <span class="count">
-          {matchCount === 0 ? t("reader.noMatch") : t("reader.matchCount", { count: matchCount })}
-        </span>
-      {/if}
-      <div class="search">
-        <Icon name="search" size={13} stroke={1.6} />
-        <input
-          type="text"
-          autocomplete="off"
-          autocorrect="off"
-          spellcheck="false"
-          value={query}
-          placeholder={t("reader.searchPlaceholder")}
-          aria-label={t("reader.searchPlaceholder")}
-          oninput={(event) => (query = event.currentTarget.value)}
-        />
-        {#if query}
-          <button type="button" class="clear" aria-label={t("search.clear")} title={t("search.clear")} onclick={() => (query = "")}>×</button>
+  <div
+    class="reader-shell"
+    class:at-top={atTop}
+    class:at-bottom={atBottom}
+    class:short
+  >
+    <div
+      class="reader-scroll"
+      bind:this={scroller}
+      onscroll={onScroll}
+      tabindex="-1"
+      aria-live={running ? "polite" : "off"}
+    >
+      <div class="reader-content">
+      <div class="reader-head">
+        {#if heading}
+          {@render heading()}
         {/if}
       </div>
-    </div>
-  {/if}
-  <div class="reader" bind:this={scroller} onscroll={onScroll} tabindex="-1" aria-live={running ? "polite" : "off"}>
-    {#if segments.length === 0}
-      <p class="placeholder">{running ? t("reader.recognizing") : t("reader.noText")}</p>
-    {:else if visible.length === 0}
-      <p class="placeholder">{t("reader.noMatch")}</p>
-    {:else}
-      {#each visible as segment, index (index)}
-        <p>
-          {#each parts(segment.text, needle) as part}
-            {#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}
+
+      {#if findOpen}
+        <div class="find-row" role="search">
+          <Icon name="search" size={13} stroke={1.6} />
+          <input
+            bind:this={findInput}
+            type="text"
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+            value={query}
+            placeholder={t("reader.searchPlaceholder")}
+            aria-label={t("reader.searchPlaceholder")}
+            oninput={(event) => (query = event.currentTarget.value)}
+            onkeydown={onFindKeydown}
+          />
+          <span class="find-count" aria-live="polite">
+            {totalHits === 0 ? "0 / 0" : `${current + 1} / ${totalHits}`}
+          </span>
+          <button
+            type="button"
+            class="find-btn"
+            title={t("reader.findPrevious")}
+            aria-label={t("reader.findPrevious")}
+            onclick={() => step(-1)}
+          >↑</button>
+          <button
+            type="button"
+            class="find-btn"
+            title={t("reader.findNext")}
+            aria-label={t("reader.findNext")}
+            onclick={() => step(1)}
+          >↓</button>
+          <button
+            type="button"
+            class="find-btn"
+            title={t("reader.findClose")}
+            aria-label={t("reader.findClose")}
+            onclick={closeFind}
+          >×</button>
+        </div>
+      {/if}
+
+      <div class="reader-body" bind:this={bodyEl}>
+        {#if segments.length === 0}
+          <p class="placeholder">{running ? t("reader.recognizing") : t("reader.noText")}</p>
+        {:else}
+          {#each model.rows as row, index (index)}
+            <p>
+              {#each row.pieces as piece}
+                {#if piece.hit}
+                  <mark class:current={piece.index === current} data-hit={piece.index}>{piece.text}</mark>
+                {:else}
+                  {piece.text}
+                {/if}
+              {/each}
+            </p>
           {/each}
-        </p>
-      {/each}
-    {/if}
+        {/if}
+      </div>
+      </div>
+    </div>
+
+    <div class="reader-fade" aria-hidden="true"></div>
+    <div class="fade-bottom" aria-hidden="true"></div>
+
+    <div class="reader-bar">
+      {#if onBack}
+        <button type="button" class="back btn-secondary" onclick={onBack}>
+          <Icon name="chevronLeft" size={13} stroke={1.7} />
+          <span>{t("nav.home")}</span>
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="find-toggle btn-secondary"
+        class:open={findOpen}
+        title={t("reader.findOpen")}
+        aria-label={t("reader.findOpen")}
+        onclick={() => void openFind()}
+      >
+        <span>{t("reader.findOpen")}</span>
+        <kbd>⌘F</kbd>
+      </button>
+      <span class="bar-spacer"></span>
+      {#if actions}
+        {@render actions()}
+      {/if}
+    </div>
   </div>
 
   {#if showLatest}
-    <button type="button" class="latest" onclick={() => { following = true; scrollToBottom(prefersReducedMotion ? "auto" : "smooth"); save(); }}>
+    <button
+      type="button"
+      class="latest btn-secondary"
+      onclick={() => {
+        following = true;
+        scrollToBottom(prefersReducedMotion ? "auto" : "smooth");
+        save();
+      }}
+    >
       {t("reader.viewLatest")}
       <Icon name="arrowDown" size={12} stroke={1.7} />
     </button>
@@ -182,37 +392,163 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+    pointer-events: none;
   }
 
-  .reader-tools {
+  .reader-shell {
+    --reader-fade-height: 72px;
+    --reader-bar-height: 40px;
+    --reader-content-clearance: 8px;
+    /* Content starts after (fade height - bar height) + 8px clearance.
+       With 72px / 40px this is 40px; changing fade height updates it. */
+    --reader-content-padding-top: calc(
+      var(--reader-fade-height) - var(--reader-bar-height) + var(--reader-content-clearance)
+    );
+    isolation: isolate;
+    pointer-events: auto;
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    border-radius: var(--radius);
+  }
+
+  .reader-scroll {
+    pointer-events: auto;
+    position: absolute;
+    top: var(--reader-bar-height);
+    right: 0;
+    bottom: 0;
+    left: 0;
+    overflow-y: auto;
+    padding: 0 0 40px;
+    border-radius: var(--radius);
+    background: transparent;
+  }
+
+  .reader-scroll:focus {
+    outline: none;
+  }
+
+  .reader-content {
+    padding-top: var(--reader-content-padding-top);
+  }
+
+  .reader-bar {
+    /* Keep --fill opaque here without changing fills elsewhere in the app. */
+    --fill: var(--reader-solid-fill);
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 3;
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    gap: 10px;
-    padding: 0 0 8px;
-    max-width: 720px;
-    width: 100%;
-    margin: 0 auto;
+    gap: 8px;
+    height: var(--reader-bar-height);
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    pointer-events: none;
   }
 
-  .count {
-    font-size: 12.5px;
+  .reader-bar :global(button),
+  .reader-bar :global(input) {
+    pointer-events: auto;
+  }
+
+  .reader-fade {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--reader-fade-height);
+    z-index: 2;
+    background: linear-gradient(to bottom,
+      var(--reader-fade) 0px,
+      var(--reader-fade) var(--reader-bar-height),
+      color-mix(in srgb, var(--reader-fade) 80%, transparent)
+        calc((var(--reader-bar-height) + var(--reader-fade-height)) / 2),
+      transparent var(--reader-fade-height));
+    pointer-events: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  .fade-bottom {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 24px;
+    z-index: 2;
+    background: linear-gradient(to bottom, transparent, var(--reader-fade));
+    pointer-events: none;
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+
+  .reader-shell.at-bottom .fade-bottom,
+  .reader-shell.short .fade-bottom {
+    height: 8px;
+  }
+
+  .bar-spacer {
+    flex: 1;
+  }
+
+  .back {
+    background: var(--capsule-home);
+    backdrop-filter: blur(18px) saturate(1.1);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  }
+
+  .back:hover {
+    background: var(--capsule-home-hover);
+  }
+
+  /* Decorative children must not replace the capsule as the hit-test target. */
+  .back :global(*),
+  .find-toggle :global(*) {
+    pointer-events: none;
+  }
+
+  .find-toggle {
+    backdrop-filter: blur(18px) saturate(1.1);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  }
+
+  .find-toggle.open {
+    background: var(--capsule-find-pressed);
+    transform: translateY(1px);
+  }
+
+  .find-toggle kbd {
+    font-family: var(--font-mono);
+    font-size: 10px;
     color: var(--text-3);
   }
 
-  .search {
+  .reader-head {
+    padding-top: 0;
+  }
+
+  .find-row {
     display: flex;
     align-items: center;
     gap: 6px;
-    width: 220px;
-    height: 30px;
-    padding: 0 8px;
+    max-width: 320px;
+    margin: 12px 0 0;
+    padding: 3px 5px 3px 8px;
     border-radius: 9px;
     background: var(--fill);
     color: var(--text-3);
   }
 
-  .search input {
+  .find-row input {
     flex: 1;
     min-width: 0;
     border: 0;
@@ -223,45 +559,41 @@
     outline: none;
   }
 
-  .search input::placeholder {
+  .find-row input::placeholder {
     color: var(--text-3);
   }
 
-  .search .clear {
+  .find-count {
+    flex: none;
+    font-size: 11.5px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .find-btn {
+    flex: none;
+    width: 22px;
+    height: 22px;
+    padding: 0;
     border: 0;
+    border-radius: 6px;
     background: transparent;
     color: var(--text-3);
-    font-size: 15px;
+    font-size: 13px;
     line-height: 1;
-    padding: 0 2px;
+    cursor: default;
   }
 
-  .search .clear:hover {
+  .find-btn:hover {
+    background: var(--hover);
     color: var(--text);
   }
 
-  .reader mark {
-    background: color-mix(in srgb, var(--accent) 24%, transparent);
-    color: inherit;
-    border-radius: 3px;
-    padding: 0 1px;
+  .reader-body {
+    padding-top: 16px;
   }
 
-  .reader {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 20px 0 40px;
-    max-width: 720px;
-    margin: 0 auto;
-    width: 100%;
-  }
-
-  .reader:focus {
-    outline: none;
-  }
-
-  .reader p {
+  .reader-body p {
     margin: 0 0 16px;
     font-size: 16px;
     line-height: 1.8;
@@ -271,8 +603,20 @@
     overflow-wrap: anywhere;
   }
 
-  .reader p:last-child {
+  .reader-body p:last-child {
     margin-bottom: 0;
+  }
+
+  .reader-body mark {
+    background: var(--selected);
+    color: inherit;
+    border-radius: 3px;
+    padding: 0 1px;
+  }
+
+  .reader-body mark.current {
+    background: color-mix(in srgb, var(--accent) 34%, transparent);
+    box-shadow: 0 0 0 1px var(--accent);
   }
 
   .placeholder {
@@ -281,19 +625,8 @@
 
   .latest {
     position: absolute;
-    left: 50%;
-    bottom: 14px;
-    transform: translateX(-50%);
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    height: 28px;
-    padding: 0 12px;
-    border-radius: 14px;
-    border: 1px solid var(--hairline-2);
-    background: var(--panel);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
-    font-size: 13px;
-    color: var(--text-2);
+    right: 12px;
+    bottom: 12px;
+    pointer-events: auto;
   }
 </style>

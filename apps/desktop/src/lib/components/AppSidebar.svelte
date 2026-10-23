@@ -16,9 +16,6 @@
 </script>
 
 <aside id="app-sidebar" class="sidebar" class:collapsed inert={collapsed} aria-label={t("nav.mainLabel")}>
-  <div class="brand" title="Local Transcribe">
-    <span class="label">Local Transcribe</span>
-  </div>
   <div class="section">{t("nav.workspace")}</div>
   <nav class="nav">
     <button
@@ -108,17 +105,6 @@
     width: 0;
     padding: 0;
     border-right: 0;
-    overflow: hidden;
-  }
-
-  .brand {
-    font-size: 16px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    padding: 2px 10px 22px;
-    color: var(--text);
-    user-select: none;
-    white-space: nowrap;
     overflow: hidden;
   }
 

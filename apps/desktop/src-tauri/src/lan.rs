@@ -9,6 +9,7 @@
 
 use std::fs;
 use std::future::Future;
+use std::net::{Ipv4Addr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -61,11 +62,49 @@ pub struct LanNodeConfig {
     pub enabled: bool,
 }
 
-/// 局域网计算设置：模式 + 节点列表。
+fn default_idle_unload() -> u64 {
+    voice_to_text_core::DEFAULT_IDLE_UNLOAD_SECONDS
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_host_name() -> String {
+    "Local Transcribe".to_owned()
+}
+
+fn default_host_port() -> u16 {
+    7878
+}
+
+/// 局域网计算设置：模式、节点列表、后台形态与两个空闲卸载档位。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LanSettings {
     pub mode: LanMode,
     pub nodes: Vec<LanNodeConfig>,
+    /// 界面进程的模型空闲卸载（秒）；闭集合，非法值读入时回落 120。
+    #[serde(default = "default_idle_unload")]
+    pub idle_unload_gui: u64,
+    /// 节点子进程的空闲卸载（秒），与界面各存各的。
+    #[serde(default = "default_idle_unload")]
+    pub idle_unload_node: u64,
+    /// 上次退出时共享是否开启；启动时据此恢复（网卡失效则不强启）。
+    #[serde(default)]
+    pub share_on_launch: bool,
+    /// 首次开启共享的知情同意只弹一次。
+    #[serde(default)]
+    pub lan_consent_acknowledged: bool,
+    /// 关闭窗口后继续在后台共享；共享未开启时不生效。
+    #[serde(default = "default_true")]
+    pub keep_running_in_background: bool,
+    /// 上次共享使用的名称/网卡/端口；启动恢复时据此重开，缺一不可。
+    #[serde(default = "default_host_name")]
+    pub host_name: String,
+    #[serde(default)]
+    pub host_address: String,
+    #[serde(default = "default_host_port")]
+    pub host_port: u16,
 }
 
 impl Default for LanSettings {
@@ -73,6 +112,26 @@ impl Default for LanSettings {
         Self {
             mode: LanMode::LocalOnly,
             nodes: Vec::new(),
+            idle_unload_gui: default_idle_unload(),
+            idle_unload_node: default_idle_unload(),
+            share_on_launch: false,
+            lan_consent_acknowledged: false,
+            keep_running_in_background: true,
+            host_name: default_host_name(),
+            host_address: String::new(),
+            host_port: default_host_port(),
+        }
+    }
+}
+
+impl LanSettings {
+    /// 非法或历史遗留的档位只回落自己那一项，互不影响。
+    fn normalize_idle(&mut self) {
+        if !voice_to_text_core::IDLE_UNLOAD_CHOICES.contains(&self.idle_unload_gui) {
+            self.idle_unload_gui = default_idle_unload();
+        }
+        if !voice_to_text_core::IDLE_UNLOAD_CHOICES.contains(&self.idle_unload_node) {
+            self.idle_unload_node = default_idle_unload();
         }
     }
 }
@@ -159,6 +218,14 @@ fn validate_lan_settings(settings: &LanSettings) -> Result<(), String> {
             return Err("A LAN node needs a port between 1 and 65535.".to_owned());
         }
     }
+    for seconds in [settings.idle_unload_gui, settings.idle_unload_node] {
+        if !voice_to_text_core::IDLE_UNLOAD_CHOICES.contains(&seconds) {
+            return Err(format!(
+                "Model unload must be one of {:?} seconds.",
+                voice_to_text_core::IDLE_UNLOAD_CHOICES
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -241,8 +308,10 @@ pub(crate) fn read_lan_settings(app: &AppHandle) -> Result<LanSettings, String> 
     }
     let bytes =
         fs::read(&path).map_err(|_| "Could not read the LAN compute settings.".to_owned())?;
-    serde_json::from_slice(&bytes)
-        .map_err(|_| "The saved LAN compute settings are invalid.".to_owned())
+    let mut settings: LanSettings = serde_json::from_slice(&bytes)
+        .map_err(|_| "The saved LAN compute settings are invalid.".to_owned())?;
+    settings.normalize_idle();
+    Ok(settings)
 }
 
 /// 原子写（同 selected-model.json / retention.json 的做法），写后回读校验。
@@ -366,6 +435,94 @@ pub(crate) async fn discover_nodes(
 /// 检查本进程能否访问局域网（macOS 按应用授权，未授权时界面需要提示）。
 pub(crate) fn local_access() -> LocalNetworkAccess {
     voice_to_text_lan::client::local_network_access()
+}
+
+/// 排障数据：区分「权限被拒」与「多播被网络阻断」。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanDiagnostics {
+    pub access: String,
+    pub errno: Option<i32>,
+    pub gateway: Option<String>,
+    pub tcp_result: String,
+    pub tcp_errno: Option<i32>,
+    pub verdict: String,
+    pub interfaces: Vec<crate::lan_host::LanInterface>,
+    pub version: String,
+    pub identifier: String,
+    pub executable: String,
+}
+
+#[cfg(target_os = "macos")]
+fn default_gateway() -> Option<Ipv4Addr> {
+    let output = std::process::Command::new("route")
+        .args(["-n", "get", "default"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        if let Some(value) = line.trim().strip_prefix("gateway:") {
+            return value.trim().parse().ok();
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn default_gateway() -> Option<Ipv4Addr> {
+    None
+}
+
+fn tcp_probe(address: Ipv4Addr, port: u16) -> (String, Option<i32>) {
+    match TcpStream::connect_timeout(&(address, port).into(), Duration::from_millis(700)) {
+        Ok(_) => ("reachable".to_owned(), None),
+        Err(error) => {
+            let kind = match error.kind() {
+                std::io::ErrorKind::ConnectionRefused => "refused",
+                std::io::ErrorKind::TimedOut => "timeout",
+                std::io::ErrorKind::PermissionDenied => "denied",
+                std::io::ErrorKind::HostUnreachable | std::io::ErrorKind::NetworkUnreachable => {
+                    "unreachable"
+                }
+                _ => "error",
+            };
+            (kind.to_owned(), error.raw_os_error())
+        }
+    }
+}
+
+pub(crate) fn diagnostics(app: &AppHandle) -> LanDiagnostics {
+    let (access, errno) = voice_to_text_lan::client::local_network_access_detail();
+    let gateway = default_gateway();
+    let (tcp_result, tcp_errno) = match gateway {
+        Some(address) => tcp_probe(address, 80),
+        None => ("unavailable".to_owned(), None),
+    };
+    let verdict = match (access, tcp_result.as_str()) {
+        (LocalNetworkAccess::Granted, _) => "ok",
+        (_, "reachable" | "refused") => "multicast_blocked",
+        (LocalNetworkAccess::NoNetwork, "unavailable") => "no_network",
+        _ => "permission",
+    };
+    LanDiagnostics {
+        access: match access {
+            LocalNetworkAccess::Granted => "granted",
+            LocalNetworkAccess::Denied => "denied",
+            LocalNetworkAccess::NoNetwork => "no_network",
+        }
+        .to_owned(),
+        errno,
+        gateway: gateway.map(|value| value.to_string()),
+        tcp_result,
+        tcp_errno,
+        verdict: verdict.to_owned(),
+        interfaces: crate::lan_host::interfaces().unwrap_or_default(),
+        version: app.package_info().version.to_string(),
+        identifier: app.config().identifier.clone(),
+        executable: std::env::current_exe()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }
 }
 
 /// 打开 macOS「隐私与安全性 → 本地网络」设置页。
@@ -907,6 +1064,7 @@ mod tests {
             let settings = LanSettings {
                 mode: LanMode::PreferLan,
                 nodes: vec![candidate.clone()],
+                ..LanSettings::default()
             };
             assert!(
                 tauri::async_runtime::block_on(first_reachable_node(&settings))
@@ -922,7 +1080,7 @@ mod tests {
         LanNodeConfig {
             id: id.to_owned(),
             name: name.to_owned(),
-            host: "REDACTED-LAN-IP".to_owned(),
+            host: "192.0.2.10".to_owned(),
             port: 7878,
             model_id: None,
             enabled,
@@ -977,6 +1135,7 @@ mod tests {
         let ok = LanSettings {
             mode: LanMode::PreferLan,
             nodes: vec![node("a", "desk", true)],
+            ..LanSettings::default()
         };
         assert!(validate_lan_settings(&ok).is_ok());
 
@@ -1016,6 +1175,7 @@ mod tests {
         let mut settings = LanSettings {
             mode: LanMode::PreferLan,
             nodes: vec![node("", "desk", true), node("kept", "study", true)],
+            ..LanSettings::default()
         };
         assign_missing_ids(&mut settings);
         let generated = &settings.nodes[0].id;
@@ -1037,6 +1197,7 @@ mod tests {
         let with_node = LanSettings {
             mode: LanMode::PreferLan,
             nodes: vec![node("a", "desk", true)],
+            ..LanSettings::default()
         };
         let json = serde_json::to_string(&with_node).expect("serialize settings");
         assert!(json.contains("\"mode\":\"prefer_lan\""), "{json}");
@@ -1050,6 +1211,7 @@ mod tests {
         let settings = LanSettings {
             mode: LanMode::PreferLan,
             nodes: vec![node("a", "off", false), node("b", "on", true)],
+            ..LanSettings::default()
         };
         let enabled = enabled_nodes(&settings);
         assert_eq!(enabled.len(), 1);

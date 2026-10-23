@@ -25,7 +25,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -33,8 +33,10 @@ use serde_json::{json, Value};
 
 use voice_to_text_core::{
     inspect_model_directory, transcribe_file_cancellable, InputFile, JobState, JobStatus, JobStore,
-    LocalModel, ModelFamily, ModelLibrary,
+    LocalModel, ModelFamily, ModelLibrary, Transcript, TranscriptSegment,
 };
+use voice_to_text_lan::client::LanClient;
+use voice_to_text_lan::protocol::{TaskResult, TaskState};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SOCKET_FILE: &str = "service.sock";
@@ -56,6 +58,9 @@ type LocalListener = std::net::TcpListener;
 /// How long the worker keeps retrying the cross-process dispatch lock before
 /// the queued job is marked failed with the real reason.
 const BEGIN_JOB_RETRY_ATTEMPTS: u32 = 100;
+/// `jobs list` 只返回最近这么多条终态任务（列表有界，内存与序列化都不会无限增长）。
+const RECENT_JOBS_LIMIT: usize = 200;
+
 const BEGIN_JOB_RETRY_DELAY: Duration = Duration::from_millis(200);
 
 // ---------------------------------------------------------------------------
@@ -76,6 +81,15 @@ pub enum Request {
         /// gui | cli | mcp — 记录任务发起方，便于外部任务不被 GUI 误取消。
         #[serde(default)]
         owner: Option<String>,
+        /// 已保存且启用的局域网节点 id 或名称；给出时派发到该节点。
+        #[serde(default)]
+        node: Option<String>,
+        /// 节点侧的模型 id；缺省用节点保存的模型。
+        #[serde(default)]
+        lan_model: Option<String>,
+        /// 节点失败后是否允许本地重跑（沿用同一 job id）。
+        #[serde(default)]
+        fallback_local: bool,
     },
     Status {
         job_id: String,
@@ -85,6 +99,8 @@ pub enum Request {
     },
     Runs,
     Models,
+    /// 已保存节点的可达性与当前模型（只读；最多 3 秒超时）。
+    LanNodes,
     SelectModel {
         id: String,
     },
@@ -372,12 +388,25 @@ impl std::fmt::Display for ServerStartError {
     }
 }
 
+/// A saved LAN node a job was dispatched to.
+#[derive(Clone, Debug)]
+struct RemoteTarget {
+    name: String,
+    host: String,
+    port: u16,
+    /// The node's saved default model, if any.
+    model_id: Option<String>,
+}
+
 #[derive(Clone)]
 struct QueuedJob {
     job_id: String,
     path: PathBuf,
     model: Option<LocalModel>,
     owner: String,
+    remote: Option<RemoteTarget>,
+    lan_model: Option<String>,
+    fallback_local: bool,
 }
 
 /// 服务生命周期内记住每个任务的文件与模型快照，重试时沿用。
@@ -386,6 +415,9 @@ struct KnownJob {
     path: PathBuf,
     model: Option<LocalModel>,
     owner: String,
+    remote: Option<RemoteTarget>,
+    lan_model: Option<String>,
+    fallback_local: bool,
 }
 
 #[derive(Serialize)]
@@ -402,9 +434,6 @@ struct QueueState {
     pending: VecDeque<QueuedJob>,
     known: std::collections::HashMap<String, KnownJob>,
     active: Option<String>,
-    /// Jobs the service terminated without a persisted store entry (cancelled
-    /// while still queued, or rejected before start).
-    finished_in_memory: Vec<JobReply>,
     runs: Vec<RunInterval>,
 }
 
@@ -455,7 +484,6 @@ pub fn run_server(options: ServerOptions) -> Result<(), ServerStartError> {
             pending: VecDeque::new(),
             known: std::collections::HashMap::new(),
             active: None,
-            finished_in_memory: Vec::new(),
             runs: Vec::new(),
         }),
     });
@@ -547,10 +575,23 @@ fn dispatch(request: Request, shared: &Shared) -> Response {
             model_dir,
             model_id,
             owner,
-        } => submit(path, model_dir, model_id, owner, shared),
+            node,
+            lan_model,
+            fallback_local,
+        } => submit(
+            path,
+            model_dir,
+            model_id,
+            owner,
+            node,
+            lan_model,
+            fallback_local,
+            shared,
+        ),
         Request::Status { job_id } => status(&job_id, shared),
         Request::Cancel { job_id } => cancel(&job_id, shared),
         Request::Models => models(shared),
+        Request::LanNodes => lan_nodes(shared),
         Request::SelectModel { id } => select_model(&id, shared),
         Request::Jobs => jobs(shared),
         Request::Retry { job_id } => retry(&job_id, shared),
@@ -612,11 +653,15 @@ fn authorize_input(shared: &Shared, supplied: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+#[allow(clippy::too_many_arguments)] // dispatch signature mirrors Request::Submit
 fn submit(
     path: String,
     model_dir: Option<String>,
     model_id: Option<String>,
     owner: Option<String>,
+    node: Option<String>,
+    lan_model: Option<String>,
+    fallback_local: bool,
     shared: &Shared,
 ) -> Response {
     let canonical = match authorize_input(shared, &path) {
@@ -624,27 +669,50 @@ fn submit(
         Err(message) => return Response::failure("unauthorized", message),
     };
     let data_dir = shared.store.data_dir();
-    let model = if let Some(id) = model_id {
-        let library = ModelLibrary::new(data_dir);
-        let path = match library.path_for(&id) {
-            Ok(path) => path,
-            Err(message) => return Response::failure("not_found", message),
-        };
-        match inspect_model_directory(&path) {
-            Ok(model) => Some(model),
-            Err(message) => return Response::failure("invalid_model", message),
+    // A node target never needs a local model unless fallback is requested.
+    let (model, remote, lan_model) = match node {
+        Some(needle) => {
+            let target = match resolve_saved_node(data_dir, &needle) {
+                Ok(target) => target,
+                Err((code, message)) => return Response::failure(code, message),
+            };
+            let local = if fallback_local {
+                match read_selected_model(data_dir) {
+                    Ok(model) => model,
+                    Err(message) => return Response::failure("selection_error", message),
+                }
+            } else {
+                None
+            };
+            let remote_model = lan_model.or_else(|| target.model_id.clone());
+            (local, Some(target), remote_model)
         }
-    } else if let Some(dir) = model_dir {
-        match inspect_model_directory(&dir) {
-            Ok(model) => Some(model),
-            Err(message) => return Response::failure("invalid_model", message),
-        }
-    } else {
-        match read_selected_model(data_dir) {
-            Ok(model) => model,
-            Err(message) => return Response::failure("selection_error", message),
+        None => {
+            let model = if let Some(id) = model_id {
+                let library = ModelLibrary::new(data_dir);
+                let path = match library.path_for(&id) {
+                    Ok(path) => path,
+                    Err(message) => return Response::failure("not_found", message),
+                };
+                match inspect_model_directory(&path) {
+                    Ok(model) => Some(model),
+                    Err(message) => return Response::failure("invalid_model", message),
+                }
+            } else if let Some(dir) = model_dir {
+                match inspect_model_directory(&dir) {
+                    Ok(model) => Some(model),
+                    Err(message) => return Response::failure("invalid_model", message),
+                }
+            } else {
+                match read_selected_model(data_dir) {
+                    Ok(model) => model,
+                    Err(message) => return Response::failure("selection_error", message),
+                }
+            };
+            (model, None, None)
         }
     };
+    let runnable = model.is_some() || remote.is_some();
     let job_id = JobStore::new_job_id();
     let mut queue = match shared.queue.lock() {
         Ok(queue) => queue,
@@ -652,12 +720,12 @@ fn submit(
     };
     let reply = JobReply {
         job_id: job_id.clone(),
-        state: if model.is_some() {
+        state: if runnable {
             "queued".to_owned()
         } else {
             "waiting_for_model".to_owned()
         },
-        phase: if model.is_some() {
+        phase: if runnable {
             "Queued".to_owned()
         } else {
             "Waiting for a model".to_owned()
@@ -677,6 +745,9 @@ fn submit(
             path: canonical.clone(),
             model: model.clone(),
             owner: owner.clone(),
+            remote: remote.clone(),
+            lan_model: lan_model.clone(),
+            fallback_local,
         },
     );
     queue.pending.push_back(QueuedJob {
@@ -684,6 +755,9 @@ fn submit(
         path: canonical,
         model,
         owner,
+        remote,
+        lan_model,
+        fallback_local,
     });
     Response {
         ok: true,
@@ -693,6 +767,97 @@ fn submit(
         runs: None,
         data: None,
     }
+}
+
+/// Read the GUI's saved LAN settings and resolve a node by id or name.
+/// Disabled or unknown nodes are refused instead of silently running locally.
+fn resolve_saved_node(
+    data_dir: &Path,
+    needle: &str,
+) -> Result<RemoteTarget, (&'static str, String)> {
+    let nodes = read_saved_nodes(data_dir);
+    let Some(node) = nodes
+        .iter()
+        .find(|node| node.id == needle || node.name == needle)
+    else {
+        return Err((
+            "node_not_found",
+            format!("No saved LAN node matches \"{needle}\"."),
+        ));
+    };
+    if !node.enabled {
+        return Err((
+            "node_disabled",
+            format!("The LAN node \"{}\" is disabled.", node.name),
+        ));
+    }
+    Ok(RemoteTarget {
+        name: node.name.clone(),
+        host: node.host.clone(),
+        port: node.port,
+        model_id: node.model_id.clone(),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct SavedLanSettings {
+    #[serde(default)]
+    nodes: Vec<SavedLanNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SavedLanNode {
+    id: String,
+    name: String,
+    host: String,
+    port: u16,
+    #[serde(default)]
+    model_id: Option<String>,
+    #[serde(default)]
+    enabled: bool,
+}
+
+fn read_saved_nodes(data_dir: &Path) -> Vec<SavedLanNode> {
+    let path = data_dir.join("lan-settings.json");
+    let Ok(bytes) = fs::read(path) else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<SavedLanSettings>(&bytes)
+        .map(|settings| settings.nodes)
+        .unwrap_or_default()
+}
+
+/// Saved nodes with a 3-second reachability probe; never invents a model.
+fn lan_nodes(shared: &Shared) -> Response {
+    let nodes = read_saved_nodes(shared.store.data_dir());
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => return Response::failure("service_error", error.to_string()),
+    };
+    let mut listed = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let client = LanClient::new(node.host.clone(), node.port);
+        let probe = runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(3), client.capabilities()).await
+        });
+        let (reachable, model_id) = match probe {
+            Ok(Ok(capabilities)) => (true, capabilities.model_id),
+            _ => (false, None),
+        };
+        listed.push(json!({
+            "id": node.id,
+            "name": node.name,
+            "host": node.host,
+            "port": node.port,
+            "enabled": node.enabled,
+            "reachable": reachable,
+            "modelId": model_id,
+        }));
+    }
+    Response::ok_data(json!({ "nodes": listed }))
 }
 
 fn state_name(state: JobState) -> &'static str {
@@ -707,7 +872,8 @@ fn state_name(state: JobState) -> &'static str {
 fn status(job_id: &str, shared: &Shared) -> Response {
     if let Ok(queue) = shared.queue.lock() {
         if let Some(job) = queue.pending.iter().find(|job| job.job_id == job_id) {
-            let (state, phase) = if job.model.is_some() {
+            let runnable = job.model.is_some() || job.remote.is_some();
+            let (state, phase) = if runnable {
                 ("queued", "Queued")
             } else {
                 ("waiting_for_model", "Waiting for a model")
@@ -730,21 +896,6 @@ fn status(job_id: &str, shared: &Shared) -> Response {
         }
         if queue.active.as_deref() == Some(job_id) {
             // Fall through to the persisted status below; the entry exists.
-        }
-        if let Some(finished) = queue
-            .finished_in_memory
-            .iter()
-            .find(|reply| reply.job_id == job_id)
-        {
-            let reply = finished.clone();
-            return Response {
-                ok: true,
-                error: None,
-                service: None,
-                job: Some(reply),
-                runs: None,
-                data: None,
-            };
         }
     }
     match shared.store.job_status(job_id) {
@@ -775,7 +926,8 @@ fn cancel(job_id: &str, shared: &Shared) -> Response {
     };
     if let Some(index) = queue.pending.iter().position(|job| job.job_id == job_id) {
         queue.pending.remove(index);
-        let reply = JobReply {
+        drop(queue);
+        let mut reply = JobReply {
             job_id: job_id.to_owned(),
             state: "cancelled".to_owned(),
             phase: "Cancelled before start".to_owned(),
@@ -783,7 +935,25 @@ fn cancel(job_id: &str, shared: &Shared) -> Response {
             total_chunks: None,
             error: None,
         };
-        queue.finished_in_memory.push(reply.clone());
+        // 排队中被取消的任务没有 lease，补写一条持久化状态，使列表与单查一致。
+        if shared
+            .store
+            .record_status(JobStatus {
+                job_id: job_id.to_owned(),
+                state: JobState::Cancelled,
+                phase: reply.phase.clone(),
+                completed_chunks: 0,
+                total_chunks: None,
+                started_at_ms: Some(unix_now_ms()),
+                total_duration_ms: None,
+                transcript_available: false,
+                result_saved: false,
+                error: None,
+            })
+            .is_err()
+        {
+            reply.error = Some("The cancelled task could not be recorded.".to_owned());
+        }
         return Response {
             ok: true,
             error: None,
@@ -930,7 +1100,7 @@ fn jobs(shared: &Shared) -> Response {
             json!({
                 "jobId": job.job_id,
                 "position": index,
-                "state": if job.model.is_some() { "queued" } else { "waiting_for_model" },
+                "state": if job.model.is_some() || job.remote.is_some() { "queued" } else { "waiting_for_model" },
                 "model": job.model.as_ref().map(|model| model.display_name.clone()),
                 "owner": job.owner,
                 "source": job.path.file_name().map(|name| name.to_string_lossy().into_owned()),
@@ -938,13 +1108,21 @@ fn jobs(shared: &Shared) -> Response {
         })
         .collect();
     let active = queue.active.clone();
-    let finished: Vec<Value> = queue
-        .finished_in_memory
-        .iter()
+    drop(queue);
+    // 单一数据源：完成/失败列表直接读持久化状态（与 jobs show 同源），
+    // 因此重启后列表仍可见，也不会出现「列表没有、单查却有」。
+    let recent = match shared.store.recent_jobs(RECENT_JOBS_LIMIT) {
+        Ok(jobs) => jobs,
+        Err(error) => return Response::failure("service_error", error),
+    };
+    let finished: Vec<Value> = recent
+        .into_iter()
+        .filter(|job| job.state != JobState::Running)
+        .filter(|job| active.as_deref() != Some(job.job_id.as_str()))
         .map(|job| {
             json!({
                 "jobId": job.job_id,
-                "state": job.state,
+                "state": state_name(job.state),
                 "phase": job.phase,
                 "error": job.error,
             })
@@ -975,6 +1153,9 @@ fn retry(job_id: &str, shared: &Shared) -> Response {
             path: known.path.clone(),
             model: known.model.clone(),
             owner: known.owner.clone(),
+            remote: known.remote.clone(),
+            lan_model: known.lan_model.clone(),
+            fallback_local: known.fallback_local,
         },
     );
     queue.pending.push_back(QueuedJob {
@@ -982,6 +1163,9 @@ fn retry(job_id: &str, shared: &Shared) -> Response {
         path: known.path,
         model: known.model,
         owner: known.owner,
+        remote: known.remote,
+        lan_model: known.lan_model,
+        fallback_local: known.fallback_local,
     });
     Response {
         ok: true,
@@ -1121,19 +1305,21 @@ fn worker_loop(shared: Arc<Shared>) {
             thread::sleep(Duration::from_millis(50));
             continue;
         };
-        // Jobs without a model are visible but not runnable; they never block
-        // the runnable job behind them (skip, do not reorder).
-        let Some(model) = job.model.clone() else {
+        // A local model or a LAN target makes the job runnable; jobs with
+        // neither stay visible as `waiting_for_model` and never block the
+        // runnable job behind them (skip, do not reorder).
+        if job.model.is_none() && job.remote.is_none() {
             thread::sleep(Duration::from_millis(200));
             continue;
-        };
+        }
+        let started_unix_ms = unix_now_ms();
         let initial = JobStatus {
             job_id: job.job_id.clone(),
             state: JobState::Running,
             phase: "Queued".to_owned(),
             completed_chunks: 0,
             total_chunks: None,
-            started_at_ms: Some(unix_now_ms()),
+            started_at_ms: Some(started_unix_ms),
             total_duration_ms: None,
             transcript_available: false,
             result_saved: false,
@@ -1151,10 +1337,38 @@ fn worker_loop(shared: Arc<Shared>) {
                     }
                     state.active = Some(job.job_id.clone());
                 });
-                execute_job(&shared, lease, job.job_id.clone(), job.path.clone(), model);
-                let _ = shared.queue.lock().map(|mut state| {
+                let mut lease = lease;
+                if let Some(target) = job.remote.clone() {
+                    execute_remote_job(
+                        &shared,
+                        &mut lease,
+                        &job.job_id,
+                        &job.path,
+                        &target,
+                        job.lan_model.clone(),
+                        job.fallback_local,
+                        job.model.as_ref(),
+                        started_unix_ms,
+                    );
+                } else if let Some(model) = job.model.clone() {
+                    execute_local_job(
+                        &shared,
+                        &mut lease,
+                        &job.job_id,
+                        &job.path,
+                        &model,
+                        started_unix_ms,
+                    );
+                }
+                let finished_unix_ms = unix_now_ms();
+                if let Ok(mut state) = shared.queue.lock() {
+                    state.runs.push(RunInterval {
+                        job_id: job.job_id.clone(),
+                        started_unix_ms,
+                        finished_unix_ms,
+                    });
                     state.active = None;
-                });
+                }
             }
             Err(error) => {
                 // Permanent failure: record it in memory so status reports it,
@@ -1165,14 +1379,19 @@ fn worker_loop(shared: Arc<Shared>) {
                             state.pending.pop_front();
                         }
                     }
-                    state.finished_in_memory.push(JobReply {
-                        job_id: job.job_id.clone(),
-                        state: "failed".to_owned(),
-                        phase: "Could not start".to_owned(),
-                        completed_chunks: 0,
-                        total_chunks: None,
-                        error: Some(error),
-                    });
+                });
+                // 同一数据源：永久失败也写入持久化状态，列表与单查都看得到。
+                let _ = shared.store.record_status(JobStatus {
+                    job_id: job.job_id.clone(),
+                    state: JobState::Failed,
+                    phase: "Could not start".to_owned(),
+                    completed_chunks: 0,
+                    total_chunks: None,
+                    started_at_ms: Some(unix_now_ms()),
+                    total_duration_ms: None,
+                    transcript_available: false,
+                    result_saved: false,
+                    error: Some(error),
                 });
             }
         }
@@ -1199,22 +1418,22 @@ fn begin_with_retry(
     Err(last)
 }
 
-fn execute_job(
+fn execute_local_job(
     shared: &Shared,
-    mut lease: voice_to_text_core::JobLease,
-    job_id: String,
-    path: PathBuf,
-    model: LocalModel,
+    lease: &mut voice_to_text_core::JobLease,
+    job_id: &str,
+    path: &Path,
+    model: &LocalModel,
+    started_unix_ms: u64,
 ) {
-    let started_unix_ms = unix_now_ms();
     let store = &shared.store;
     let result = transcribe_file_cancellable(
-        &path,
-        &model,
-        || store.cancellation_requested(&job_id).unwrap_or(false),
+        path,
+        model,
+        || store.cancellation_requested(job_id).unwrap_or(false),
         |progress| {
             let status = JobStatus {
-                job_id: job_id.clone(),
+                job_id: job_id.to_owned(),
                 state: JobState::Running,
                 phase: format!(
                     "Transcribing chunk {} of {}",
@@ -1233,12 +1452,12 @@ fn execute_job(
     );
     match result {
         Ok(mut transcript) => {
-            transcript.job_id = job_id.clone();
-            let previous = store.job_status(&job_id).ok().flatten();
+            transcript.job_id = job_id.to_owned();
+            let previous = store.job_status(job_id).ok().flatten();
             let save_result = store.save_transcript(&transcript);
             let saved = save_result.is_ok();
             let status = JobStatus {
-                job_id: job_id.clone(),
+                job_id: job_id.to_owned(),
                 state: if saved {
                     JobState::Completed
                 } else {
@@ -1264,10 +1483,10 @@ fn execute_job(
             let _ = lease.save_status(status);
         }
         Err(error) => {
-            let cancelled = store.cancellation_requested(&job_id).unwrap_or(false);
-            let previous = store.job_status(&job_id).ok().flatten();
+            let cancelled = store.cancellation_requested(job_id).unwrap_or(false);
+            let previous = store.job_status(job_id).ok().flatten();
             let status = JobStatus {
-                job_id: job_id.clone(),
+                job_id: job_id.to_owned(),
                 state: if cancelled {
                     JobState::Cancelled
                 } else {
@@ -1288,14 +1507,294 @@ fn execute_job(
             let _ = lease.save_status(status);
         }
     }
-    let finished_unix_ms = unix_now_ms();
-    if let Ok(mut state) = shared.queue.lock() {
-        state.runs.push(RunInterval {
+}
+
+enum RemoteOutcome {
+    Completed(TaskResult),
+    Failed(String),
+    Cancelled,
+}
+
+/// Dispatch to a saved LAN node: upload, poll, and write the result back into
+/// the same job store the local path uses. A failure only retries locally when
+/// the caller explicitly asked for it.
+#[allow(clippy::too_many_arguments)] // one call site; a context struct would add no clarity
+fn execute_remote_job(
+    shared: &Shared,
+    lease: &mut voice_to_text_core::JobLease,
+    job_id: &str,
+    path: &Path,
+    target: &RemoteTarget,
+    lan_model: Option<String>,
+    fallback_local: bool,
+    local_model: Option<&LocalModel>,
+    started_unix_ms: u64,
+) {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            finish_remote_failed(
+                shared,
+                lease,
+                job_id,
+                started_unix_ms,
+                format!("Cannot start the LAN dispatch runtime: {error}"),
+            );
+            return;
+        }
+    };
+    let client = LanClient::new(target.host.clone(), target.port);
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "media".to_owned());
+    let size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+    save_remote_phase(
+        lease,
+        job_id,
+        format!("Uploading to {}", target.name),
+        started_unix_ms,
+    );
+    let outcome = runtime.block_on(run_remote(
+        &client,
+        shared,
+        job_id,
+        path,
+        &file_name,
+        size,
+        lan_model.as_deref(),
+        target,
+        started_unix_ms,
+    ));
+    match outcome {
+        RemoteOutcome::Completed(result) => finish_remote_completed(
+            shared,
+            lease,
             job_id,
             started_unix_ms,
-            finished_unix_ms,
-        });
+            &file_name,
+            target,
+            lan_model.as_deref(),
+            result,
+        ),
+        RemoteOutcome::Cancelled => {
+            let _ = lease.save_status(JobStatus {
+                job_id: job_id.to_owned(),
+                state: JobState::Cancelled,
+                phase: "Cancelled".to_owned(),
+                completed_chunks: 0,
+                total_chunks: None,
+                started_at_ms: Some(started_unix_ms),
+                total_duration_ms: None,
+                transcript_available: false,
+                result_saved: false,
+                error: None,
+            });
+        }
+        RemoteOutcome::Failed(message) => {
+            if fallback_local {
+                if let Some(model) = local_model {
+                    save_remote_phase(
+                        lease,
+                        job_id,
+                        "LAN node failed; retrying locally".to_owned(),
+                        started_unix_ms,
+                    );
+                    execute_local_job(shared, lease, job_id, path, model, started_unix_ms);
+                    return;
+                }
+            }
+            finish_remote_failed(shared, lease, job_id, started_unix_ms, message);
+        }
     }
+}
+
+fn save_remote_phase(
+    lease: &mut voice_to_text_core::JobLease,
+    job_id: &str,
+    phase: String,
+    started_unix_ms: u64,
+) {
+    let _ = lease.save_status(JobStatus {
+        job_id: job_id.to_owned(),
+        state: JobState::Running,
+        phase,
+        completed_chunks: 0,
+        total_chunks: None,
+        started_at_ms: Some(started_unix_ms),
+        total_duration_ms: None,
+        transcript_available: false,
+        result_saved: false,
+        error: None,
+    });
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors the task it drives
+async fn run_remote(
+    client: &LanClient,
+    shared: &Shared,
+    job_id: &str,
+    path: &Path,
+    file_name: &str,
+    size: u64,
+    lan_model: Option<&str>,
+    target: &RemoteTarget,
+    started_unix_ms: u64,
+) -> RemoteOutcome {
+    let task = match client.create_task(file_name, size, 1, lan_model).await {
+        Ok(task) => task,
+        Err(error) => {
+            return RemoteOutcome::Failed(format!("The LAN node rejected the task: {error}"))
+        }
+    };
+    if let Err(error) = client
+        .upload_file(&task.id, path, 4 * 1024 * 1024, |_, _| {})
+        .await
+    {
+        return RemoteOutcome::Failed(format!("Upload to the LAN node failed: {error}"));
+    }
+    let _ = (shared, started_unix_ms, target);
+    let deadline = Instant::now() + Duration::from_secs(6 * 3600);
+    let mut failures = 0u32;
+    loop {
+        if shared.store.cancellation_requested(job_id).unwrap_or(false) {
+            // POST /cancel and stop polling: the local task is cancelled now,
+            // and the node owns the rest of its own cancellation.
+            let _ = client.cancel(&task.id).await;
+            return RemoteOutcome::Cancelled;
+        }
+        match client.task(&task.id).await {
+            Ok(current) => {
+                failures = 0;
+                match current.state {
+                    TaskState::Completed => {
+                        return match client.result(&task.id).await {
+                            Ok(result) => RemoteOutcome::Completed(result),
+                            Err(error) => RemoteOutcome::Failed(format!(
+                                "The LAN node finished but its result could not be read: {error}"
+                            )),
+                        }
+                    }
+                    TaskState::Failed => {
+                        let message = current
+                            .error
+                            .map(|error| error.message)
+                            .unwrap_or_else(|| "The LAN node reported a failure.".to_owned());
+                        return RemoteOutcome::Failed(message);
+                    }
+                    TaskState::Cancelled => return RemoteOutcome::Cancelled,
+                    _ => {}
+                }
+            }
+            Err(error) => {
+                failures += 1;
+                if failures >= 3 {
+                    return RemoteOutcome::Failed(format!(
+                        "Lost contact with the LAN node: {error}"
+                    ));
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return RemoteOutcome::Failed("The LAN node did not finish within 6 hours.".to_owned());
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors the result fields written back
+fn finish_remote_completed(
+    shared: &Shared,
+    lease: &mut voice_to_text_core::JobLease,
+    job_id: &str,
+    started_unix_ms: u64,
+    file_name: &str,
+    target: &RemoteTarget,
+    lan_model: Option<&str>,
+    result: TaskResult,
+) {
+    let previous = shared.store.job_status(job_id).ok().flatten();
+    let transcript = Transcript {
+        schema_version: "1".to_owned(),
+        job_id: job_id.to_owned(),
+        source_file_name: file_name.to_owned(),
+        model_id: lan_model
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("lan:{}", target.name)),
+        model_version: None,
+        engine: format!("lan/{}", target.name),
+        language: None,
+        duration_ms: Some(result.duration_ms),
+        text: result.transcript,
+        segments: Some(
+            result
+                .segments
+                .into_iter()
+                .map(|segment| TranscriptSegment {
+                    start_ms: segment.start_ms,
+                    end_ms: segment.end_ms,
+                    text: segment.text,
+                })
+                .collect(),
+        ),
+    };
+    let save_result = shared.store.save_transcript(&transcript);
+    let saved = save_result.is_ok();
+    let _ = lease.save_status(JobStatus {
+        job_id: job_id.to_owned(),
+        state: if saved {
+            JobState::Completed
+        } else {
+            JobState::Failed
+        },
+        phase: if saved {
+            "Completed on LAN node"
+        } else {
+            "Result save failed"
+        }
+        .to_owned(),
+        completed_chunks: previous.as_ref().map_or(0, |job| job.completed_chunks),
+        total_chunks: previous.as_ref().and_then(|job| job.total_chunks),
+        started_at_ms: Some(started_unix_ms),
+        total_duration_ms: Some(result.duration_ms),
+        transcript_available: saved,
+        result_saved: saved,
+        error: save_result.err(),
+    });
+}
+
+fn finish_remote_failed(
+    shared: &Shared,
+    lease: &mut voice_to_text_core::JobLease,
+    job_id: &str,
+    started_unix_ms: u64,
+    message: String,
+) {
+    let cancelled = shared.store.cancellation_requested(job_id).unwrap_or(false);
+    let _ = lease.save_status(JobStatus {
+        job_id: job_id.to_owned(),
+        state: if cancelled {
+            JobState::Cancelled
+        } else {
+            JobState::Failed
+        },
+        phase: if cancelled {
+            "Cancelled"
+        } else {
+            "LAN node failed"
+        }
+        .to_owned(),
+        completed_chunks: 0,
+        total_chunks: None,
+        started_at_ms: Some(started_unix_ms),
+        total_duration_ms: None,
+        transcript_available: false,
+        result_saved: false,
+        error: if cancelled { None } else { Some(message) },
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1335,5 +1834,408 @@ impl ServiceClient {
             .map_err(|error| format!("The local service did not answer: {error}"))?;
         serde_json::from_str(line.trim())
             .map_err(|error| format!("The local service sent an invalid response: {error}"))
+    }
+}
+
+#[cfg(test)]
+mod jobs_list_tests {
+    use super::{export, job_result, jobs, status, Shared};
+    use std::path::PathBuf;
+    use voice_to_text_core::{JobState, JobStatus, JobStore, Transcript};
+
+    fn shared(name: &str) -> Shared {
+        let root = std::env::temp_dir().join(format!(
+            "service-jobs-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        Shared {
+            store: JobStore::new(root),
+            allow_roots: Vec::<PathBuf>::new(),
+            queue: std::sync::Mutex::new(super::QueueState {
+                pending: std::collections::VecDeque::new(),
+                known: std::collections::HashMap::new(),
+                active: None,
+                runs: Vec::new(),
+            }),
+        }
+    }
+
+    fn record(shared: &Shared, id: &str, state: JobState) {
+        shared
+            .store
+            .record_status(JobStatus {
+                job_id: id.to_owned(),
+                state,
+                phase: "Recorded".into(),
+                completed_chunks: 1,
+                total_chunks: Some(1),
+                started_at_ms: Some(10),
+                total_duration_ms: Some(1_000),
+                transcript_available: state == JobState::Completed,
+                result_saved: false,
+                error: (state == JobState::Failed).then(|| "boom".to_owned()),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn list_and_single_lookup_agree_on_the_same_job() {
+        let shared = shared("agree");
+        record(&shared, "job-completed", JobState::Completed);
+        let listed = jobs(&shared);
+        let jobs_json = listed.data.expect("jobs data");
+        let finished = jobs_json["finished"].as_array().expect("finished array");
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0]["jobId"], "job-completed");
+        assert_eq!(finished[0]["state"], "completed");
+
+        let single = status("job-completed", &shared);
+        let job = single.job.expect("job status");
+        assert_eq!(job.state, "completed");
+        assert_eq!(job.state, finished[0]["state"]);
+    }
+
+    #[test]
+    fn failed_jobs_keep_their_error_and_the_limit_bounds_the_list() {
+        let shared = shared("failed");
+        for index in 0..205 {
+            record(&shared, &format!("job-{index}"), JobState::Failed);
+        }
+        let listed = jobs(&shared);
+        let data = listed.data.expect("jobs data");
+        let finished = data["finished"].as_array().unwrap();
+        assert_eq!(finished.len(), 200);
+        assert!(finished.iter().all(|job| job["error"] == "boom"));
+    }
+
+    #[test]
+    fn export_matches_get_job_result_full_text() {
+        let shared = shared("export");
+        let transcript = Transcript {
+            schema_version: "1".to_owned(),
+            job_id: "job-export".to_owned(),
+            source_file_name: "voice.wav".to_owned(),
+            model_id: "model".to_owned(),
+            model_version: None,
+            engine: "test".to_owned(),
+            language: None,
+            duration_ms: Some(1_000),
+            text: "第一段\n第二段".to_owned(),
+            segments: None,
+        };
+        shared.store.save_transcript(&transcript).unwrap();
+        let result = job_result("job-export", true, &shared);
+        let full = result
+            .data
+            .as_ref()
+            .and_then(|data| data["fullText"].as_str())
+            .expect("full text")
+            .to_owned();
+        let path = shared.store.data_dir().join("export.txt");
+        let response = export("job-export", path.to_str().unwrap(), "txt", &shared);
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), full);
+    }
+
+    #[test]
+    fn removed_jobs_disappear_from_the_list() {
+        let shared = shared("removed");
+        record(&shared, "job-gone", JobState::Cancelled);
+        std::fs::remove_file(shared.store.jobs_dir().join("job-gone.json")).unwrap();
+        let listed = jobs(&shared);
+        let data = listed.data.expect("jobs data");
+        assert!(data["finished"].as_array().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod lan_dispatch_tests {
+    use super::{execute_remote_job, submit, RemoteTarget, Shared};
+    use std::path::PathBuf;
+    use voice_to_text_core::{JobState, JobStatus, JobStore, LocalModel, ModelFamily, ModelFiles};
+
+    fn shared(name: &str) -> (Shared, PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "service-lan-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let media = root.join("voice.wav");
+        std::fs::write(&media, b"RIFF").unwrap();
+        let shared = Shared {
+            store: JobStore::new(&root),
+            allow_roots: vec![root.canonicalize().unwrap()],
+            queue: std::sync::Mutex::new(super::QueueState {
+                pending: std::collections::VecDeque::new(),
+                known: std::collections::HashMap::new(),
+                active: None,
+                runs: Vec::new(),
+            }),
+        };
+        (shared, root, media)
+    }
+
+    fn write_settings(root: &std::path::Path, enabled: bool) {
+        std::fs::write(
+            root.join("lan-settings.json"),
+            format!(
+                r#"{{"mode":"local_only","nodes":[{{"id":"n1","name":"desk","host":"127.0.0.1","port":7878,"model_id":null,"enabled":{enabled}}}]}}"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn an_unknown_node_is_refused_without_running_locally() {
+        let (shared, _root, media) = shared("unknown");
+        let response = submit(
+            media.to_string_lossy().into_owned(),
+            None,
+            None,
+            Some("cli".to_owned()),
+            Some("missing".to_owned()),
+            None,
+            false,
+            &shared,
+        );
+        assert!(!response.ok);
+        assert_eq!(response.error.unwrap().code, "node_not_found");
+        assert!(shared.queue.lock().unwrap().pending.is_empty());
+    }
+
+    #[test]
+    fn a_disabled_node_is_refused() {
+        let (shared, root, media) = shared("disabled");
+        write_settings(&root, false);
+        let response = submit(
+            media.to_string_lossy().into_owned(),
+            None,
+            None,
+            Some("cli".to_owned()),
+            Some("desk".to_owned()),
+            None,
+            false,
+            &shared,
+        );
+        assert!(!response.ok);
+        assert_eq!(response.error.unwrap().code, "node_disabled");
+        assert!(shared.queue.lock().unwrap().pending.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_node_id_never_opens_a_connection() {
+        let (shared, root, media) = shared("no-network");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::fs::write(
+            root.join("lan-settings.json"),
+            format!(
+                r#"{{"mode":"local_only","nodes":[{{"id":"n1","name":"desk","host":"127.0.0.1","port":{port},"model_id":null,"enabled":true}}]}}"#
+            ),
+        )
+        .unwrap();
+        let response = submit(
+            media.to_string_lossy().into_owned(),
+            None,
+            None,
+            Some("cli".to_owned()),
+            Some("missing".to_owned()),
+            None,
+            false,
+            &shared,
+        );
+        assert_eq!(response.error.unwrap().code, "node_not_found");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(
+            listener.accept().is_err(),
+            "an unknown node id must not connect to any configured port"
+        );
+    }
+
+    #[test]
+    fn no_node_target_always_uses_the_local_queue() {
+        let (shared, root, media) = shared("local-only");
+        // A prefer_lan mode and a saved node must not change an explicit local submit.
+        std::fs::write(
+            root.join("lan-settings.json"),
+            r#"{"mode":"prefer_lan","nodes":[{"id":"n1","name":"desk","host":"127.0.0.1","port":7878,"model_id":null,"enabled":true}]}"#,
+        )
+        .unwrap();
+        let response = submit(
+            media.to_string_lossy().into_owned(),
+            None,
+            None,
+            Some("cli".to_owned()),
+            None,
+            None,
+            false,
+            &shared,
+        );
+        assert!(response.ok, "{:?}", response.error);
+        let queue = shared.queue.lock().unwrap();
+        let queued = queue.pending.back().expect("a queued job");
+        assert!(
+            queued.remote.is_none(),
+            "no --node must not dispatch remotely"
+        );
+        assert!(queued.model.is_none());
+    }
+
+    fn initial_status(job_id: &str) -> JobStatus {
+        JobStatus {
+            job_id: job_id.to_owned(),
+            state: JobState::Running,
+            phase: "Running".to_owned(),
+            completed_chunks: 0,
+            total_chunks: None,
+            started_at_ms: Some(1),
+            total_duration_ms: None,
+            transcript_available: false,
+            result_saved: false,
+            error: None,
+        }
+    }
+
+    fn dead_target() -> RemoteTarget {
+        RemoteTarget {
+            name: "dead".to_owned(),
+            host: "127.0.0.1".to_owned(),
+            port: 9,
+            model_id: None,
+        }
+    }
+
+    #[test]
+    fn remote_and_local_jobs_queue_in_one_fifo_with_one_active_slot() {
+        let (shared, root, media) = shared("fifo");
+        write_settings(&root, true);
+        let remote = submit(
+            media.to_string_lossy().into_owned(),
+            None,
+            None,
+            Some("cli".to_owned()),
+            Some("n1".to_owned()),
+            None,
+            false,
+            &shared,
+        );
+        let local = submit(
+            media.to_string_lossy().into_owned(),
+            None,
+            None,
+            Some("cli".to_owned()),
+            None,
+            None,
+            false,
+            &shared,
+        );
+        assert!(remote.ok && local.ok);
+        let queue = shared.queue.lock().unwrap();
+        assert!(
+            queue.active.is_none(),
+            "the worker owns the only active slot"
+        );
+        assert_eq!(queue.pending.len(), 2);
+        assert!(queue.pending[0].remote.is_some());
+        assert!(queue.pending[1].remote.is_none());
+    }
+
+    #[test]
+    fn remote_failure_stays_failed_without_the_fallback_flag() {
+        let (shared, _root, media) = shared("remote-fail");
+        let job_id = "job-remote-fail";
+        let mut lease = shared.store.begin_job(initial_status(job_id)).unwrap();
+        execute_remote_job(
+            &shared,
+            &mut lease,
+            job_id,
+            &media,
+            &dead_target(),
+            None,
+            false,
+            None,
+            1,
+        );
+        let status = shared.store.job_status(job_id).unwrap().unwrap();
+        assert_eq!(status.state, JobState::Failed);
+        assert!(status.error.is_some());
+        assert!(!status.transcript_available);
+    }
+
+    #[test]
+    fn fallback_reuses_one_job_file_and_one_history_entry() {
+        let (shared, _root, media) = shared("fallback-one");
+        let job_id = "job-fallback";
+        let mut lease = shared.store.begin_job(initial_status(job_id)).unwrap();
+        let model = LocalModel {
+            id: "fake".to_owned(),
+            display_name: "fake".to_owned(),
+            family: ModelFamily::Paraformer,
+            directory: media.parent().unwrap().to_path_buf(),
+            files: ModelFiles::SingleFile {
+                model: media.with_extension("onnx"),
+                tokens: media.with_extension("txt"),
+            },
+        };
+        execute_remote_job(
+            &shared,
+            &mut lease,
+            job_id,
+            &media,
+            &dead_target(),
+            None,
+            true,
+            Some(&model),
+            1,
+        );
+        let status = shared.store.job_status(job_id).unwrap().unwrap();
+        assert_eq!(status.state, JobState::Failed);
+        let listed = shared.store.recent_jobs(10).unwrap();
+        assert_eq!(
+            listed.len(),
+            1,
+            "fallback must not add a second history entry"
+        );
+        assert_eq!(listed[0].job_id, job_id);
+        let files = shared
+            .store
+            .jobs_dir()
+            .read_dir()
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(files, 1, "fallback must reuse the same job file");
+    }
+
+    #[test]
+    fn a_saved_node_is_queued_without_a_local_model() {
+        let (shared, root, media) = shared("queued");
+        write_settings(&root, true);
+        let response = submit(
+            media.to_string_lossy().into_owned(),
+            None,
+            None,
+            Some("cli".to_owned()),
+            Some("n1".to_owned()),
+            Some("remote-model".to_owned()),
+            false,
+            &shared,
+        );
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(response.job.as_ref().unwrap().state, "queued");
+        let queue = shared.queue.lock().unwrap();
+        assert_eq!(queue.pending.len(), 1);
+        assert!(queue.pending[0].remote.is_some());
+        assert_eq!(queue.pending[0].lan_model.as_deref(), Some("remote-model"));
     }
 }

@@ -2,30 +2,160 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Emitter, Manager, State,
-    menu::{Menu, MenuItem, MenuItemKind},
-};
+use tauri::{AppHandle, Emitter, Manager, State};
+// 菜单仅在 macOS 存在；Windows 完全不创建原生菜单栏。
+#[cfg(target_os = "macos")]
+use tauri::menu::{Menu, MenuItem, MenuItemKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use voice_to_text_core::{
     InputFile, JobState, JobStatus, JobStore, LocalModel, ModelFamily, ModelLibrary, Transcript,
     TranscriptionOptions, inspect_model_directory, transcribe_file_streaming_with_options,
 };
+use voice_to_text_lan::client::LanClient;
 use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, TaskResult};
 
 mod lan;
 mod lan_host;
 mod model_download;
+mod node_supervisor;
+mod permissions;
 mod recording;
 #[cfg(windows)]
 mod recording_windows;
+mod tray;
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
+
+/// Set once the user confirms quitting with active LAN tasks, so the second
+/// ExitRequested (from our own `app.exit`) does not prompt again.
+static QUIT_CONFIRMED: AtomicBool = AtomicBool::new(false);
+
+/// `None` means "nothing to warn about, exit normally".
+fn quit_prompt(active: Result<Vec<(String, String)>, String>) -> Option<String> {
+    match active {
+        Ok(tasks) if tasks.is_empty() => None,
+        Ok(tasks) => {
+            let list = tasks
+                .iter()
+                .map(|(name, phase)| format!("• {name} — {phase}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(format!(
+                "还有 {} 个任务在进行：\n{list}\n\n退出会中断这些任务，对方需要重新提交。",
+                tasks.len()
+            ))
+        }
+        Err(error) => Some(format!(
+            "无法确认是否还有任务在进行（{error}）。退出会中断正在进行的任务，对方需要重新提交。"
+        )),
+    }
+}
+
+/// 关窗行为只有两种取值：后台共享开启时保留窗口（隐藏），否则正常关闭。
+pub(crate) fn should_hide_on_close(keep_running_in_background: bool, sharing: bool) -> bool {
+    keep_running_in_background && sharing
+}
+
+/// Run the quit flow: no sharing → exit; active tasks → ask; otherwise exit.
+pub(crate) fn request_quit(app: &AppHandle) {
+    if QUIT_CONFIRMED.load(Ordering::SeqCst) {
+        app.exit(0);
+        return;
+    }
+    let running = app
+        .state::<Arc<lan_host::HostState>>()
+        .status()
+        .map(|status| status.running)
+        .unwrap_or(false);
+    if !running {
+        QUIT_CONFIRMED.store(true, Ordering::SeqCst);
+        app.exit(0);
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let status = app.state::<Arc<lan_host::HostState>>().status().ok();
+        let active = status
+            .as_ref()
+            .map(running_tasks)
+            .unwrap_or_else(|| Err("节点状态不可用".to_owned()));
+        let Some(message) = quit_prompt(active) else {
+            QUIT_CONFIRMED.store(true, Ordering::SeqCst);
+            app.exit(0);
+            return;
+        };
+        // 原生对话框必须在主线程的事件循环里显示；阻塞式 API 在后台线程不可靠。
+        let dialog_app = app.clone();
+        let exit_app = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            dialog_app
+                .dialog()
+                .message(message)
+                .title("退出 Local Transcribe")
+                .kind(MessageDialogKind::Warning)
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "仍要退出".to_owned(),
+                    "取消".to_owned(),
+                ))
+                .show(move |confirmed| {
+                    if confirmed {
+                        QUIT_CONFIRMED.store(true, Ordering::SeqCst);
+                        exit_app.exit(0);
+                    }
+                });
+        });
+    });
+}
+
+fn running_tasks(status: &lan_host::HostStatus) -> Result<Vec<(String, String)>, String> {
+    let host = if status.address == "0.0.0.0" {
+        "127.0.0.1".to_owned()
+    } else {
+        status.address.clone()
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let tasks = runtime.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            LanClient::new(host, status.port).tasks(),
+        )
+        .await
+        .map_err(|_| "节点没有响应".to_owned())?
+        .map_err(|error| error.to_string())
+    })?;
+    Ok(tasks
+        .into_iter()
+        .filter(|task| !task.state.is_terminal())
+        .map(|task| (task.file_name, task_state_label(task.state).to_owned()))
+        .collect())
+}
+
+fn task_state_label(state: voice_to_text_lan::protocol::TaskState) -> &'static str {
+    use voice_to_text_lan::protocol::TaskState;
+    match state {
+        TaskState::Init => "init",
+        TaskState::FileTransferring => "receiving file",
+        TaskState::Queued => "queued",
+        TaskState::Transcribing => "transcribing",
+        TaskState::PostProcessing => "post-processing",
+        TaskState::CancelRequested => "cancelling",
+        TaskState::Completed => "completed",
+        TaskState::Failed => "failed",
+        TaskState::Cancelled => "cancelled",
+    }
+}
 const SEGMENT_EVENT: &str = "voice-to-text:transcript-segment";
 
 #[derive(Default)]
@@ -61,8 +191,17 @@ struct LibraryModelSummary {
     id: String,
     display_name: String,
     family: String,
+    /// 与清单 directory 完全相等时带出的语言标签；未知模型为 None。
+    languages: Option<String>,
     bytes: u64,
     selected: bool,
+}
+
+fn catalog_languages(model: &LocalModel) -> Option<String> {
+    let directory = model.directory.file_name()?.to_str()?;
+    model_download::languages_for_directory(directory)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,6 +216,11 @@ struct StorageSummary {
     jobs_path: String,
     jobs_bytes: u64,
     jobs_count: usize,
+    lan_host_path: String,
+    lan_host_bytes: u64,
+    lan_host_count: usize,
+    logs_path: String,
+    logs_bytes: u64,
     data_path: String,
 }
 
@@ -341,6 +485,7 @@ fn library_summary(
         id: entry.model.id.clone(),
         display_name: entry.model.display_name.clone(),
         family: family_label(entry.model.family).to_owned(),
+        languages: catalog_languages(&entry.model),
         bytes: entry.bytes,
         selected: selected.as_deref() == Some(entry.model.id.as_str()),
     })
@@ -679,6 +824,7 @@ fn library_models(app: AppHandle) -> Result<Vec<LibraryModelSummary>, String> {
             id: entry.model.id.clone(),
             display_name: entry.model.display_name.clone(),
             family: family_label(entry.model.family).to_owned(),
+            languages: catalog_languages(&entry.model),
             bytes: entry.bytes,
             selected: selected.as_deref() == Some(entry.model.id.as_str()),
         })
@@ -750,6 +896,14 @@ fn storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
     let (history_bytes, history_count) = directory_usage(&history);
     let jobs = data_dir.join("jobs");
     let (jobs_bytes, jobs_count) = directory_usage(&jobs);
+    let lan_host = data_dir.join("lan-host");
+    let (lan_host_bytes, lan_host_count) = directory_usage(&lan_host);
+    let logs_dir = app
+        .path()
+        .app_log_dir()
+        .unwrap_or_else(|_| data_dir.join("logs"));
+    let logs_file = logs_dir.join("lan-node.log");
+    let logs_bytes = fs::metadata(&logs_file).map(|meta| meta.len()).unwrap_or(0);
     Ok(StorageSummary {
         library_path: library.directory().to_string_lossy().into_owned(),
         library_bytes,
@@ -760,6 +914,11 @@ fn storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
         jobs_path: jobs.to_string_lossy().into_owned(),
         jobs_bytes,
         jobs_count,
+        lan_host_path: lan_host.to_string_lossy().into_owned(),
+        lan_host_bytes,
+        lan_host_count,
+        logs_path: logs_file.to_string_lossy().into_owned(),
+        logs_bytes,
         data_path: data_dir.to_string_lossy().into_owned(),
     })
 }
@@ -902,7 +1061,7 @@ struct RetentionOutcome {
 
 /// 把文件移入废纸篓（本项目的删除约定：永不永久删除）。
 #[cfg(target_os = "macos")]
-fn move_to_trash(path: &Path) -> Result<(), String> {
+pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
     let home = std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?;
     let trash = PathBuf::from(home).join(".Trash");
     let name = path
@@ -997,6 +1156,57 @@ fn apply_retention(app: &AppHandle) -> Result<RetentionOutcome, String> {
 }
 
 /// 用系统文件管理器打开一个已存在的目录。
+/// 打开文件或目录（日志文件需要「打开文件」而不是「打开目录」）。
+/// 把应用数据与日志移入废纸篓（不删除）。运行中的 service 文件跳过，避免影响本机服务。
+#[tauri::command]
+fn clear_app_data(app: AppHandle) -> Result<usize, String> {
+    let data = app_data_dir(&app)?;
+    let mut moved = 0usize;
+    if let Ok(entries) = fs::read_dir(&data) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("service.") {
+                continue;
+            }
+            if move_to_trash(&entry.path()).is_ok() {
+                moved += 1;
+            }
+        }
+    }
+    if let Ok(logs) = app.path().app_log_dir() {
+        for name in ["lan-node.log", "lan-node.log.1"] {
+            let path = logs.join(name);
+            if path.exists() && move_to_trash(&path).is_ok() {
+                moved += 1;
+            }
+        }
+    }
+    Ok(moved)
+}
+
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    let canonical = target
+        .canonicalize()
+        .map_err(|_| "这个路径当前不可访问。".to_owned())?;
+    if !canonical.is_file() && !canonical.is_dir() {
+        return Err("这个路径既不是文件也不是目录。".to_owned());
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = std::process::Command::new("explorer");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = std::process::Command::new("xdg-open");
+    command
+        .arg(canonical)
+        .spawn()
+        .map_err(|error| format!("无法打开这个路径：{error}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn open_directory(path: String) -> Result<(), String> {
     let target = PathBuf::from(&path);
@@ -1245,6 +1455,109 @@ fn get_lan_settings(app: AppHandle) -> Result<lan::LanSettings, String> {
     lan::read_lan_settings(&app)
 }
 
+/// 节点接收媒体的自动清理（默认关闭；只清终态任务；走废纸篓）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LanHostRetention {
+    mode: String,
+    age_days: u64,
+    max_bytes: u64,
+}
+
+impl Default for LanHostRetention {
+    fn default() -> Self {
+        Self {
+            mode: "off".to_owned(),
+            age_days: 7,
+            max_bytes: GIB,
+        }
+    }
+}
+
+fn lan_host_retention_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("lan-host-retention.json"))
+}
+
+#[tauri::command]
+fn get_lan_host_retention(app: AppHandle) -> Result<LanHostRetention, String> {
+    let path = lan_host_retention_path(&app)?;
+    if !path.exists() {
+        return Ok(LanHostRetention::default());
+    }
+    let bytes =
+        fs::read(path).map_err(|_| "Could not read the node cleanup settings.".to_owned())?;
+    Ok(serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+#[tauri::command]
+fn set_lan_host_retention(
+    policy: LanHostRetention,
+    app: AppHandle,
+) -> Result<LanHostRetention, String> {
+    if !matches!(policy.mode.as_str(), "off" | "age" | "size") {
+        return Err("Unknown node cleanup mode.".to_owned());
+    }
+    if !matches!(policy.age_days, 1 | 3 | 5 | 7 | 30) {
+        return Err("Unsupported node cleanup age.".to_owned());
+    }
+    if !matches!(
+        policy.max_bytes,
+        1_073_741_824 | 5_368_709_120 | 10_737_418_240
+    ) {
+        return Err("Unsupported node cleanup size.".to_owned());
+    }
+    let path = lan_host_retention_path(&app)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "The app's local data folder is unavailable.".to_owned())?;
+    fs::create_dir_all(parent)
+        .map_err(|_| "Could not prepare the node cleanup settings.".to_owned())?;
+    let temporary = parent.join("lan-host-retention.json.tmp");
+    let contents = serde_json::to_vec_pretty(&policy)
+        .map_err(|_| "Could not encode the node cleanup settings.".to_owned())?;
+    fs::write(&temporary, &contents)
+        .map_err(|_| "Could not save the node cleanup settings.".to_owned())?;
+    fs::rename(&temporary, &path)
+        .map_err(|_| "Could not finish saving the node cleanup settings.".to_owned())?;
+    Ok(policy)
+}
+
+/// 非 macOS 没有回收站实现，界面必须禁用该开关而不是退化成删除。
+#[tauri::command]
+fn lan_host_cleanup_supported() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// 共享运行中，但保存的网卡/端口或模型库已经变化 → 需要重启共享。
+#[tauri::command]
+fn lan_host_restart_needed(
+    app: AppHandle,
+    state: State<'_, Arc<lan_host::HostState>>,
+) -> Result<bool, String> {
+    let status = state.status()?;
+    if !status.running {
+        return Ok(false);
+    }
+    let settings = lan::read_lan_settings(&app)?;
+    if settings.host_address != status.address || settings.host_port != status.port {
+        return Ok(true);
+    }
+    let mut library = ModelLibrary::new(app_data_dir(&app)?)
+        .list()?
+        .into_iter()
+        .map(|entry| entry.model.id)
+        .collect::<Vec<_>>();
+    library.sort();
+    let mut served = status
+        .model
+        .split(" · ")
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    served.sort();
+    Ok(library != served)
+}
+
 #[tauri::command]
 fn lan_host_interfaces() -> Result<Vec<lan_host::LanInterface>, String> {
     lan_host::interfaces()
@@ -1267,30 +1580,48 @@ async fn start_lan_host(
 ) -> Result<lan_host::HostStatus, String> {
     let state = Arc::clone(state.inner());
     let root = app_data_dir(&app)?;
-    let mut models = ModelLibrary::new(&root)
-        .list()?
-        .into_iter()
-        .map(|entry| entry.model)
-        .collect::<Vec<_>>();
-    if let Some(selected) = read_selected_model(&app)? {
-        models.retain(|model| model.id != selected.id);
-        models.insert(0, selected);
-    }
-    tauri::async_runtime::spawn_blocking(move || {
-        state.start_models(&root, name, address, port, models)
+    // Logs live under app_log_dir, not app data; the child writes stdout and
+    // stderr directly into the file (no pipe that can fill up).
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|error| format!("Cannot locate the log directory: {error}"))?;
+    let settings = lan::read_lan_settings(&app)?;
+    let idle_unload = settings.idle_unload_node;
+    let started_name = name.clone();
+    let started_address = address.clone();
+    let status = tauri::async_runtime::spawn_blocking(move || {
+        state.start(&root, &log_dir, name, address, port, idle_unload)
     })
     .await
-    .map_err(|_| "Could not start LAN sharing.".to_owned())?
+    .map_err(|_| "Could not start LAN sharing.".to_owned())??;
+    // 记住这次共享的配置，供下次启动恢复；失败不掩盖启动结果。
+    let mut updated = lan::read_lan_settings(&app)?;
+    updated.share_on_launch = true;
+    updated.host_name = started_name;
+    updated.host_address = started_address;
+    updated.host_port = port;
+    if let Err(error) = lan::save_settings(&app, updated) {
+        eprintln!("could not persist share_on_launch: {error}");
+    }
+    Ok(status)
 }
 
 #[tauri::command]
 async fn stop_lan_host(
+    app: AppHandle,
     state: State<'_, Arc<lan_host::HostState>>,
 ) -> Result<lan_host::HostStatus, String> {
     let state = Arc::clone(state.inner());
-    tauri::async_runtime::spawn_blocking(move || state.stop())
+    let status = tauri::async_runtime::spawn_blocking(move || state.stop())
         .await
-        .map_err(|_| "Could not stop LAN sharing.".to_owned())?
+        .map_err(|_| "Could not stop LAN sharing.".to_owned())??;
+    let mut settings = lan::read_lan_settings(&app)?;
+    settings.share_on_launch = false;
+    if let Err(error) = lan::save_settings(&app, settings) {
+        eprintln!("could not persist share_on_launch=false: {error}");
+    }
+    Ok(status)
 }
 
 #[tauri::command]
@@ -1299,6 +1630,12 @@ fn set_lan_settings(
     app: AppHandle,
 ) -> Result<lan::LanSettings, String> {
     lan::save_settings(&app, settings)
+}
+
+/// 语言切换后重建原生托盘菜单（原生菜单不跟随 i18n）。
+#[tauri::command]
+fn set_tray_locale(locale: String, app: AppHandle) {
+    tray::set_locale(&app, &locale);
 }
 
 #[tauri::command]
@@ -1317,8 +1654,29 @@ fn lan_local_access() -> voice_to_text_lan::client::LocalNetworkAccess {
 }
 
 #[tauri::command]
+fn lan_diagnostics(app: AppHandle) -> lan::LanDiagnostics {
+    lan::diagnostics(&app)
+}
+
+/// 重启应用：用于强制刷新 macOS 的本地网络权限缓存。
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
+#[tauri::command]
 fn open_local_network_settings() -> Result<(), String> {
     lan::open_local_network_settings()
+}
+
+#[tauri::command]
+fn app_permissions() -> permissions::AppPermissionStatus {
+    permissions::status()
+}
+
+#[tauri::command]
+fn open_privacy_settings(pane: String) -> Result<(), String> {
+    permissions::open_pane(&pane)
 }
 
 #[tauri::command]
@@ -1530,10 +1888,15 @@ pub fn menu_event_for_id(id: &str) -> Option<&'static str> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(Arc::new(AppState::default()))
         .manage(Arc::new(lan_host::HostState::default()))
-        .manage(std::sync::Arc::new(recording::RecordingState::default()))
+        .manage(std::sync::Arc::new(recording::RecordingState::default()));
+
+    // Windows 不创建原生菜单栏（File/Edit/View 条）；打开文件走界面「导入文件」。
+    // macOS 保留「打开…」与自定义 Quit，行为不变。
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .menu(|app| {
             let menu = Menu::default(app)?;
             let open_media =
@@ -1551,15 +1914,54 @@ pub fn run() {
             } else {
                 eprintln!("Tauri default File submenu not found; Open menu item unavailable");
             }
+            // ⌘Q 走系统默认 Quit 时会绕过 RunEvent；换成我们自己的项。
+            let app_name = app.package_info().name.clone();
+            let app_menu = menu.items()?.into_iter().find_map(|item| match item {
+                MenuItemKind::Submenu(submenu)
+                    if submenu.text().ok().as_deref() == Some(app_name.as_str()) =>
+                {
+                    Some(submenu)
+                }
+                _ => None,
+            });
+            if let Some(app_menu) = app_menu {
+                let items = app_menu.items()?;
+                if let Some(last) = items.last() {
+                    let _ = app_menu.remove(last);
+                }
+                let quit = MenuItem::with_id(
+                    app,
+                    "quit_app",
+                    "Quit Local Transcribe",
+                    true,
+                    Some("CmdOrCtrl+Q"),
+                )?;
+                app_menu.append(&quit)?;
+            }
             Ok(menu)
         })
         .on_menu_event(|app, event| {
+            if event.id().as_ref() == "quit_app" {
+                request_quit(app);
+                return;
+            }
             if let Some(frontend_event) = menu_event_for_id(event.id().as_ref())
                 && let Err(error) = app.emit(frontend_event, ())
             {
                 eprintln!("failed to emit file menu event: {error}");
             }
-        })
+        });
+
+    builder
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 第二次启动不初始化任何状态：只把已有主窗口带回前台。
+            eprintln!("[single-instance] second launch forwarded to the running app");
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // 标题栏侧栏开关（原生按钮，与红绿灯同一行）。
@@ -1570,6 +1972,53 @@ pub fn run() {
                 && let Err(error) = titlebar_toggle::install(&window)
             {
                 eprintln!("could not install the sidebar toggle: {error}");
+            }
+            // 托盘与状态轮询：关窗后共享仍可在后台运行。
+            if let Err(error) = tray::install(app.handle()) {
+                eprintln!("could not install the tray icon: {error}");
+            }
+            tray::spawn_status_loop(app.handle().clone());
+            // 共享跨启动恢复：只在网卡仍然存在时重开；失败只写 notice，不阻塞启动。
+            let auto_app = app.handle().clone();
+            std::thread::spawn(move || {
+                let Ok(settings) = lan::read_lan_settings(&auto_app) else {
+                    return;
+                };
+                if !settings.share_on_launch {
+                    return;
+                }
+                let state = auto_app.state::<Arc<lan_host::HostState>>();
+                let available = settings.host_address == "0.0.0.0"
+                    || lan_host::interfaces()
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|item| item.address.to_string() == settings.host_address);
+                if settings.host_address.is_empty() || !available {
+                    state.set_notice(Some("上次使用的网卡不可用，请重新选择。".to_owned()));
+                    return;
+                }
+                let Ok(root) = app_data_dir(&auto_app) else {
+                    return;
+                };
+                let Ok(log_dir) = auto_app.path().app_log_dir() else {
+                    return;
+                };
+                if let Err(error) = state.start(
+                    &root,
+                    &log_dir,
+                    settings.host_name.clone(),
+                    settings.host_address.clone(),
+                    settings.host_port,
+                    settings.idle_unload_node,
+                ) {
+                    state.set_notice(Some(format!("自动恢复共享失败：{error}")));
+                }
+            });
+            // 界面进程自己的空闲卸载档位；非法值已在读取时回落 120。
+            if let Ok(settings) = lan::read_lan_settings(app.handle())
+                && let Err(error) = voice_to_text_core::set_idle_unload(settings.idle_unload_gui)
+            {
+                eprintln!("idle unload setting ignored: {error}");
             }
             // 启动时按用户的保留策略清理历史与任务记录（默认关闭 = 不删任何东西）。
             let handle = app.handle().clone();
@@ -1601,6 +2050,8 @@ pub fn run() {
             delete_library_model,
             storage_summary,
             open_directory,
+            open_path,
+            clear_app_data,
             list_audio_devices,
             list_audio_apps,
             start_recording,
@@ -1620,13 +2071,22 @@ pub fn run() {
             get_lan_settings,
             lan_host_interfaces,
             lan_host_status,
+            lan_host_restart_needed,
+            get_lan_host_retention,
+            set_lan_host_retention,
+            lan_host_cleanup_supported,
             start_lan_host,
             stop_lan_host,
             set_lan_settings,
+            set_tray_locale,
             set_lan_assignment,
             lan_discover,
             lan_local_access,
+            lan_diagnostics,
+            restart_app,
             open_local_network_settings,
+            app_permissions,
+            open_privacy_settings,
             lan_node_status,
             lan_submit_file,
             lan_tasks,
@@ -1637,12 +2097,37 @@ pub fn run() {
             lan_collect,
             lan_storage
         ])
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let keep = lan::read_lan_settings(app)
+                    .map(|settings| settings.keep_running_in_background)
+                    .unwrap_or(false);
+                let running = app
+                    .try_state::<Arc<lan_host::HostState>>()
+                    .and_then(|state| state.status().ok())
+                    .is_some_and(|status| status.running);
+                if should_hide_on_close(keep, running) {
+                    // 关窗不中断后台共享；托盘图标仍可把窗口带回来。
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit) {
+        .run(|app, event| match &event {
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                if QUIT_CONFIRMED.load(Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_exit();
+                request_quit(app);
+            }
+            tauri::RunEvent::Exit => {
                 let _ = app.state::<Arc<lan_host::HostState>>().stop();
             }
+            _ => {}
         });
 }
 
@@ -1653,6 +2138,17 @@ mod tests {
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn quit_prompt_covers_active_none_and_unreachable() {
+        assert!(super::quit_prompt(Ok(Vec::new())).is_none());
+        let message = super::quit_prompt(Ok(vec![("a.wav".to_owned(), "transcribing".to_owned())]))
+            .expect("active task warns");
+        assert!(message.contains("还有 1 个任务"), "{message}");
+        assert!(message.contains("a.wav"), "{message}");
+        let message = super::quit_prompt(Err("timeout".to_owned())).expect("unknown warns");
+        assert!(message.contains("无法确认"), "{message}");
+    }
 
     #[test]
     fn open_media_menu_item_emits_the_frontend_event() {
@@ -1765,5 +2261,18 @@ mod search_tests {
     fn snippet_falls_back_to_the_head_when_the_needle_is_absent() {
         let snippet = match_snippet("short text", "absent", 5, 20);
         assert_eq!(snippet, "short text");
+    }
+}
+
+#[cfg(test)]
+mod close_behavior_tests {
+    use super::should_hide_on_close;
+
+    #[test]
+    fn close_hides_only_when_background_sharing_is_on() {
+        assert!(should_hide_on_close(true, true));
+        assert!(!should_hide_on_close(true, false));
+        assert!(!should_hide_on_close(false, true));
+        assert!(!should_hide_on_close(false, false));
     }
 }

@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import Reader from "./Reader.svelte";
   import { t, formatDayLabel, formatClock } from "$lib/i18n.svelte";
+  import { prettyName } from "$lib/model-names.svelte";
   import type { HistoryEntry, SearchHit, Transcript } from "$lib/types";
 
   let {
@@ -82,28 +83,6 @@
 
 <section class="content">
   {#if detail && detailJobId}
-    <div class="detail-bar">
-      <button type="button" class="back" onclick={onBack}>
-        <Icon name="chevronLeft" size={12} stroke={1.7} />{t("nav.home")}
-      </button>
-      <div class="spacer"></div>
-      <button type="button" class="act" onclick={() => onExport("txt")}>
-        <Icon name="download" size={13} />TXT
-      </button>
-      <button type="button" class="act" onclick={() => onExport("json")}>
-        <Icon name="download" size={13} />JSON
-      </button>
-    </div>
-    <div class="detail-head">
-      <div class="file">{detail.sourceFileName}</div>
-      <div class="meta">
-        <span><b>{detail.modelId}</b></span>
-        <span class="sep">·</span>
-        <span>{durationLabel(detail.durationMs)}</span>
-        <span class="sep">·</span>
-        <span>{timeLabel(entries.find((item) => item.jobId === detailJobId)?.updatedAtMs ?? Date.now())}</span>
-      </div>
-    </div>
     <Reader
       jobId={detailJobId}
       segments={detail.segments && detail.segments.length > 0
@@ -112,7 +91,29 @@
           ? [{ startMs: 0, endMs: 0, text: detail.text }]
           : []}
       initialFollow={false}
-    />
+      onBack={onBack}
+    >
+      {#snippet heading()}
+        <div class="detail-head">
+          <div class="file">{detail.sourceFileName}</div>
+          <div class="meta">
+            <span><b>{prettyName(detail.modelId)}</b></span>
+            <span class="sep">·</span>
+            <span>{durationLabel(detail.durationMs)}</span>
+            <span class="sep">·</span>
+            <span>{timeLabel(entries.find((item) => item.jobId === detailJobId)?.updatedAtMs ?? Date.now())}</span>
+          </div>
+        </div>
+      {/snippet}
+      {#snippet actions()}
+        <button type="button" class="act btn-secondary" onclick={() => onExport("txt")}>
+          <Icon name="download" size={13} />TXT
+        </button>
+        <button type="button" class="act btn-secondary" onclick={() => onExport("json")}>
+          <Icon name="download" size={13} />JSON
+        </button>
+      {/snippet}
+    </Reader>
   {:else}
     <div class="list">
       <h1 class="page-title">{t("nav.home")}</h1>
@@ -150,7 +151,7 @@
                 </div>
                 <div class="hit-snippet">{hit.snippet}</div>
                 <div class="card-meta">
-                  <span class="model">{hit.modelId}</span>
+                  <span class="model">{prettyName(hit.modelId)}</span>
                   <span class="dur">{durationLabel(hit.durationMs)}</span>
                 </div>
                 <div class="card-foot">
@@ -186,7 +187,7 @@
                   <span class="name">{entry.sourceFileName}</span>
                 </div>
                 <div class="card-meta">
-                  <span class="model">{entry.modelId}</span>
+                  <span class="model">{prettyName(entry.modelId)}</span>
                   <span class="dur">{durationLabel(entry.durationMs)}</span>
                 </div>
                 <div class="card-foot">
@@ -204,6 +205,8 @@
 
 <style>
   .content {
+    border-radius: var(--radius);
+    overflow: hidden;
     flex: 1;
     min-height: 0;
     display: flex;
@@ -211,11 +214,8 @@
     padding: 2px 28px 0;
   }
 
-  .spacer {
-    flex: 1;
-  }
-
   .list {
+    border-radius: var(--radius);
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -404,44 +404,6 @@
 
   .empty-state .s {
     margin-top: 4px;
-  }
-
-  .detail-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    max-width: 720px;
-    margin: 2px auto 0;
-  }
-
-  .back {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--text-2);
-    background: none;
-    border: 0;
-    padding: 0;
-  }
-
-  .act {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 26px;
-    padding: 0 8px;
-    border-radius: 6px;
-    border: 0;
-    background: transparent;
-    color: var(--text-2);
-    font-size: 12.5px;
-  }
-
-  .act:hover {
-    background: var(--fill);
-    color: var(--text);
   }
 
   .detail-head {

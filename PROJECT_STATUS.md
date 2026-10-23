@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-**Milestone 3 — shared task/result core and local MCP control plane.** The MCP executable is built and its stdio/control-plane behavior is tested on Apple Silicon. Real model inference remains unverified; this is not yet an end-to-end transcription product.
+**Current build — 1.1.0-beta.5 desktop with real model inference, verified model catalog, headless LAN node and menu-bar supervision.** GUI, CLI and MCP are service clients over the shared core; the LAN node now runs as a supervised `local-transcribe-node` child process. Model downloads, deletion and local transcription are verified on Apple Silicon; Windows packaging of this milestone is not built.
 
 ## Provisional UI refresh (2026-10-22)
 
@@ -49,7 +49,7 @@
 ## Current decisions
 
 - Tauri 2 + Svelte remains the accepted desktop route; macOS first. Product name and final UI design remain open.
-- MCP uses the official Rust SDK `rmcp = 3.6.0`, stdio only, with exactly five tools.
+- MCP uses the official Rust SDK `rmcp = 3.6.0`, stdio only, with exactly nine tools (`import_model` removed; `list_nodes` added).
 - MCP file access requires explicit repeated `--allow-root` paths; no root means deny. There is no arbitrary output path or shell tool.
 - Task/result persistence currently uses JSON files and cross-process `fs2` locks; SQLite is deferred, not a user-approved permanent architecture decision.
 - The original `GPT聊天记录/` material remains unchanged and Git-ignored. No Git commit or remote was created.
@@ -57,7 +57,7 @@
 ## Blockers / not verified
 
 - No model weights were downloaded. Real audio/video inference, compatible model export, quality, chunk timestamps, cancellation during a real run, performance, offline run and model licensing are **not verified**. The ignored test `transcribes_a_local_recording_without_changing_it` needs an approved model and a short local recording.
-- CLI is not implemented. Hermes or another MCP client has not been configured. A stdio command runs on the client's host; the process must run on the same Mac as the desktop app/media to share the default app-data path.
+- The CLI is implemented as a service client (`local-transcribe status | models | jobs | export`); no MCP client has been configured. A stdio command runs on the client's host; the process must run on the same Mac as the desktop app/media to share the default app-data path.
 - Windows 11 x64 validation was started on `REDACTED-HOST` / user `REDACTED-USER` after explicit install authorization. Visual Studio Build Tools 17.14.42, MSVC 14.44.35207, Windows SDK 10.0.26100.0, Rust 1.99.1 MSVC target, and Node.js 24.20.0/npm 11.19.0 are installed and verified; WebView2 was pre-existing. Windows frontend `npm run check` (0 errors/warnings) and `npm run build`, plus `cargo fmt --all -- --check`, passed. The actual `cargo test --workspace` stopped before tests ran: Code Integrity events 3033/3077 blocked Cargo-generated `serde` build-script executable for not meeting Enterprise signing-level requirements (policy ID `0283ac0f-fff1-49ae-ada1-8a933130cad6`). No policy was modified or bypassed. Windows Clippy, release Rust builds, Tauri packaging/installer, and runtime/UI acceptance remain unverified. The temporary proxy was restored to WinINet `ProxyEnable=0`, `ProxyServer=127.0.0.1:7897`; the reverse tunnel was stopped. Normal shutdown was requested at `2026-10-22T05:17:02Z`; afterward SSH timed out and Tailscale reported the Windows peer `Online=False` at `2026-10-22T05:20:00.1Z`. See `docs/windows-build-log.md` for the installation and command details.
 - A Tauri `.app` bundle/signing check was not rerun. Earlier strict `codesign --verify --deep --strict` failed with `code has no resources but signature indicates they must be present`; packaging/signing remains unresolved.
 - Release build, installer, notarization, and real-device UX acceptance remain outstanding.
@@ -336,3 +336,90 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
   （https://github.com/TimmySheep/VoiceToTextApp/releases/tag/1.1.0-beta.5）。
 - MBP 已换装，旧版备份 `before-model-catalog-20261023-2007`；Air 不可达，未更新。
 - 待办：GUI 下载流程、Windows 真机 GUI/录音、跨机局域网转写仍待 Timmy 验收。
+
+## Headless node, tray and jobs list (2026-10-23)
+
+### Verified
+
+- Single instance: second launch exits 0, one GUI process, wake-up callback logged (debug and installed app).
+- Headless node: `--listen` required; netmask rules (`/1`–`/30` same-subnet, `/31`/`/32` unfiltered, `0.0.0.0` unscoped); Tailscale `100.64/10` may omit the mask; state file 0600 with address/mask/`subnet_filter`; stale pid recovery; duplicate start exits 1; `--parent-pid` child exits within 5 s after `kill -9`; real WAV transcribed over HTTP on `127.0.0.1:7878`.
+- mDNS: skipped for non-RFC1918 binds (`100.x`) and loopback; wildcard announces one RFC1918 address without `enable_addr_auto()`; `/24` unchanged.
+- Supervisor: GUI no longer embeds `NodeServer`; child stdout/stderr go to `~/Library/Logs/com.timmy.voicetotextapp/lan-node.log` (5 MB rotation, one generation); port conflict and abnormal exit surfaced from real child runs.
+- Memory measurements: M1 single-process switching cost ≈1.75 s (FireRed) / ≈1.24 s (Zipformer), one model resident; M2 same-second sampling: node peak 1,808,320 KB (1.72 GiB), local peak 958,048 KB (0.91 GiB), combined peak 2,265,264 KB (2.16 GiB) — individual peaks were not simultaneous, so do not add them; M3 debug run: both processes logged the 120 s unload, but at 260 s RSS was 872 MB (node) and 484 MB (local), GUI 42 MB — cache release, not immediate RSS return.
+- Idle unload: 20/120/600/1800/7200 closed set, invalid falls back to 120, task end refreshes the timer, `loaded_model_id` no longer blocks during inference.
+- `jobs list` / `get_job_status` now share the persisted store; finished list capped at 200 and survives restarts; queued jobs are still lost on restart.
+- Tests: `cargo test --workspace` 29 groups all ok; strict Clippy; `cargo fmt --check`; `npm test` 18/18; `svelte-check` 0/0; frontend build.
+- Packaging: `.app` 45.99 MiB with `local-transcribe-node` sidecar (both ad-hoc signed), installed at `~/Applications/Local Transcribe.app`; version 1.1.0-beta.5.
+
+### Blocked / not done
+
+- GUI acceptance was blocked by the locked screen: starting sharing from the UI, tray menu interaction, close-to-background behaviour and the 20 s/7200 s setting switch are **not verified**. P4.2 is implemented in code (auto-resume with notice, quit confirmation, `lan-host` retention with Trash, data-location section with six paths and clear-all, consent, restart banner, explicit port-in-use message) but its GUI paths and screenshots are pending the same unlock.
+- The two UI taskbooks (temporary-UI label removal, sidebar brand removal, model title/subtitle split, theme button, `prettyName` across 8 display points) are implemented; `npm test` 22/22, `svelte-check` 0/0, build passes. Screenshots and five-language visual checks are pending the unlock.
+- P3.5 (CLI/MCP LAN dispatch) is implemented and verified on loopback end to end: `jobs add --node` completed on the node with real text (`export` and `get_job_result.fullText` identical), failure without fallback stayed `failed`, `--fallback-local` reused the same job id, cancel reached the node (`cancel_requested → cancelled`), MCP `list_nodes`/`nodeId` behaved and rejected unknown ids before any connection. Two-machine dispatch is still unverified.
+- Windows: no MSI was built for this milestone; tray/sidecar compile and packaging there are unverified.
+- The old "LAN TCP works but HTTP times out" symptom did not reproduce today: Air → 192.168.1.243:7878 and Air → 100.104.46.54:7878 both returned `ok`. This is a two-sample observation, not a confirmed fix.
+
+## 阅读器交互修复与胶囊统一（2026-10-24）
+
+- 已实现：reader bar 明确启用 pointer-events，装饰层不接收点击；移除 TOP 调试标签，scrollport 从 40px 下方开始；模型菜单移除带 opacity 的过渡并使用不透明底及更高 stacking context；内容区圆角、导出/右上胶囊、原生细滚动条统一。
+- 已验证：真实 Svelte 组件在 Chrome headless 内执行中心命中、两轮首页回调、两轮查找展开与聚焦、浅深色菜单不透明、胶囊计算样式/长模型名截断。`npm run check` 0/0，`npm test` 38/38（0 skipped），前端 build 通过；不是 WKWebView 或 Windows GUI 验收。
+- 原截图「…ON / TOP / thumb」三处 elementFromPoint 输出未采集，不使用 fixture 坐标替代。fixture 的实际命中与测试先红后绿记录见 `logs/2026-10/2026-10-24-reader-interaction-and-capsules.md`。
+- 按 Timmy 要求停止 CUA 验收；真实应用导航、菜单/圆角放大截图、浅深色、玻璃对照、macOS/Windows 滚动条与性能均待本人验收。macOS bundle/安装结果另行追加，未发布新版本。
+
+### 阅读器补丁最终安装（2026-10-24 01:45，本机时间）
+
+- 最终源码 check 0/0、38/38 前端测试、`bundle:mac` 均通过；已备份旧应用并正常退出/换装/重开 `~/Applications/Local Transcribe.app`。构建包与安装包通过 strict codesign 校验，desktop/node 哈希各自匹配。
+- ad-hoc 签名、版本仍 1.1.0-beta.5；无 Git 提交/发布。未做 CUA/Windows 验收，人工清单不变。安装路径、备份及哈希见上述阅读器日志。
+
+### 两份阅读器任务书源码自查补漏（2026-10-24 后续）
+
+- 修复fade/正文底色不一致、off/reduce填充token、contrast覆盖优先级、渐隐子层圆角、首页实际滚动列表规则及长模型名挤压箭头；仅限这两份任务书对应的源码与测试，无观感判断。
+- 真实组件/CDP计算样式与几何测试先红后绿；最终check 0/0、前端测试39/39、build通过。保留原异常三处历史命中缺失与两份TXT/JSON要求互斥的说明，不伪称已补齐证据。
+- 本轮未重打/换装.app、未重启，当前安装版本不含本段补漏；未提交/发布。详细变更与数值追加于阅读器交互日志末尾。
+
+### 菜单栏图标资源修正（2026-10-24）
+
+- 使用标准库4x超采样生成22/44px黑色透明模板与32px白色透明Windows资源；托盘按平台嵌入并可读报错，只有macOS启用template；四态逻辑与菜单未变。增加image-png feature。
+- 资源/幂等/加载源码断言2/2通过，指定桌面cargo build通过，原四态测试1/1及fmt检查通过。未做观感或Windows运行判断，未换装或重启应用。详见 `logs/2026-10/2026-10-24-tray-template-icon.md`。
+
+### 当前源码本机安装（北京时间2026-10-24 02:04:58）
+
+- 用户指定全量测试门通过：Rust169 passed/0 failed/11 ignored，严格workspace Clippy通过；前端check0/0、测试39/39、build通过。随后仅用bundle:mac生成.app，sidecar与嵌入的macOS托盘PNG已核对，identifier及strict签名校验通过。
+- 已备份至`~/Applications/Local Transcribe Backups/before-20261024-020458/`，正常退出旧PID97943，安装前7878无监听且无node残留。新包安装到`~/Applications/Local Transcribe.app`，desktop安装前后SHA-256相同：`bf14d5b783ad23449228e7b7134769cf2ace03f54d18447d003593cfc50dee07`。
+- 新PID14026，ps及lsof确认从安装路径执行；启动后20秒未发现新相关崩溃报告。包含此前阅读器补漏和托盘图标修正，版本仍1.1.0-beta.5/ad-hoc；未发布。
+- 本次未验证真实转写/两机LAN/Windows/长期运行或观感，未清理文件。完整安装证据在`logs/2026-10/2026-10-24-current-source-local-install.md`。
+
+### A版应用图标已应用（2026-10-24 02:14:51 北京时间）
+
+- Timmy选择A；按任务几何生成七份应用图标资源，托盘和参考原图未变，保留B版。资源幂等/采样校验及cargo build、前端check/test、bundle:mac通过；只打.app，版本未变。
+- 备份before-20261024-021451后正常退出并确认7878释放，安装~/Applications/Local Transcribe.app；新PID23684，desktop SHA256=682df4b8bd7005bc97bc48ac5d557a832a3b13dfb8915db60d74aa7ebe552bfd，安装前后一致；包内ICNS与生成A资源哈希相同，strict签名校验通过。
+- 不作观感判断、不清理、不发布；详细参数、像素统计口径及安装记录见logs/2026-10/2026-10-24-app-icon-a-apply.md。
+
+### Pro/Air旧版本回收与新版同步（2026-10-24 02:17 北京时间）
+
+- 用户确认精确清单后，Pro15份旧.app备份、Air2份旧备份及旧安装.app分别移入各机带时间戳废纸篓目录；不永久删除、不清空废纸篓。模型/数据/设置/源码/B设计/Windows安装包未动。
+- Pro原已安装A版，保留并复核；Air先暂存校验后换装相同A版，strict签名及desktop/node哈希两机一致。Pro PID23684；Air PID14850，启动02:17:42，15秒无新相关崩溃报告。
+- 当前两机安装均为1.1.0-beta.5当前源码A版，desktop SHA256=682df4b8bd7005bc97bc48ac5d557a832a3b13dfb8915db60d74aa7ebe552bfd；无发布/新版本号。详细移动清单见logs/2026-10/2026-10-24-pro-air-old-apps-trash-and-install.md。
+
+### 阅读器常驻渐隐与本机覆盖安装（2026-10-24 02:23北京时间）
+
+- 按最新要求改72px多stop常驻渐隐，shell独立局部层叠上下文、fade2/bar3/scroll-auto，条空白命中shell；滚动背景透明，两端渐隐与回退均用页面底色。底部24/8px行为保留。
+- 真实组件computed/命中断言先红后绿，check0/0、测试39/39、bundle:mac通过。Pro已备份并覆盖安装，新PID32381，desktop SHA256=7430fe2fae9b4b138d41a1dbcec86b0c351dd83e2eacffc32e0b2be6aeea1780；15秒无新相关诊断报告。
+- Air未做本轮更新，仍为前一构建；无观感判断/图像采集/清理/发布。证据见logs/2026-10/2026-10-24-reader-permanent-fade.md。
+
+### 应用及macOS托盘波形加高（2026-10-24 02:28北京时间）
+
+- 用户要求更长竖波/更大起伏差；应用高度168/384/240、macOS托盘8/17/11，宽度/配色/中线不变；Windows托盘、A参考及B方案保留。
+- 几何测试2/2、托盘资源测试2/2、前端check/test和bundle:mac通过；Pro已备份正常quit覆盖安装，严格签名和哈希通过，新PID37818。Air未更新，未发布；详细数值与备份追加在app-icon-a-apply日志末尾。
+
+### 阅读器滚动内容顶部留白（2026-10-24 后续）
+
+- 新增内容包裹层padding-top，公式为fade高度-bar高度+8px，集中CSS变量，当前40px；不改变scrollport padding-top或常驻fade。
+- 先红后绿实测：scrollTop0标题top106、fade底90、间距16px，标题及祖先opacity1/mask:none；改fade高88时padding自动56px。到底最后段落底间距保持39.96875px、bottom fade8，top fade72/opacity1。
+- check0/0、npm test39/39通过；本轮未打包/换装，安装包尚不含此padding改动。细节追加于reader-permanent-fade日志。
+
+### 按钮体系规范 V1.0（2026-10-24）
+
+- 已集中四档样式及行内危险变体，迁移组件并移除重复定义；模型页仅下载使用胶囊，设置页仅清除使用危险胶囊，表单控件保持。
+- check 0/0、测试41/41（无跳过）、前端build通过；自动断言覆盖每页主操作上限、模型每行胶囊上限、设置文字动作透明背景/非胶囊圆角和主操作disabled。
+- 未截图或评价观感；未原生打包/安装/发布，已安装版本不含本轮修改。详见logs/2026-10/2026-10-24-button-system.md。

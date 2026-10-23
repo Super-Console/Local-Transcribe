@@ -32,6 +32,7 @@ fn start_node(
         role: "auto".to_owned(),
         model_dir,
         media_root,
+        retention_policy: None,
     };
     NodeServer::start(config).expect("node starts")
 }

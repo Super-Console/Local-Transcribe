@@ -1,5 +1,6 @@
 <script lang="ts">
   import { theme, type ThemePreference } from "$lib/theme.svelte";
+  import { prettyName } from "$lib/model-names.svelte";
   import {
     locale,
     t,
@@ -7,8 +8,14 @@
     LOCALE_NAMES,
     type LocalePreference,
   } from "$lib/i18n.svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { confirm } from "@tauri-apps/plugin-dialog";
+  import LanDiagnosticsPanel from "./LanDiagnosticsPanel.svelte";
   import type {
+    LanHostRetention,
+    LanHostStatus,
     LanMode,
+    LanSettings,
     ModelSummary,
     RetentionPolicy,
     ServiceStatus,
@@ -22,6 +29,8 @@
     appVersion,
     retention,
     lanMode,
+    lanSettings,
+    onLanSettingsChange,
     onOpenLibrary,
     onOpenHistory,
     onOpenPath,
@@ -36,6 +45,8 @@
     appVersion: string;
     retention: RetentionPolicy | null;
     lanMode: LanMode | null;
+    lanSettings: LanSettings | null;
+    onLanSettingsChange: (next: LanSettings) => Promise<void>;
     onOpenLibrary: () => void;
     onOpenHistory: () => void;
     onOpenPath: (path: string) => void;
@@ -54,12 +65,50 @@
   });
 
   const AGE_OPTIONS = [1, 3, 5, 7, 30];
+  const IDLE_OPTIONS = [20, 120, 600, 1800, 7200];
+  let hostRunning = $state(false);
+  let nodeRetention = $state<LanHostRetention | null>(null);
+  let cleanupSupported = $state(true);
+
+  $effect(() => {
+    void invoke<LanHostRetention>("get_lan_host_retention")
+      .then((policy) => { nodeRetention = policy; })
+      .catch(() => { nodeRetention = null; });
+    void invoke<boolean>("lan_host_cleanup_supported")
+      .then((supported) => { cleanupSupported = supported; })
+      .catch(() => { cleanupSupported = false; });
+  });
+
+  async function copyPath(path?: string) {
+    if (!path) return;
+    try {
+      await navigator.clipboard.writeText(path);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  function idleLabel(seconds: number): string {
+    if (seconds === 20) return t("settings.idle20");
+    if (seconds === 120) return t("settings.idle120");
+    if (seconds === 600) return t("settings.idle600");
+    if (seconds === 1800) return t("settings.idle1800");
+    return t("settings.idle7200");
+  }
+
+  $effect(() => {
+    if (!lanSettings) return;
+    void invoke<LanHostStatus>("lan_host_status")
+      .then((status) => { hostRunning = status.running; })
+      .catch(() => { hostRunning = false; });
+  });
   const SIZE_OPTIONS = [1, 5, 10];
   const GiB = 1_073_741_824;
 
   import { onDestroy } from "svelte";
 
   let copied = $state<"none" | "mcp" | "cli">("none");
+  let showLanDiagnostics = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
   onDestroy(() => {
@@ -161,8 +210,8 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           <div class="desc">{t("settings.defaultModelDesc")}</div>
         </div>
         <div class="value">
-          <span class:empty={!model}>{model?.displayName ?? t("common.noModel")}</span>
-          <button type="button" class="link" onclick={onGoModels}>{t("settings.manageModels")}</button>
+          <span class:empty={!model}>{prettyName(model?.displayName) || t("common.noModel")}</span>
+          <button type="button" class="link-action" onclick={onGoModels}>{t("settings.manageModels")}</button>
         </div>
       </div>
       <div class="row">
@@ -185,7 +234,8 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         </div>
         <div class="value">
           <span>{t("settings.countModels", { count: storage?.libraryCount ?? 0, size: sizeLabel(storage?.libraryBytes) })}</span>
-          <button type="button" class="link" onclick={onOpenLibrary} disabled={!storage}>{t("common.open")}</button>
+          <button type="button" class="link-action" onclick={onOpenLibrary} disabled={!storage}>{t("common.open")}</button>
+          <button type="button" class="link-action" onclick={() => void copyPath(storage?.libraryPath)} disabled={!storage}>{t("settings.copyPath")}</button>
         </div>
       </div>
       <div class="row">
@@ -197,7 +247,8 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         </div>
         <div class="value">
           <span>{t("settings.countHistory", { count: storage?.historyCount ?? 0, size: sizeLabel(storage?.historyBytes) })}</span>
-          <button type="button" class="link" onclick={onOpenHistory} disabled={!storage}>{t("common.open")}</button>
+          <button type="button" class="link-action" onclick={onOpenHistory} disabled={!storage}>{t("common.open")}</button>
+          <button type="button" class="link-action" onclick={() => void copyPath(storage?.historyPath)} disabled={!storage}>{t("settings.copyPath")}</button>
         </div>
       </div>
       <div class="row">
@@ -209,9 +260,10 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           <span>{t("settings.countHistory", { count: storage?.jobsCount ?? 0, size: sizeLabel(storage?.jobsBytes) })}</span>
           <button
             type="button"
-            class="link"
+            class="link-action"
             onclick={() => storage && onOpenPath(storage.jobsPath)}
             disabled={!storage}>{t("common.open")}</button>
+          <button type="button" class="link-action" onclick={() => void copyPath(storage?.jobsPath)} disabled={!storage}>{t("settings.copyPath")}</button>
         </div>
       </div>
       <div class="row">
@@ -222,9 +274,40 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         <div class="value">
           <button
             type="button"
-            class="link"
+            class="link-action"
             onclick={() => storage && onOpenPath(storage.dataPath)}
             disabled={!storage}>{t("common.open")}</button>
+          <button type="button" class="link-action" onclick={() => void copyPath(storage?.dataPath)} disabled={!storage}>{t("settings.copyPath")}</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.lanHostDir")}</div>
+          <div class="path" title={storage?.lanHostPath ?? ""}>{storage?.lanHostPath ?? "—"}</div>
+        </div>
+        <div class="value">
+          <span>{t("settings.countHistory", { count: storage?.lanHostCount ?? 0, size: sizeLabel(storage?.lanHostBytes) })}</span>
+          <button
+            type="button"
+            class="link-action"
+            onclick={() => storage && onOpenPath(storage.lanHostPath)}
+            disabled={!storage}>{t("common.open")}</button>
+          <button type="button" class="link-action" onclick={() => void copyPath(storage?.lanHostPath)} disabled={!storage}>{t("settings.copyPath")}</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.logsFile")}</div>
+          <div class="path" title={storage?.logsPath ?? ""}>{storage?.logsPath ?? "—"}</div>
+        </div>
+        <div class="value">
+          <span>{sizeLabel(storage?.logsBytes)}</span>
+          <button
+            type="button"
+            class="link-action"
+            onclick={() => storage && void invoke("open_path", { path: storage.logsPath })}
+            disabled={!storage}>{t("settings.openLog")}</button>
+          <button type="button" class="link-action" onclick={() => void copyPath(storage?.logsPath)} disabled={!storage}>{t("settings.copyPath")}</button>
         </div>
       </div>
       <div class="row">
@@ -280,6 +363,96 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           {/if}
         </div>
       </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.lanCleanupName")}</div>
+          <div class="desc">
+            {cleanupSupported ? t("settings.lanCleanupDesc") : t("settings.lanCleanupUnsupported")}
+          </div>
+        </div>
+        <div class="value retention">
+          <select
+            class="locale-pick"
+            aria-label={t("settings.lanCleanupName")}
+            value={nodeRetention?.mode ?? "off"}
+            disabled={!cleanupSupported || !nodeRetention}
+            onchange={(event) => {
+              if (!nodeRetention) return;
+              const next = { ...nodeRetention, mode: event.currentTarget.value as LanHostRetention["mode"] };
+              void invoke<LanHostRetention>("set_lan_host_retention", { policy: next })
+                .then((saved) => { nodeRetention = saved; });
+            }}
+          >
+            <option value="off">{t("settings.retentionOff")}</option>
+            <option value="age">{t("settings.retentionAge")}</option>
+            <option value="size">{t("settings.retentionSize")}</option>
+          </select>
+          {#if nodeRetention?.mode === "age"}
+            <select
+              class="locale-pick"
+              aria-label={t("settings.lanCleanupName")}
+              value={String(nodeRetention.ageDays)}
+              disabled={!cleanupSupported}
+              onchange={(event) => {
+                if (!nodeRetention) return;
+                const next = { ...nodeRetention, ageDays: Number(event.currentTarget.value) };
+                void invoke<LanHostRetention>("set_lan_host_retention", { policy: next })
+                  .then((saved) => { nodeRetention = saved; });
+              }}
+            >
+              {#each AGE_OPTIONS as days (days)}
+                <option value={String(days)}>{t("settings.retentionDays", { days })}</option>
+              {/each}
+            </select>
+          {:else if nodeRetention?.mode === "size"}
+            <select
+              class="locale-pick"
+              aria-label={t("settings.lanCleanupName")}
+              value={String(nodeRetention.maxBytes)}
+              disabled={!cleanupSupported}
+              onchange={(event) => {
+                if (!nodeRetention) return;
+                const next = { ...nodeRetention, maxBytes: Number(event.currentTarget.value) };
+                void invoke<LanHostRetention>("set_lan_host_retention", { policy: next })
+                  .then((saved) => { nodeRetention = saved; });
+              }}
+            >
+              {#each SIZE_OPTIONS as gib (gib)}
+                <option value={String(gib * GiB)}>{gib} GB</option>
+              {/each}
+            </select>
+          {/if}
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.clearData")}</div>
+          <div class="desc">{t("settings.clearDataDesc")}</div>
+        </div>
+        <div class="value">
+          <button
+            type="button"
+            class="btn-danger"
+            onclick={async () => {
+              const first = await confirm(t("settings.clearDataConfirm"), {
+                title: t("settings.clearData"),
+                kind: "warning",
+              });
+              if (!first) return;
+              const second = await confirm(t("settings.clearDataConfirm"), {
+                title: t("settings.clearData"),
+                kind: "warning",
+              });
+              if (!second) return;
+              try {
+                await invoke("clear_app_data");
+                window.alert(t("settings.clearDataDone"));
+              } catch (issue) {
+                window.alert(String(issue));
+              }
+            }}>{t("settings.clearDataAction")}</button>
+        </div>
+      </div>
       <p class="note">{t("settings.chunkNote")}</p>
       <p class="note">{t("settings.storageNote")}</p>
     </div>
@@ -293,7 +466,77 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         </div>
         <div class="value">
           <span>{lanMode ? LAN_MODE_LABELS[lanMode] : "—"}</span>
-          <button type="button" class="link" onclick={onGoLan}>{t("settings.openLan")}</button>
+          <button type="button" class="link-action" onclick={onGoLan}>{t("settings.openLan")}</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.idleGui")}</div>
+          <div class="desc">{t("settings.idleHint")}</div>
+        </div>
+        <div class="value">
+          <select
+            class="locale-pick"
+            aria-label={t("settings.idleGui")}
+            value={String(lanSettings?.idle_unload_gui ?? 120)}
+            disabled={!lanSettings}
+            onchange={(event) =>
+              lanSettings &&
+              void onLanSettingsChange({
+                ...lanSettings,
+                idle_unload_gui: Number(event.currentTarget.value),
+              })}
+          >
+            {#each IDLE_OPTIONS as seconds (seconds)}
+              <option value={String(seconds)}>{idleLabel(seconds)}</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.idleNode")}</div>
+          <div class="desc">{hostRunning ? t("settings.idleHint") : t("settings.idleNodeOff")}</div>
+        </div>
+        <div class="value">
+          <select
+            class="locale-pick"
+            aria-label={t("settings.idleNode")}
+            value={String(lanSettings?.idle_unload_node ?? 120)}
+            disabled={!lanSettings || !hostRunning}
+            onchange={(event) =>
+              lanSettings &&
+              void onLanSettingsChange({
+                ...lanSettings,
+                idle_unload_node: Number(event.currentTarget.value),
+              })}
+          >
+            {#each IDLE_OPTIONS as seconds (seconds)}
+              <option value={String(seconds)}>{idleLabel(seconds)}</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.backgroundName")}</div>
+          <div class="desc">
+            {hostRunning ? t("settings.backgroundDesc") : t("settings.backgroundOff")}
+          </div>
+        </div>
+        <div class="value">
+          <input
+            type="checkbox"
+            checked={lanSettings?.keep_running_in_background ?? false}
+            disabled={!lanSettings || !hostRunning}
+            aria-label={t("settings.backgroundName")}
+            onchange={(event) =>
+              lanSettings &&
+              void onLanSettingsChange({
+                ...lanSettings,
+                keep_running_in_background: event.currentTarget.checked,
+              })}
+          />
         </div>
       </div>
     </div>
@@ -310,7 +553,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         </div>
         <div class="value">
           <span class="status-dot" class:on={service?.running}></span>
-          <button type="button" class="link" onclick={onRefreshService}>{t("settings.refresh")}</button>
+          <button type="button" class="link-action" onclick={onRefreshService}>{t("settings.refresh")}</button>
         </div>
       </div>
       <div class="row">
@@ -319,7 +562,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           <div class="desc">{t("settings.mcpDesc")}</div>
         </div>
         <div class="value">
-          <button type="button" class="link" onclick={() => copy(mcpConfig, "mcp")}>
+          <button type="button" class="link-action" onclick={() => copy(mcpConfig, "mcp")}>
             {copied === "mcp" ? t("common.copied") : t("settings.copyConfig")}
           </button>
         </div>
@@ -331,7 +574,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           <div class="desc">{t("settings.cliDesc")}</div>
         </div>
         <div class="value">
-          <button type="button" class="link" onclick={() => copy(cliExample, "cli")}>
+          <button type="button" class="link-action" onclick={() => copy(cliExample, "cli")}>
             {copied === "cli" ? t("common.copied") : t("settings.copyExample")}
           </button>
         </div>
@@ -341,6 +584,24 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         {t("settings.troubleIntro")}
         <code>--allow-root</code>{t("settings.troubleOutro")}
       </p>
+    </div>
+
+    <div class="group">
+      <div class="label">{t("settings.troubleshoot")}</div>
+      <div class="row">
+        <div>
+          <div class="name">{t("lan.diagTitle")}</div>
+          <div class="desc">{t("settings.troubleshootDesc")}</div>
+        </div>
+        <div class="value">
+          <button type="button" class="link-action" onclick={() => (showLanDiagnostics = true)}>
+            {t("lan.troubleshoot")}
+          </button>
+        </div>
+      </div>
+      {#if showLanDiagnostics}
+        <LanDiagnosticsPanel onclose={() => (showLanDiagnostics = false)} />
+      {/if}
     </div>
 
     <div class="group">
@@ -453,14 +714,6 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     color: var(--text-3);
   }
 
-  .link {
-    border: 0;
-    background: none;
-    padding: 0;
-    font-size: 13px;
-    color: var(--accent-ink);
-  }
-
   .locale-pick {
     height: 30px;
     padding: 0 8px;
@@ -499,10 +752,6 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     white-space: pre;
   }
 
-  .link:disabled {
-    color: var(--text-3);
-  }
-
   .seg {
     margin-left: auto;
     display: flex;
@@ -528,7 +777,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
   }
 
   :global(:root[data-theme="dark"]) .seg button.on {
-    background: #3a3a3e;
+    background: var(--settings-segment-active-dark);
   }
 
   .note {

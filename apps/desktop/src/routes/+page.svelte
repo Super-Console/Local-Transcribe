@@ -17,6 +17,7 @@
   import RecordView from "$lib/components/RecordView.svelte";
   import LanView from "$lib/components/LanView.svelte";
   import { t } from "$lib/i18n.svelte";
+  import { ensureModelNames, prettyName } from "$lib/model-names.svelte";
   import type {
     CatalogModel,
     HistoryEntry,
@@ -116,7 +117,9 @@
           const model = lanGroups
             .find((group) => group.id === remoteSelection.nodeId)
             ?.models.find((entry) => entry.id === remoteSelection.modelId);
-          return node ? `${node.name} · ${model?.displayName ?? remoteSelection.modelId}` : null;
+          return node
+            ? `${node.name} · ${prettyName(model?.displayName ?? remoteSelection.modelId)}`
+            : null;
         })()
       : null,
   );
@@ -285,6 +288,7 @@
     libraryBusy = true;
     try {
       const next: LanSettings = {
+        ...lanSettings,
         mode: "prefer_lan",
         nodes: lanSettings.nodes.map((node) =>
           node.id === nodeId ? { ...node, model_id: modelId, enabled: true } : node,
@@ -296,6 +300,14 @@
       error = String(issue);
     } finally {
       libraryBusy = false;
+    }
+  }
+
+  async function changeLanSettings(next: LanSettings) {
+    try {
+      lanSettings = await invoke<LanSettings>("set_lan_settings", { settings: next });
+    } catch (issue) {
+      error = String(issue);
     }
   }
 
@@ -617,6 +629,7 @@
   }
 
   onMount(() => {
+    ensureModelNames();
     if (SIDEBAR_COLLAPSE_ENABLED) {
       try {
         sidebarCollapsed = localStorage.getItem(SIDEBAR_KEY) === "collapsed";
@@ -837,6 +850,8 @@
         {appVersion}
         {retention}
         lanMode={lanSettings?.mode ?? null}
+        {lanSettings}
+        onLanSettingsChange={changeLanSettings}
         onRefreshService={refreshService}
         onOpenLibrary={() => openStorage(storage?.libraryPath)}
         onOpenHistory={() => openStorage(storage?.historyPath)}
@@ -910,8 +925,10 @@
     overflow: hidden;
   }
 
-  /* 内容区：侧栏右侧的通高区域；圆角与窗口边框交给原生窗口 */
+  /* 工作区内角用统一 token；原生窗口外角仍由系统管理。 */
   .main {
+    border-radius: var(--radius);
+    overflow: hidden;
     flex: 1;
     /* 必须可收缩：否则 min-content（MCP 代码块 pre 长行/长路径）会把整条布局顶得比窗口宽 */
     min-width: 0;

@@ -153,6 +153,9 @@ fn main() -> ExitCode {
                     .map(|dir| dir.to_string_lossy().into_owned()),
                 model_id: None,
                 owner: Some("cli".to_owned()),
+                node: None,
+                lan_model: None,
+                fallback_local: false,
             };
             match client.request(&request) {
                 Ok(response) => print_response(&response),

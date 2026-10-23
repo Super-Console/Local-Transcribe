@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from "$lib/i18n.svelte";
+  import { prettyName } from "$lib/model-names.svelte";
   import type { CatalogModel, LibraryModelSummary, ModelDownloadEvent } from "$lib/types";
 
   let {
@@ -63,6 +64,10 @@
                 </div>
                 <div class="meta">
                   <span>{entry.family}</span>
+                  {#if entry.languages}
+                    <span class="sep">·</span>
+                    <span>{entry.languages}</span>
+                  {/if}
                   <span class="sep">·</span>
                   <span>{sizeLabel(entry.bytes)}</span>
                   {#if active}
@@ -85,20 +90,20 @@
                   <span class="hint">{t("model.downloaded")}</span>
                   <button
                     type="button"
-                    class="act danger"
+                    class="link-action link-danger"
                     onclick={() => onDeleteCatalog(entry)}
                     disabled={busy}
                   >
                     {t("common.delete")}
                   </button>
                 {:else if active}
-                  <button type="button" class="act" onclick={onCancelDownload}>
+                  <button type="button" class="link-action" onclick={onCancelDownload}>
                     {t("model.downloadCancel")}
                   </button>
                 {:else}
                   <button
                     type="button"
-                    class="act"
+                    class="btn-secondary"
                     onclick={() => onDownload(entry.id)}
                     disabled={busy}
                   >
@@ -126,11 +131,15 @@
         <div class="row">
           <div class="body">
             <div class="name">
-              {model.displayName}
+              {prettyName(model.displayName)}
               {#if model.selected}<span class="tag">{t("model.defaultTag")}</span>{/if}
             </div>
             <div class="meta">
               <span>{model.family}</span>
+              {#if model.languages}
+                <span class="sep">·</span>
+                <span>{model.languages}</span>
+              {/if}
               <span class="sep">·</span>
               <span>{sizeLabel(model.bytes)}</span>
               <span class="sep">·</span>
@@ -139,13 +148,13 @@
           </div>
           <div class="row-actions">
             {#if !model.selected}
-              <button type="button" class="act" onclick={() => onSelect(model.id)} disabled={busy}>
+              <button type="button" class="link-action" onclick={() => onSelect(model.id)} disabled={busy}>
                 {t("model.setDefault")}
               </button>
             {:else}
               <span class="hint">{t("model.currentDefault")}</span>
             {/if}
-            <button type="button" class="act danger" onclick={() => onDelete(model)} disabled={busy}>
+            <button type="button" class="link-action link-danger" onclick={() => onDelete(model)} disabled={busy}>
               {t("common.delete")}
             </button>
           </div>
@@ -288,29 +297,6 @@
     align-items: center;
     gap: 2px;
     flex: none;
-  }
-
-  .act {
-    height: 26px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text-2);
-    font-size: 13.5px;
-  }
-
-  .act:hover:not(:disabled) {
-    background: var(--fill);
-    color: var(--text);
-  }
-
-  .act.danger:hover:not(:disabled) {
-    color: var(--red);
-  }
-
-  .act:disabled {
-    opacity: 0.5;
   }
 
   .hint {

@@ -2,8 +2,7 @@
   import Icon from "./Icon.svelte";
   import { theme } from "$lib/theme.svelte";
   import { t } from "$lib/i18n.svelte";
-  import { fade, scale } from "svelte/transition";
-  import { quintOut } from "svelte/easing";
+  import { prettyName } from "$lib/model-names.svelte";
   import type { LibraryModelSummary, ModelSummary } from "$lib/types";
 
   let {
@@ -137,8 +136,8 @@
         title={remoteDotOn || (model && model.id === loadedModelId) ? t("model.loadedHint") : undefined}
         aria-hidden="true"
       ></span>
-      <span class="name" title={remoteLabel ?? model?.displayName ?? t("common.noModel")}
-        >{remoteLabel ?? model?.displayName ?? t("common.noModel")}</span
+      <span class="name" title={remoteLabel ?? prettyName(model?.displayName) ?? t("common.noModel")}
+        >{remoteLabel ?? (prettyName(model?.displayName) || t("common.noModel"))}</span
       >
       <Icon name="chevronDown" size={12} stroke={1.6} />
     </button>
@@ -150,7 +149,7 @@
         aria-label={t("common.cancel")}
         onclick={() => (open = false)}
       ></button>
-      <div class="menu" in:scale={{ duration: 200, easing: quintOut, start: 0.96 }} out:fade={{ duration: 120 }} role="listbox" aria-label={t("toolbar.defaultModel")}>
+      <div class="menu" role="listbox" aria-label={t("toolbar.defaultModel")}>
         <div class="menu-group">{t("toolbar.localSection")}</div>
         {#each models as entry (entry.id)}
           <button
@@ -169,7 +168,7 @@
               title={entry.id === loadedModelId ? t("model.loadedHint") : undefined}
             ></span>
             <span class="item-body">
-              <span class="item-name">{entry.displayName}</span>
+              <span class="item-name">{prettyName(entry.displayName)}</span>
               <span class="item-meta">{entry.family} · {sizeLabel(entry.bytes)}</span>
             </span>
             {#if entry.selected}
@@ -197,7 +196,7 @@
             >
               <span class="item-dot on"></span>
               <span class="item-body">
-                <span class="item-name">{remote.displayName}</span>
+                <span class="item-name">{prettyName(remote.displayName)}</span>
                 <span class="item-meta">{t("toolbar.remoteTag", { node: group.name })}</span>
               </span>
               {#if active}
@@ -224,20 +223,28 @@
 
 <style>
   .toolbar {
+    position: relative;
+    z-index: 10;
     height: 52px;
     flex: none;
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 0 18px;
+    background: var(--glass-toolbar);
+    border-bottom: 1px solid var(--glass-reader-border);
+    box-shadow: inset 0 1px 0 var(--glass-reader-highlight);
+    backdrop-filter: blur(20px) saturate(1.1);
+    -webkit-backdrop-filter: blur(20px) saturate(1.1);
   }
 
   .icon-btn {
-    width: 32px;
-    height: 32px;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--capsule-find-border);
+    border-radius: 999px;
+    background: var(--capsule-find);
     color: var(--text-2);
     display: grid;
     place-items: center;
@@ -248,21 +255,42 @@
     background: var(--fill);
   }
 
+  /* 月亮与搜索：同尺寸、同圆心高度、常态同底色（只改 theme 一个） */
+  .icon-btn.theme {
+    border-radius: 999px;
+    background: var(--capsule-find);
+  }
+
+  .icon-btn.theme:hover {
+    background: var(--capsule-find-hover);
+  }
+
+  .icon-btn.theme:active {
+    transform: translateY(1px);
+  }
+
+  .icon-btn.theme:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   .spacer {
     flex: 1;
   }
 
   /* 搜索框：默认收起成放大镜（图标居中），点击后平滑展开 */
   .search {
+    flex: none;
     display: flex;
     align-items: center;
     justify-content: center;
     gap: 0;
-    width: 32px;
-    height: 32px;
-    padding: 0 4px;
-    border-radius: 16px;
-    background: var(--fill);
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--capsule-find-border);
+    border-radius: 999px;
+    background: var(--capsule-find);
     color: var(--text-3);
     overflow: hidden;
     transition:
@@ -274,15 +302,24 @@
   }
 
   .search.open {
-    width: 240px;
+    width: min(240px, 40%);
     padding: 0 8px;
     gap: 5px;
     justify-content: flex-start;
-    border-radius: 9px;
+    border-radius: 999px;
+  }
+
+  .search:hover {
+    background: var(--capsule-find-hover);
   }
 
   .search:focus-within {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .search:active {
+    transform: translateY(1px);
   }
 
   /* 固定尺寸的图标按钮：命中区够大，收起时正好居中 */
@@ -291,8 +328,9 @@
     flex: none;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     border: 0;
     background: transparent;
     color: var(--text-3);
@@ -356,6 +394,8 @@
   }
 
   .model-pick {
+    min-width: 0;
+    max-width: 260px;
     position: relative;
     display: flex;
     align-items: center;
@@ -363,21 +403,31 @@
   }
 
   .select {
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 7px;
-    height: 32px;
-    padding: 0 11px 0 12px;
-    border-radius: 9px;
-    background: var(--fill);
-    border: 0;
-    font-size: 13.5px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: var(--capsule-find);
+    border: 1px solid var(--capsule-find-border);
+    font-size: 12.5px;
     white-space: nowrap;
     max-width: 260px;
   }
 
   .select:hover {
-    background: var(--hover);
+    background: var(--capsule-find-hover);
+  }
+
+  .select:active {
+    transform: translateY(1px);
+  }
+
+  .select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .dot,
@@ -405,8 +455,21 @@
   }
 
   .name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .select :global(svg) {
+    flex: none;
+  }
+
+  .search,
+  .icon-btn.theme,
+  .select {
+    box-shadow: inset 0 1px 0 var(--capsule-highlight);
+    backdrop-filter: blur(18px) saturate(1.1);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1);
   }
 
   /* 下拉菜单（参考设计的紧凑浮层） */
@@ -423,15 +486,18 @@
     transform-origin: top right;
     top: 38px;
     right: 0;
-    z-index: 25;
+    z-index: 40;
     width: 320px;
     max-height: 380px;
     overflow-y: auto;
     padding: 6px;
-    border-radius: 11px;
-    border: 1px solid var(--hairline-2);
+    border-radius: 12px;
+    border: 1px solid var(--hairline);
     background: var(--panel);
-    box-shadow: 0 12px 32px rgba(40, 28, 16, 0.16), 0 2px 6px rgba(40, 28, 16, 0.06);
+    opacity: 1;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: var(--shadow-panel);
   }
 
   .item {
@@ -448,7 +514,15 @@
   }
 
   .item:hover {
-    background: var(--fill);
+    background: var(--hover);
+  }
+
+  .item[aria-selected="true"] {
+    background: var(--selected);
+  }
+
+  :global(:root[data-theme="dark"]) .menu {
+    background: var(--bg);
   }
 
   .item-body {

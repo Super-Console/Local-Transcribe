@@ -15,7 +15,9 @@ const USAGE: &str = "Usage:
   local-transcribe status [--data-dir DIR]
   local-transcribe models list [--data-dir DIR]
   local-transcribe models info <model-id> [--data-dir DIR]
+  local-transcribe lan nodes [--data-dir DIR]
   local-transcribe jobs add <media> [--model ID] [--language LANG] [--root DIR] [--data-dir DIR]
+      [--node NODE] [--lan-model ID] [--fallback-local]
   local-transcribe jobs list [--data-dir DIR]
   local-transcribe jobs show <job-id> [--data-dir DIR]
   local-transcribe jobs cancel <job-id> [--data-dir DIR]
@@ -37,6 +39,9 @@ struct Parsed {
     after: Option<String>,
     format: Option<String>,
     output: Option<PathBuf>,
+    node: Option<String>,
+    lan_model: Option<String>,
+    fallback_local: bool,
 }
 
 fn parse(args: Vec<String>) -> Result<Parsed, String> {
@@ -52,12 +57,15 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
         after: None,
         format: None,
         output: None,
+        node: None,
+        lan_model: None,
+        fallback_local: false,
     };
     if let Some(first) = iter.next() {
         if first == "--help" || first == "-h" || first == "help" {
             return Err(USAGE.to_owned());
         }
-        if first == "models" || first == "jobs" {
+        if first == "models" || first == "jobs" || first == "lan" {
             parsed.group = first;
             parsed.action = iter.next();
         } else {
@@ -80,6 +88,9 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--after" => parsed.after = Some(take("--after")?),
             "--format" => parsed.format = Some(take("--format")?),
             "--output" => parsed.output = Some(PathBuf::from(take("--output")?)),
+            "--node" => parsed.node = Some(take("--node")?),
+            "--lan-model" => parsed.lan_model = Some(take("--lan-model")?),
+            "--fallback-local" => parsed.fallback_local = true,
             other if other.starts_with('-') => {
                 return Err(format!("Unknown option: {other}\n{USAGE}"))
             }
@@ -202,6 +213,7 @@ fn main() -> ExitCode {
     let request = match (parsed.group.as_str(), action.as_str()) {
         ("status", _) => Request::Ping,
         ("models", "list") => Request::Models,
+        ("lan", "nodes") => Request::LanNodes,
         ("models", "info") => match parsed.positional.first() {
             Some(id) => Request::SelectModel { id: id.clone() },
             None => {
@@ -235,6 +247,9 @@ fn main() -> ExitCode {
                 model_dir: None,
                 model_id: parsed.model.clone(),
                 owner: Some("cli".to_owned()),
+                node: parsed.node.clone(),
+                lan_model: parsed.lan_model.clone(),
+                fallback_local: parsed.fallback_local,
             }
         }
         ("jobs", "list") => Request::Jobs,

@@ -10,6 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 voice-to-text-core = { path = "../transcription-core" }
+voice-to-text-lan = { path = "../lan-compute" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fs2 = "=0.4.3"
+# 局域网派发：调用 lan-compute 的异步客户端（与 GUI 共用同一份实现）。
+tokio = { version = "1", features = ["rt", "time"] }

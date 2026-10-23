@@ -350,14 +350,20 @@ pub fn classify_local_network_error(error: &std::io::Error) -> LocalNetworkAcces
 /// Send one throwaway multicast datagram to see whether the local network is
 /// reachable from this process. The packet carries no protocol meaning.
 pub fn local_network_access() -> LocalNetworkAccess {
+    local_network_access_detail().0
+}
+
+/// Same probe, with the raw OS error so the troubleshooting UI can say
+/// whether this is a permission decision or a network/multicast problem.
+pub fn local_network_access_detail() -> (LocalNetworkAccess, Option<i32>) {
     let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) else {
-        return LocalNetworkAccess::NoNetwork;
+        return (LocalNetworkAccess::NoNetwork, None);
     };
     let _ = socket.set_multicast_ttl_v4(1);
     let _ = socket.set_multicast_loop_v4(false);
     match socket.send_to(&[0u8; 1], (Ipv4Addr::new(224, 0, 0, 251), 5353)) {
-        Ok(_) => LocalNetworkAccess::Granted,
-        Err(error) => classify_local_network_error(&error),
+        Ok(_) => (LocalNetworkAccess::Granted, None),
+        Err(error) => (classify_local_network_error(&error), error.raw_os_error()),
     }
 }
 

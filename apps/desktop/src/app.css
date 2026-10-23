@@ -4,7 +4,7 @@
   /* Anthropic 风格浅色：牛皮纸奶白底 + 陶土强调色（Claude clay #C15F3C / ivory #FAF9F5） */
   --bg: #faf9f5;
   --sidebar: #f1efe7;
-  --panel: #ffffff;
+  --panel: #fffefb;
   --text: #141413;
   --text-2: #6b6660;
   --text-3: #97928a;
@@ -18,7 +18,11 @@
   --accent-ink: #a14a2f;
   --green: #3d7f52;
   --red: #b3402e;
+  /* Existing non-button colors moved out of components; no palette change. */
+  --permission-warning: #d98b2b;
+  --settings-segment-active-dark: #3a3a3e;
   --fill: #f2efe6;
+  --reader-solid-fill: var(--bg);
   --card: #fffefb;
   --chip: #ece7db;
   --radius: 12px;
@@ -26,10 +30,24 @@
   --glass-border: rgba(255, 255, 255, 0.6);
   --glass-highlight: rgba(255, 255, 255, 0.45);
   --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+  /* 顶栏材质修正：条底取自 --panel / --bg 的实际颜色，alpha 0.76 */
+  --glass-reader: rgba(255, 254, 251, 0.76);
+  --glass-toolbar: rgba(250, 249, 245, 0.76);
+  --glass-reader-border: rgba(20, 20, 19, 0.06);
+  --glass-reader-highlight: rgba(255, 255, 255, 0.55);
+  --reader-fade: var(--bg);
+  --capsule-home: rgba(255, 254, 251, 0.84);
+  --capsule-home-hover: rgba(255, 254, 251, 0.9);
+  --capsule-find: rgba(255, 254, 251, 0.66);
+  --capsule-find-hover: rgba(255, 254, 251, 0.78);
+  --capsule-find-pressed: rgba(255, 254, 251, 0.82);
+  --capsule-border: rgba(20, 20, 19, 0.07);
+  --capsule-find-border: rgba(20, 20, 19, 0.05);
+  --capsule-highlight: rgba(255, 255, 255, 0.6);
   --shadow-panel: 0 18px 44px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.08);
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   /* 大标题衬线：与参考设计的 Welcome 标题一致 */
-  --font-display: "New York", ui-serif, "Songti SC", "STSong", Georgia, serif;
+  --font-display: "New York", ui-serif, "Songti SC", "STSong", "SimSun", "Microsoft YaHei", Georgia, serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -54,11 +72,25 @@
   --green: #30d158;
   --red: #ff453a;
   --fill: rgba(255, 255, 255, 0.09);
+  --reader-solid-fill: var(--bg);
   --shadow-panel: 0 18px 44px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
   --glass: rgba(20, 20, 23, 0.62);
   --glass-border: rgba(255, 255, 255, 0.12);
   --glass-highlight: rgba(255, 255, 255, 0.07);
   --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --glass-reader: rgba(30, 30, 32, 0.74);
+  --glass-toolbar: rgba(30, 30, 32, 0.74);
+  --glass-reader-border: rgba(255, 255, 255, 0.07);
+  --glass-reader-highlight: rgba(255, 255, 255, 0.08);
+  --reader-fade: var(--bg);
+  --capsule-home: rgba(38, 38, 40, 0.82);
+  --capsule-home-hover: rgba(38, 38, 40, 0.9);
+  --capsule-find: rgba(38, 38, 40, 0.62);
+  --capsule-find-hover: rgba(38, 38, 40, 0.74);
+  --capsule-find-pressed: rgba(38, 38, 40, 0.82);
+  --capsule-border: rgba(255, 255, 255, 0.08);
+  --capsule-find-border: rgba(255, 255, 255, 0.06);
+  --capsule-highlight: rgba(255, 255, 255, 0.08);
 }
 
 * {
@@ -175,4 +207,246 @@ section.content {
     opacity: 0;
     transform: translateY(10px);
   }
+}
+
+
+/* 玻璃只存在于功能胶囊与应用顶栏。data-glass="off" 是唯一的回滚开关，
+   系统“降低透明度”会自动等同关闭；布局与顶部渐隐不随开关变化。 */
+html[data-glass="off"] .toolbar,
+html[data-glass="off"] .back,
+html[data-glass="off"] .find-toggle,
+html[data-glass="off"] .reader-bar button.act,
+html[data-glass="off"] .toolbar .search,
+html[data-glass="off"] .toolbar .theme,
+html[data-glass="off"] .toolbar .select {
+  background: var(--panel);
+  border-color: var(--hairline);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+html[data-glass="off"] .reader-bar :is(.back, .find-toggle) {
+  background: var(--fill);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html .toolbar,
+  html .reader-bar .back,
+  html .reader-bar .find-toggle,
+  html .reader-bar button.act,
+  html .toolbar .search,
+  html .toolbar .theme,
+  html .toolbar .select {
+    background: var(--panel);
+    border-color: var(--hairline);
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  html:root .reader-bar :is(.back, .find-toggle) {
+    background: var(--fill);
+    border-color: var(--hairline);
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .toolbar,
+  html:root .reader-bar :is(.back, .find-toggle) {
+    border-color: var(--hairline-2);
+    color: var(--text);
+  }
+}
+
+/* Shared action hierarchy. Layout/placement stays with the owning view. */
+.btn-primary,
+.btn-secondary,
+.btn-danger,
+.reader-bar button.act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  border-radius: 999px;
+  font: inherit;
+  cursor: default;
+}
+
+.btn-primary {
+  padding: 0 14px;
+  border: 0;
+  background: var(--accent);
+  color: #fffefb;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-ink);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn-primary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  outline-offset: 2px;
+}
+
+.btn-primary:disabled {
+  background: var(--fill);
+  color: var(--text-3);
+  outline: none;
+  box-shadow: none;
+}
+
+.btn-secondary,
+.reader-bar button.act {
+  padding: 0 12px;
+  border: 1px solid var(--capsule-border);
+  background: var(--capsule-find);
+  box-shadow: inset 0 1px 0 var(--capsule-highlight);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+/* Only reader export controls add local glass; dimensions come from the role. */
+.reader-bar button.act {
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+}
+
+.btn-secondary:hover:not(:disabled),
+.reader-bar button.act:hover:not(:disabled) {
+  background: var(--capsule-find-hover);
+  color: var(--text);
+}
+
+.btn-secondary:active:not(:disabled),
+.reader-bar button.act:active:not(:disabled) {
+  background: var(--capsule-find-pressed);
+  transform: translateY(1px);
+}
+
+.btn-secondary:focus-visible,
+.btn-danger:focus-visible,
+.reader-bar button.act:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn-secondary svg,
+.btn-primary svg {
+  flex: none;
+}
+
+.btn-secondary:disabled,
+.btn-danger:disabled,
+.link-action:disabled {
+  color: var(--text-3);
+  opacity: .5;
+  outline: none;
+  transform: none;
+}
+
+.btn-danger {
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  background: transparent;
+  color: var(--red);
+  font-size: 12.5px;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.btn-danger:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.link-action {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  padding: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.link-action:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.link-action:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.link-action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.link-action.link-danger {
+  color: var(--red);
+}
+
+.link-action.link-danger:hover:not(:disabled) {
+  color: color-mix(in srgb, var(--red) 85%, var(--text));
+}
+
+.reader-bar .actions {
+  gap: 8px;
+  margin-top: 0;
+}
+
+/* 原生细滚动条：不隐藏、不自绘，只调样式。 */
+.content,
+.content .list,
+.reader-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 20, 19, 0.18) transparent;
+}
+
+.content::-webkit-scrollbar,
+.content .list::-webkit-scrollbar,
+.reader-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.content::-webkit-scrollbar-track,
+.content .list::-webkit-scrollbar-track,
+.reader-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.content::-webkit-scrollbar-thumb,
+.content .list::-webkit-scrollbar-thumb,
+.reader-scroll::-webkit-scrollbar-thumb {
+  background: rgba(20, 20, 19, 0.18);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+:root[data-theme="dark"] .content,
+:root[data-theme="dark"] .content .list,
+:root[data-theme="dark"] .reader-scroll {
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+:root[data-theme="dark"] .content::-webkit-scrollbar-thumb,
+:root[data-theme="dark"] .content .list::-webkit-scrollbar-thumb,
+:root[data-theme="dark"] .reader-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }

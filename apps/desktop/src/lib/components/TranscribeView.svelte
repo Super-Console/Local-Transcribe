@@ -2,6 +2,7 @@
   import Icon from "./Icon.svelte";
   import Reader from "./Reader.svelte";
   import { t } from "$lib/i18n.svelte";
+  import { prettyName } from "$lib/model-names.svelte";
   import type { MessageKey } from "$lib/i18n/messages/zh";
   import type { JobStatus, ModelSummary, Segment, Transcript } from "$lib/types";
 
@@ -145,7 +146,7 @@
         <div class="actions">
           <button
             type="button"
-            class="btn"
+            class="btn-primary"
             onclick={(event) => {
               event.stopPropagation();
               onPickFile();
@@ -158,75 +159,76 @@
       </div>
     </div>
   {:else}
-    {#if !running}
-      <div class="back-bar">
-        <button type="button" class="back" onclick={onBack}>
-          <Icon name="chevronLeft" size={12} stroke={1.7} />{t("nav.home")}
-        </button>
-      </div>
-    {/if}
-    <div class="task">
-      <div class="task-row">
-        <div class="file" title={displayName}>{displayName}</div>
-        <div class="spacer"></div>
+    <Reader
+      jobId={job?.jobId ?? transcript?.jobId ?? null}
+      {segments}
+      {running}
+      onBack={running ? undefined : onBack}
+    >
+      {#snippet heading()}
+        <div class="task">
+          <div class="task-row">
+            <div class="file" title={displayName}>{displayName}</div>
+          </div>
+          <div class="meta">
+            <span>{t("transcribe.model")} <b>{prettyName(model?.displayName) || t("common.notSelected")}</b></span>
+            <span class="sep">·</span>
+            <span>{stateLabel}</span>
+            {#if job?.totalChunks}
+              <span class="sep">·</span>
+              <span>{t("transcribe.chunksBefore")} <b>{job.completedChunks} / {job.totalChunks}</b> {t("transcribe.chunksAfter", { count: job.totalChunks })}</span>
+            {/if}
+            {#if running && job?.phase}
+              <span class="sep">·</span>
+              <span>{phaseLabel(job.phase)}</span>
+            {/if}
+            {#if running && speed !== null}
+              <span class="sep">·</span>
+              <span>{t("transcribe.speed", { value: speed.toFixed(1) })}</span>
+            {/if}
+            {#if running && etaMs !== null}
+              <span class="sep">·</span>
+              <span>{etaLabel(etaMs)}</span>
+            {/if}
+          </div>
+          {#if running}
+            <div
+              class="bar"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={percent ?? undefined}
+              aria-valuetext={percent === null ? t("transcribe.progressIdle") : t("transcribe.progressPercent", { percent })}
+            >
+              <i class:indeterminate={percent === null} style:width={percent === null ? undefined : `${percent}%`}></i>
+            </div>
+          {/if}
+          {#if partial}
+            <div class="note">
+              <span class="dot red"></span>
+              <span>{t("transcribe.partialNote")}</span>
+            </div>
+          {/if}
+        </div>
+      {/snippet}
+      {#snippet actions()}
         {#if running}
           <button type="button" class="quiet" onclick={onCancel}>{t("common.cancel")}</button>
         {:else}
           <div class="actions">
-            <button type="button" class="act" onclick={onCopy} disabled={segments.length === 0}>
+            <button type="button" class="act btn-secondary" onclick={onCopy} disabled={segments.length === 0}>
               <Icon name="copy" size={13} />{t("transcribe.copyAll")}
             </button>
-            <button type="button" class="act" onclick={() => onExport("txt")} disabled={segments.length === 0 || !transcript}>
+            <button type="button" class="act btn-secondary" onclick={() => onExport("txt")} disabled={segments.length === 0 || !transcript}>
               <Icon name="download" size={13} />TXT
             </button>
-            <button type="button" class="act" onclick={() => onExport("json")} disabled={segments.length === 0 || !transcript}>
+            <button type="button" class="act btn-secondary" onclick={() => onExport("json")} disabled={segments.length === 0 || !transcript}>
               <Icon name="download" size={13} />JSON
             </button>
           </div>
         {/if}
-      </div>
-      <div class="meta">
-        <span>{t("transcribe.model")} <b>{model?.displayName ?? t("common.notSelected")}</b></span>
-        <span class="sep">·</span>
-        <span>{stateLabel}</span>
-        {#if job?.totalChunks}
-          <span class="sep">·</span>
-          <span>{t("transcribe.chunksBefore")} <b>{job.completedChunks} / {job.totalChunks}</b> {t("transcribe.chunksAfter", { count: job.totalChunks })}</span>
-        {/if}
-        {#if running && job?.phase}
-          <span class="sep">·</span>
-          <span>{phaseLabel(job.phase)}</span>
-        {/if}
-        {#if running && speed !== null}
-          <span class="sep">·</span>
-          <span>{t("transcribe.speed", { value: speed.toFixed(1) })}</span>
-        {/if}
-        {#if running && etaMs !== null}
-          <span class="sep">·</span>
-          <span>{etaLabel(etaMs)}</span>
-        {/if}
-      </div>
-      {#if running}
-        <div
-          class="bar"
-          role="progressbar"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow={percent ?? undefined}
-          aria-valuetext={percent === null ? t("transcribe.progressIdle") : t("transcribe.progressPercent", { percent })}
-        >
-          <i class:indeterminate={percent === null} style:width={percent === null ? undefined : `${percent}%`}></i>
-        </div>
-      {/if}
-      {#if partial}
-        <div class="note">
-          <span class="dot red"></span>
-          <span>{t("transcribe.partialNote")}</span>
-        </div>
-      {/if}
-    </div>
-
-    <Reader jobId={job?.jobId ?? transcript?.jobId ?? null} {segments} {running} />
+      {/snippet}
+    </Reader>
 
     {#if finished && busy}
       <p class="hint">{t("transcribe.preparingExport")}</p>
@@ -235,39 +237,9 @@
 </section>
 
 <style>
-  .back-bar {
-    display: flex;
-    width: 100%;
-    margin: 2px 0 8px;
-    animation: back-in var(--speed) var(--ease-out);
-  }
-
-  @keyframes back-in {
-    from {
-      opacity: 0;
-      transform: translateX(-4px);
-    }
-  }
-
-  .back {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    height: 24px;
-    padding: 0 8px 0 3px;
-    border: 0;
-    border-radius: 7px;
-    background: transparent;
-    font-size: 12.5px;
-    color: var(--text-3);
-  }
-
-  .back:hover {
-    background: var(--hover);
-    color: var(--text);
-  }
-
   .content {
+    border-radius: var(--radius);
+    overflow: hidden;
     flex: 1;
     min-height: 0;
     display: flex;
@@ -377,22 +349,6 @@
     letter-spacing: 0.02em;
   }
 
-  /* 主按钮：深色药丸（参考设计的 Upgrade to Pro 样式） */
-  .btn {
-    height: 32px;
-    padding: 0 16px;
-    border-radius: 9px;
-    background: var(--text);
-    border: 0;
-    color: var(--bg);
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .btn:hover {
-    opacity: 0.88;
-  }
-
   .task {
     width: 100%;
     max-width: 940px;
@@ -415,10 +371,6 @@
     min-width: 0;
   }
 
-  .spacer {
-    flex: 1;
-  }
-
   .quiet {
     font-size: 13.5px;
     color: var(--text-2);
@@ -430,28 +382,6 @@
 
   .quiet:hover {
     color: var(--red);
-  }
-
-  .act {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 26px;
-    padding: 0 8px;
-    border-radius: 6px;
-    border: 0;
-    background: transparent;
-    color: var(--text-2);
-    font-size: 13.5px;
-  }
-
-  .act:hover:not(:disabled) {
-    background: var(--fill);
-    color: var(--text);
-  }
-
-  .act:disabled {
-    opacity: 0.45;
   }
 
   .meta {

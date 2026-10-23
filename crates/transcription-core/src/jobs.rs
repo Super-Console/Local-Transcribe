@@ -175,6 +175,68 @@ impl JobStore {
         Ok(None)
     }
 
+    /// Persist a terminal status for a task that never acquired a lease
+    /// (for example a job cancelled while still queued). Existing IDs are not
+    /// overwritten: a retried task keeps a single authoritative status.
+    pub fn record_status(&self, status: JobStatus) -> Result<(), String> {
+        validate_job_id(&status.job_id)?;
+        fs::create_dir_all(self.jobs_dir())
+            .map_err(|_| "Could not prepare the local task store.".to_owned())?;
+        let dispatch_lock = open_lock(&self.jobs_dir().join(".dispatch.lock"))?;
+        FileExt::lock_exclusive(&dispatch_lock)
+            .map_err(|_| "The local task store is busy; try again shortly.".to_owned())?;
+        let path = self.status_path(&status.job_id)?;
+        if path.exists() {
+            return Err("That transcription task ID already exists.".to_owned());
+        }
+        self.write_status(&status)?;
+        drop(dispatch_lock);
+        Ok(())
+    }
+
+    /// Most recent tasks, newest first, capped at `limit`.
+    ///
+    /// Reads the persisted status files (the same source as `job_status`), so a
+    /// list and a single lookup can never disagree. Interrupted jobs are
+    /// recovered first, exactly like `active_job_status`.
+    pub fn recent_jobs(&self, limit: usize) -> Result<Vec<JobStatus>, String> {
+        fs::create_dir_all(self.jobs_dir())
+            .map_err(|_| "Could not read the local task store.".to_owned())?;
+        let dispatch_lock = open_lock(&self.jobs_dir().join(".dispatch.lock"))?;
+        FileExt::lock_exclusive(&dispatch_lock)
+            .map_err(|_| "The local task store is busy; try again shortly.".to_owned())?;
+        self.recover_interrupted_jobs()?;
+        let entries = fs::read_dir(self.jobs_dir())
+            .map_err(|_| "Could not inspect the local task store.".to_owned())?;
+        let mut jobs = Vec::new();
+        for entry in entries.flatten() {
+            if entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("json")
+            {
+                continue;
+            }
+            let Ok(bytes) = fs::read(entry.path()) else {
+                continue;
+            };
+            if let Ok(status) = serde_json::from_slice::<JobStatus>(&bytes) {
+                jobs.push(status);
+            }
+        }
+        drop(dispatch_lock);
+        jobs.sort_by(|left, right| {
+            right
+                .started_at_ms
+                .unwrap_or(0)
+                .cmp(&left.started_at_ms.unwrap_or(0))
+                .then_with(|| right.job_id.cmp(&left.job_id))
+        });
+        jobs.truncate(limit);
+        Ok(jobs)
+    }
+
     pub fn request_cancel(&self, job_id: &str) -> Result<bool, String> {
         let Some(status) = self.job_status(job_id)? else {
             return Ok(false);
@@ -509,5 +571,86 @@ mod lock_error_tests {
     #[test]
     fn windows_lock_violation_is_lock_contention() {
         assert!(is_lock_contention(&Error::from_raw_os_error(33)));
+    }
+}
+
+#[cfg(test)]
+mod recent_jobs_tests {
+    use super::{JobState, JobStatus, JobStore};
+
+    fn status(job_id: &str, state: JobState, started_at_ms: u64) -> JobStatus {
+        JobStatus {
+            job_id: job_id.to_owned(),
+            state,
+            phase: "test".into(),
+            completed_chunks: 0,
+            total_chunks: None,
+            started_at_ms: Some(started_at_ms),
+            total_duration_ms: None,
+            transcript_available: false,
+            result_saved: false,
+            error: None,
+        }
+    }
+
+    fn store(name: &str) -> JobStore {
+        let root = std::env::temp_dir().join(format!(
+            "recent-jobs-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        JobStore::new(root)
+    }
+
+    fn id(suffix: &str) -> String {
+        format!("job-{suffix}")
+    }
+
+    #[test]
+    fn newest_first_and_capped() {
+        let store = store("cap");
+        for (index, suffix) in ["a", "b", "c"].iter().enumerate() {
+            store
+                .record_status(status(
+                    &id(suffix),
+                    JobState::Completed,
+                    1_000 + index as u64,
+                ))
+                .unwrap();
+        }
+        let jobs = store.recent_jobs(2).unwrap();
+        assert_eq!(jobs.len(), 2);
+        assert_eq!(jobs[0].job_id, id("c"));
+        assert_eq!(jobs[1].job_id, id("b"));
+    }
+
+    #[test]
+    fn one_id_cannot_appear_twice() {
+        let store = store("retry");
+        store
+            .record_status(status(&id("x"), JobState::Failed, 1))
+            .unwrap();
+        // A second record for the same id is refused instead of appending a
+        // duplicate row; retry paths either overwrite through a lease or use a
+        // new id, so the list stays one row per task.
+        assert!(store
+            .record_status(status(&id("x"), JobState::Completed, 2))
+            .is_err());
+        let jobs = store.recent_jobs(10).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].state, JobState::Failed);
+    }
+
+    #[test]
+    fn removed_jobs_leave_no_residue() {
+        let store = store("remove");
+        store
+            .record_status(status(&id("gone"), JobState::Cancelled, 1))
+            .unwrap();
+        std::fs::remove_file(store.jobs_dir().join(format!("{}.json", id("gone")))).unwrap();
+        assert!(store.recent_jobs(10).unwrap().is_empty());
     }
 }

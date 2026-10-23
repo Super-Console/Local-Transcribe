@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Local Transcribe — 本地转写（设计草稿）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,560;9..144,640&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="draft-bar">设计草稿 · <strong>产品名为工作名，视觉设计未定稿</strong> · 非最终发布物 · 2026-10</div>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="wordmark" href="index.html"><span class="glyph">✳</span> Local&nbsp;Transcribe <small>工作名</small></a>
+    <nav class="nav">
+      <a href="index.html" aria-current="page">首页</a>
+      <a href="features.html">功能</a>
+      <a href="lan.html">局域网计算</a>
+      <a href="ai.html">AI · BYOK</a>
+      <a href="download.html">下载</a>
+      <a href="privacy.html">隐私</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow">本地优先 · 语音转写</p>
+        <h1>转写，留在你<br>自己的设备上。</h1>
+        <p class="lead">
+          音视频文件 → 文字稿，全程在你自己的电脑上完成。一个 Rust 核心，三个平等的界面：
+          桌面应用、命令行、本地 MCP 服务——没有云端，没有账号，没有统计上报。
+        </p>
+        <div class="cta-row">
+          <a class="btn" href="download.html">下载 Early Beta</a>
+          <a class="btn btn-ghost" href="features.html">看看它能做什么</a>
+        </div>
+      </div>
+      <figure class="figure">
+        <svg viewBox="0 0 420 260" role="img" aria-label="音波进入本地设备，输出文字稿的手绘示意">
+          <g fill="none" stroke="#211f1b" stroke-width="2.2" stroke-linecap="round">
+            <path d="M36 130 q 10 -34 20 0 t 20 0 t 20 0 t 20 0 t 20 0" stroke="#c0603a"/>
+            <path d="M36 158 q 10 -20 20 0 t 20 0 t 20 0" opacity="0.45"/>
+            <rect x="150" y="52" width="150" height="156" rx="16"/>
+            <path d="M150 190 h150"/>
+            <circle cx="225" cy="176" r="4" fill="#c0603a" stroke="none"/>
+          </g>
+          <g fill="#211f1b">
+            <rect x="172" y="84" width="106" height="7" rx="3.5" opacity="0.85"/>
+            <rect x="172" y="102" width="92" height="7" rx="3.5" opacity="0.6"/>
+            <rect x="172" y="120" width="100" height="7" rx="3.5" opacity="0.72"/>
+            <rect x="172" y="138" width="66" height="7" rx="3.5" opacity="0.45"/>
+          </g>
+          <path d="M330 130 h 44 m -12 -10 l 12 10 l -12 10" fill="none" stroke="#211f1b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <figcaption>文件进，文字稿出——中间这台机器是你自己的。</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">为什么是本地</p>
+        <h2>你的录音值得一个安静的地方。</h2>
+      </div>
+      <div class="cards">
+        <div class="card">
+          <span class="idx">01</span>
+          <h3>数据不出设备</h3>
+          <p>文件、模型、文字稿全部留在本机；不接入任何云转写服务，不做上传统计。录音里可能有你最私密的对话——它们不必经过任何人的服务器。</p>
+        </div>
+        <div class="card featured">
+          <span class="idx">02</span>
+          <h3>算力自己选</h3>
+          <p>本机转写开箱即用；如果手头有第二台电脑，局域网计算（实验性）可以把重活交给它——只发到你自己配对的节点，流量直连，不经云。</p>
+        </div>
+        <div class="card">
+          <span class="idx">03</span>
+          <h3>AI 用你自己的 Key</h3>
+          <p>总结、纪要、笔记、问答（计划中）——BYOK 模式：API 地址、Key、模型都由你配置，请求从你发起操作的设备直接发出，Key 存在系统安全存储里。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <p class="eyebrow">工作方式</p>
+        <h2>三步，从文件到文字稿。</h2>
+      </div>
+      <ol class="steps">
+        <li>
+          <div>
+            <h3>导入或录制</h3>
+            <p>拖入音频/视频文件，或直接在应用内录音（麦克风录制；应用音频内录为 macOS 专属）。</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>本地转写</h3>
+            <p>Sherpa-onnx 模型在你的设备上运行（SenseVoice / Paraformer 等，模型自行导入、不随包提供）。CPU 即可，有合适的 GPU 时自动加速。</p>
+          </div>
+        </li>
+        <li>
+          <div>
+            <h3>搜索、导出、归档</h3>
+            <p>历史记录、全文搜索、导出文本；保留策略由你决定。想交给局域网另一台电脑？配对一个节点，发送即可。</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <div class="strip">
+        <span>当前版本 <span class="mono">1.1.0-beta.1</span></span>
+        <span>macOS 13+（Apple Silicon）· Windows 11 x64</span>
+        <span>MIT 开源</span>
+        <a href="download.html">下载 →</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap">
+      <p class="quote">
+        「一个工具，三个平等的界面：点得出来，敲得出来，也让 Agent 调得出来。」
+        <span class="src">— Local Transcribe 的设计取向（工作名）</span>
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <span>Local Transcribe 为工作名 · 本页为设计草稿 · 最终视觉与命名未定稿</span>
+    <span>MIT License · <a href="privacy.html">隐私与数据边界</a> · <a href="download.html">下载</a></span>
+  </div>
+</footer>
+
+</body>
+</html>
