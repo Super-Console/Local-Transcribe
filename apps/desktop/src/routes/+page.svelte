@@ -45,9 +45,8 @@
     "mp4", "mov", "mkv", "ogg", "oga", "flac", "aac", "opus", "3gp", "webm",
   ];
 
-  // 侧栏折叠：产品决定默认关闭，不再提供折叠入口。
-  // 恢复方式：把这里改成 true，并把 Rust 侧 `SIDEBAR_COLLAPSE_ENABLED` 同步改成 true。
-  const SIDEBAR_COLLAPSE_ENABLED = false;
+  // 本轮视觉迭代恢复折叠；使用共享标题栏按钮，不再安装原生 accessory。
+  const SIDEBAR_COLLAPSE_ENABLED = true;
 
   // 折叠状态的持久化键（保留，便于恢复）。
   const SIDEBAR_KEY = "lt.sidebar.collapsed.v1";
@@ -98,15 +97,6 @@
   const lanHint = $derived(
     lanSettings?.mode === "prefer_lan" ? t("transcribe.lanHint") : null,
   );
-
-  // 原生标题栏按钮的提示语跟随界面语言与折叠状态（折叠关闭时不调用）。
-  $effect(() => {
-    if (!SIDEBAR_COLLAPSE_ENABLED || !tauriAvailable) return;
-    const label = sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle");
-    void invoke("set_sidebar_toggle_label", { label }).catch(() => {
-      /* 预览环境没有原生按钮 */
-    });
-  });
 
   // 运行中每秒拉一次状态：CLI/MCP 启动的任务没有本进程事件，也能看到实时进度、速度与剩余时间。
   $effect(() => {
@@ -573,9 +563,19 @@
 </script>
 
 <div class="app" class:collapsed={sidebarCollapsed}>
-  <AppSidebar {view} collapsed={sidebarCollapsed} onNavigate={navigate} />
-
-  <main class="main">
+  <header class="window-header">
+    <div class="sidebar-header" data-tauri-drag-region>
+      <button
+        type="button"
+        class="sidebar-toggle"
+        aria-label={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
+        title={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
+        aria-expanded={!sidebarCollapsed}
+        aria-controls="app-sidebar"
+        onclick={toggleSidebar}
+      ><Icon name="panel" size={18} /></button>
+    </div>
+    <div class="header-tools" data-tauri-drag-region>
     <AppToolbar
       {model}
       models={libraryModels}
@@ -585,6 +585,11 @@
       onSelectModel={selectModel}
       onManageModels={() => (view = "model")}
     />
+    </div>
+  </header>
+  <div class="workspace">
+  <AppSidebar {view} collapsed={sidebarCollapsed} onNavigate={navigate} />
+  <main class="main">
 
     {#if view === "home"}
       {#if detail && detailJobId}
@@ -670,18 +675,68 @@
       />
     {/if}
   </main>
+  </div>
 </div>
 
 <style>
   .app {
+    --sidebar-width: 204px;
     display: flex;
+    flex-direction: column;
     height: 100vh;
     overflow: hidden;
     background: var(--bg);
     color: var(--text);
   }
 
-  /* 侧栏折叠开关现在是原生标题栏按钮（与红绿灯同一行），内容区不再需要让位。 */
+  .window-header {
+    display: flex;
+    height: 52px;
+    flex: none;
+    user-select: none;
+  }
+
+  .sidebar-header {
+    width: var(--sidebar-width);
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 10px 0 80px;
+    background: var(--sidebar);
+    border-right: 1px solid var(--hairline);
+    transition: width var(--speed) var(--ease-out);
+  }
+
+  .collapsed .sidebar-header {
+    width: 126px;
+    background: var(--bg);
+    border-right-color: transparent;
+  }
+
+  .sidebar-toggle {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--hairline-2);
+    border-radius: 50%;
+    background: var(--hover);
+    color: var(--text-2);
+    cursor: default;
+  }
+
+  .sidebar-toggle:hover { background: var(--selected); }
+
+  .header-tools { flex: 1; min-width: 0; }
+
+  .workspace {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
 
   /* 内容区：侧栏右侧的通高区域；圆角与窗口边框交给原生窗口 */
   .main {

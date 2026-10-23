@@ -15,7 +15,7 @@
 
 </script>
 
-<aside class="sidebar" class:collapsed inert={collapsed} aria-label={t("nav.mainLabel")}>
+<aside id="app-sidebar" class="sidebar" class:collapsed inert={collapsed} aria-label={t("nav.mainLabel")}>
   <div class="brand" title="Local Transcribe">
     <span class="label">Local Transcribe</span>
   </div>
@@ -90,13 +90,14 @@
 <style>
   /* 普通 macOS 侧栏：通高平铺列，右缘一条发丝线与内容分开 */
   .sidebar {
-    width: 214px;
+    width: var(--sidebar-width, 204px);
     flex: none;
     height: 100%;
+    overflow: auto;
     display: flex;
     flex-direction: column;
     /* 顶部留白与红绿灯条下方的首个内容行对齐 */
-    padding: 14px 10px 10px;
+    padding: 14px 10px 14px;
     background: var(--sidebar);
     border-right: 1px solid var(--hairline);
     transition: width var(--speed) var(--ease-out);
@@ -111,10 +112,10 @@
   }
 
   .brand {
-    font-size: 18px;
+    font-size: 16px;
     font-weight: 700;
     letter-spacing: -0.02em;
-    padding: 2px 10px 16px;
+    padding: 2px 10px 22px;
     color: var(--text);
     user-select: none;
     white-space: nowrap;
@@ -126,9 +127,9 @@
     padding: 0 10px 6px;
     font-size: 11.5px;
     font-weight: 600;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: var(--text-3);
+    color: var(--text-2);
     user-select: none;
     white-space: nowrap;
   }
@@ -140,8 +141,8 @@
   }
 
   .bottom {
-    margin-top: auto;
-    padding-top: 10px;
+    margin-top: 24px;
+    padding-top: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -155,12 +156,13 @@
     display: flex;
     align-items: center;
     gap: 9px;
-    height: 36px;
+    min-height: 32px;
+    flex: none;
     padding: 0 11px;
     border: 0;
     border-radius: 8px;
     background: transparent;
-    font-size: 14.5px;
+    font-size: 13px;
     line-height: 1;
     color: var(--text);
     text-align: left;
@@ -181,16 +183,15 @@
   .nav-item.active {
     background: var(--selected);
     color: var(--accent-ink);
-    font-weight: 500;
+    font-weight: 600;
   }
 
   .nav-item.active :global(svg) {
     opacity: 1;
   }
 
-  /* 参考设计的导航没有焦点环：选中态本身就是指示 */
-  .nav-item:focus,
   .nav-item:focus-visible {
-    outline: none;
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
   }
 </style>

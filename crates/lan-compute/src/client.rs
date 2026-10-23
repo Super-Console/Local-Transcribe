@@ -382,7 +382,7 @@ mod tests {
             MDNS_SERVICE_TYPE,
             "study-room",
             "study-room.local.",
-            "REDACTED-LAN-IP",
+            "192.0.2.10",
             7878,
             properties,
         )
@@ -390,6 +390,7 @@ mod tests {
         let resolved = info.as_resolved_service();
         let node = node_info_from_resolved(&resolved);
         assert_eq!(node.name, "study-room");
+        assert_eq!(node.host, "study-room.local");
         assert_eq!(node.port, 7878);
         assert_eq!(node.proto_version, 1);
         assert!(node.compute_enabled);
