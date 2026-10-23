@@ -22,6 +22,10 @@ pub struct HostStatus {
     pub model: String,
 }
 
+// 手动实现是有意的：`supported` 在 macOS 上必须为 true，而 `#[derive(Default)]`
+// 会把所有平台都置为 false。Windows 目标上 clippy 会把 cfg! 求值成 false 后
+// 误判为可派生（tauri CI 的 -D warnings 会拦），故显式豁免该 lint。
+#[allow(clippy::derivable_impls)]
 impl Default for HostStatus {
     fn default() -> Self {
         Self {
