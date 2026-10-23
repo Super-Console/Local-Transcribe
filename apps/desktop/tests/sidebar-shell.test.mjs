@@ -6,6 +6,15 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../src/routes/+page.svelte");
 const sidebar = read("../src/lib/components/AppSidebar.svelte");
 
+const desktopLockPattern = (version) =>
+  new RegExp(`name = "voice-to-text-desktop"\\r?\\nversion = "${version.replaceAll('.', '\\.') }"`);
+
+test("release version check accepts LF and CRLF Cargo.lock checkouts", () => {
+  const pattern = desktopLockPattern("1.1.0-beta.2");
+  assert.match('name = "voice-to-text-desktop"\nversion = "1.1.0-beta.2"', pattern);
+  assert.match('name = "voice-to-text-desktop"\r\nversion = "1.1.0-beta.2"', pattern);
+});
+
 test("macOS content extends into the native title bar", () => {
   const config = JSON.parse(read("../src-tauri/tauri.conf.json"));
   assert.equal(config.app.windows[0].titleBarStyle, "Overlay");
@@ -24,7 +33,7 @@ test("desktop release versions stay in sync", () => {
   assert.match(cargo, new RegExp(`version = "${packageJson.version.replaceAll('.', '\\.') }"`));
   assert.equal(npmLock.version, packageJson.version);
   assert.equal(npmLock.packages[""].version, packageJson.version);
-  assert.match(cargoLock, new RegExp(`name = "voice-to-text-desktop"\\nversion = "${packageJson.version.replaceAll('.', '\\.') }"`));
+  assert.match(cargoLock, desktopLockPattern(packageJson.version));
 });
 
 test("sidebar toggle remains outside the collapsible navigation", () => {
