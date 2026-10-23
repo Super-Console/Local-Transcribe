@@ -330,4 +330,9 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - transcription-core 新增 6 个模型族布局与配置：FireRed CTC、Zipformer CTC、Dolphin、
   TeleSpeech、FunASR Nano、transducer（X-ASR），并新增布局检测用例与清单一致性用例。
 - 版本 `1.1.0-beta.5`；文档 `docs/model-download-and-quality.md` 记录全部 CER/速度数据。
-- 待办：Windows 本机构建 MSI、两平台打包发 GitHub；GUI 下载流程仍待 Timmy 验收。
+- Windows：在 Timmy 的 Windows 11（build 26300）本机 `npm ci` + `tauri build --bundles msi` 成功，
+  产物 11,476,992 字节；未在 Windows 跑测试套件。
+- 发布：tag `1.1.0-beta.5`（pre-release），资产 DMG + MSI + SHA256SUMS
+  （https://github.com/TimmySheep/VoiceToTextApp/releases/tag/1.1.0-beta.5）。
+- MBP 已换装，旧版备份 `before-model-catalog-20261023-2007`；Air 不可达，未更新。
+- 待办：GUI 下载流程、Windows 真机 GUI/录音、跨机局域网转写仍待 Timmy 验收。

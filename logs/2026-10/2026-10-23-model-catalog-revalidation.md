@@ -69,3 +69,22 @@
 - GUI 下载（进度、取消、断网）仍未人工点验；后端下载路径与文件大小已核对。
 - Windows 端未重跑 CER；Windows 包只验证构建与启动链路。
 - 真实会议/电话录音没有逐字真值，CER 结论只代表清晰 TTS 单人语音。
+
+## 收尾记录（2026-10-23 20:10）
+
+- 本地验证：`cargo test --workspace` 29 组全 ok（0 失败）、严格 Clippy `-D warnings`、
+  `cargo fmt --all -- --check`、`npm test` 18/18、`svelte-check` 0/0、`npm run build` 通过。
+- macOS 包：`.app` 26.19 MiB，可执行文件 SHA-256
+  `78b670e669e48bf606fbaa83b9fb6586d675fc01976e306a635896202c1c7a9f`，
+  签名标识 `com.timmy.voicetotextapp`（ad-hoc）；DMG `hdiutil verify` 通过。
+- Windows 包：源码 tar 同步到 `tims-gaming-pc`，`npm ci` + `tauri build --bundles msi`
+  成功，`Local Transcribe_1.1.0-beta.5_x64_en-US.msi` 11,476,992 字节；
+  构建时设置 `SHERPA_ONNX_ARCHIVE_DIR` 复用已下载的 win-x64 静态库。
+  Windows 端只做构建，没有运行测试套件。
+- 发布：tag `1.1.0-beta.5`，GitHub pre-release
+  https://github.com/TimmySheep/VoiceToTextApp/releases/tag/1.1.0-beta.5
+  资产：DMG、MSI、`SHA256SUMS-beta5.txt`。
+- 本机安装：MBP 已换装 beta.5，旧版备份在
+  `~/Applications/Local Transcribe Backups/before-model-catalog-20261023-2007`；
+  Air 当时不可达（Tailscale 连接超时），未更新。
+- GitHub Actions 仍会在 push 时跑 Windows 验证；本次发布的 MSI 不是 Actions 产物。
