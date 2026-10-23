@@ -101,6 +101,7 @@ export const de: Record<MessageKey, Message> = {
   "record.idle": "Keine Aufnahme",
   "record.refresh": "Quellen aktualisieren",
   "record.permission": "Aufnehmen braucht Mikrofonzugriff; Meeting-Apps brauchen „Systemaudio aufnehmen“ (Systemeinstellungen → Datenschutz).",
+  "record.permissionWindows": "Mikrofonzugriff wird von Windows verwaltet (Einstellungen → Datenschutz und Sicherheit → Mikrofon); Apps aufnehmen braucht keine zusätzliche Berechtigung (Windows 10 2004 oder neuer).",
   "record.empty": "Kein Audio aufgenommen. Prüfe Rechte und Quellen.",
   "model.loadedHint": "Im Speicher geladen",
   "model.unknownSize": "Größe unbekannt",

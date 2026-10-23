@@ -22,6 +22,8 @@ mod lan;
 mod lan_host;
 mod model_download;
 mod recording;
+#[cfg(windows)]
+mod recording_windows;
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
 const SEGMENT_EVENT: &str = "voice-to-text:transcript-segment";

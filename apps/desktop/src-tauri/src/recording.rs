@@ -86,7 +86,7 @@ pub struct AudioApp {
     pub name: String,
 }
 
-fn store_level(slot: &AtomicU32, peak: f32) {
+pub(crate) fn store_level(slot: &AtomicU32, peak: f32) {
     slot.store(peak.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
 }
 
@@ -261,11 +261,37 @@ fn spawn_app(pid: i32, label: &str, path: PathBuf, stop: Arc<AtomicBool>) -> Tra
     handle
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn spawn_app(pid: i32, label: &str, path: PathBuf, stop: Arc<AtomicBool>) -> TrackHandle {
+    let level = Arc::new(AtomicU32::new(0.0f32.to_bits()));
+    let error = empty_error();
+    let mut handle = TrackHandle {
+        label: label.to_owned(),
+        path: path.clone(),
+        level: Arc::clone(&level),
+        join: None,
+        error: Arc::clone(&error),
+    };
+    let thread_error = Arc::clone(&error);
+    match thread::Builder::new()
+        .name("recording-app-win".to_owned())
+        .spawn(move || crate::recording_windows::run_loopback(pid, path, level, stop, thread_error))
+    {
+        Ok(join) => handle.join = Some(join),
+        Err(issue) => {
+            if let Ok(mut slot) = error.lock() {
+                *slot = Some(issue.to_string());
+            }
+        }
+    }
+    handle
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn spawn_app(_pid: i32, label: &str, path: PathBuf, _stop: Arc<AtomicBool>) -> TrackHandle {
     let error = empty_error();
     if let Ok(mut slot) = error.lock() {
-        *slot = Some("录制应用音频目前仅支持 macOS。".to_owned());
+        *slot = Some("录制应用音频目前仅支持 macOS 与 Windows。".to_owned());
     }
     TrackHandle {
         label: label.to_owned(),
@@ -526,7 +552,17 @@ pub fn list_apps() -> Vec<AudioApp> {
     out
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+pub fn list_apps() -> Vec<AudioApp> {
+    let mut out: Vec<AudioApp> = crate::recording_windows::visible_apps()
+        .into_iter()
+        .map(|(pid, name)| AudioApp { pid, name })
+        .collect();
+    out.sort_by_key(|app| app.name.to_lowercase());
+    out
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn list_apps() -> Vec<AudioApp> {
     Vec::new()
 }

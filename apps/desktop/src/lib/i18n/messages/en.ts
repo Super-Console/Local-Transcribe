@@ -100,6 +100,7 @@ export const en: Record<MessageKey, Message> = {
   "record.idle": "Not recording",
   "record.refresh": "Refresh sources",
   "record.permission": "Recording needs Microphone access; capturing a meeting app needs System Audio Recording (System Settings → Privacy & Security).",
+  "record.permissionWindows": "Microphone access is managed by Windows (Settings → Privacy & security → Microphone); capturing an app needs no extra permission (Windows 10 version 2004 or later).",
   "record.empty": "No audio was captured. Check permissions and sources.",
   "model.loadedHint": "Loaded in memory",
   "model.unknownSize": "Size unknown",
