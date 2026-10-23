@@ -18,31 +18,31 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use windows::core::{Interface, Ref, implement, w};
+use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, TRUE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
-    ActivateAudioInterfaceAsync, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS,
-    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, IActivateAudioInterfaceAsyncOperation,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS,
+    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
     IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
     IAudioCaptureClient, IAudioClient, PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+    VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
-use windows::Win32::System::Com::{
-    CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED,
-};
+use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, WaitForSingleObject,
+    CreateEventW, OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_QUERY_LIMITED_INFORMATION,
+    WaitForSingleObject,
 };
-use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
 };
+use windows::core::{Interface, Ref, implement};
 
 /// 录制线程入口：失败写入错误槽，成功静默返回。
 pub fn run_loopback(
@@ -89,6 +89,9 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Completion_Impl {
 
 #[derive(Clone, Copy)]
 enum SampleKind {
+    /// 当前固定以 PCM16 初始化（见 capture 内注释），此分支暂不触发；
+    /// 保留为 float32 回退：若需切换格式时使用。
+    #[allow(dead_code)]
     F32,
     I16,
 }
@@ -110,9 +113,21 @@ fn check_loopback_support() -> Result<(), String> {
     Ok(())
 }
 
+/// winnt.h 的 SYNCHRONIZE（0x00100000）访问权：WaitForSingleObject 要求句柄持有它，
+/// 否则同步恒 WAIT_FAILED、目标退出检测永不触发（验收 T08）。windows 0.61 未导出该常量，
+/// 按原值内联。
+const SYNCHRONIZE_ACCESS: PROCESS_ACCESS_RIGHTS = PROCESS_ACCESS_RIGHTS(0x0010_0000);
+
+/// 进程是否存活：OpenProcess 失败（权限/不存在）视为不存活。
+/// 必须同时申请 QUERY_LIMITED_INFORMATION 与 SYNCHRONIZE：前者用于打开，
+/// 后者是 WaitForSingleObject 生效的前提（真机 TDD 回归测试守护，见 mod tests）。
 fn process_alive(pid: u32) -> bool {
     unsafe {
-        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+        match OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE_ACCESS,
+            false,
+            pid,
+        ) {
             Ok(handle) => {
                 let exited = WaitForSingleObject(handle, 0) == WAIT_OBJECT_0;
                 let _ = CloseHandle(handle);
@@ -122,6 +137,21 @@ fn process_alive(pid: u32) -> bool {
         }
     }
 }
+
+/// VT_BLOB 形式的 PROPVARIANT，与微软 ApplicationLoopbackAudio 官方示例一致：
+/// vt=VT_BLOB，blob 指向 AUDIOCLIENT_ACTIVATION_PARAMS 的副本。
+/// 布局按 x64 C ABI：vt@0、reserved@2、cbSize@8、pBlobData@16（与 C PROPVARIANT 的
+/// `struct { VARTYPE vt; WORD wReserved[3]; struct { ULONG cbSize; BYTE *pBlobData; } blob; }` 对齐）。
+#[repr(C)]
+struct PropVariantBlob {
+    vt: u16,
+    w_reserved: [u16; 3],
+    cb_size: u32,
+    p_blob_data: *mut u8,
+}
+
+/// PROPVARIANT.vt 的 VT_BLOB 值（winerror.h / wtypes.h）。
+const VT_BLOB: u16 = 65;
 
 fn capture(
     pid: i32,
@@ -142,31 +172,44 @@ fn capture(
             .map_err(|issue| format!("音频组件初始化失败：{issue}"))?;
     }
 
-    // 与微软 ApplicationLoopbackAudio 示例一致：结构体指针按 ABI 直接作为激活参数传入。
+    // 与微软 ApplicationLoopbackAudio 官方示例一致：VT_BLOB 容器携带
+    // AUDIOCLIENT_ACTIVATION_PARAMS，设备路径用官方常量 VAD\Process_Loopback。
+    // 真机曾因 ①设备路径误写成 "__DEFAULT_LOOPBACK_DEVICE_ID" 字面量、
+    // ②结构体直接 reinterpret 当 PROPVARIANT（vt 读到 ActivationType=1=VT_NULL）
+    // 两处错误导致激活 0x80070002（2026-10-23 真机诊断后按官方示例改正）。
     let mut params: AUDIOCLIENT_ACTIVATION_PARAMS = unsafe { std::mem::zeroed() };
     params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
     params.Anonymous.ProcessLoopbackParams = AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
         TargetProcessId: pid,
         ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
     };
-    let pv = &params as *const AUDIOCLIENT_ACTIVATION_PARAMS as *const PROPVARIANT;
+    let activate_params = PropVariantBlob {
+        vt: VT_BLOB,
+        w_reserved: [0; 3],
+        cb_size: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
+        p_blob_data: &mut params as *mut AUDIOCLIENT_ACTIVATION_PARAMS as *mut u8,
+    };
 
     let slot = Arc::new(CompletionSlot {
         done: Mutex::new(None),
         cv: std::sync::Condvar::new(),
     });
-    let handler: IActivateAudioInterfaceCompletionHandler =
-        Completion { slot: Arc::clone(&slot) }.into();
+    let handler: IActivateAudioInterfaceCompletionHandler = Completion {
+        slot: Arc::clone(&slot),
+    }
+    .into();
 
     let operation = unsafe {
         ActivateAudioInterfaceAsync(
-            w!("__DEFAULT_LOOPBACK_DEVICE_ID"),
+            VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(pv),
+            Some(&activate_params as *const PropVariantBlob as *const PROPVARIANT),
             &handler,
         )
     }
-    .map_err(|issue| format!("无法创建应用音频捕获（错误：{issue}）。需要 Windows 10 2004 及以上版本。"))?;
+    .map_err(|issue| {
+        format!("无法创建应用音频捕获（错误：{issue}）。需要 Windows 10 2004 及以上版本。")
+    })?;
 
     // 等待激活完成回调（最长 10 秒）。
     {
@@ -208,47 +251,47 @@ fn capture(
         .cast()
         .map_err(|issue| format!("音频捕获接口类型错误：{issue}"))?;
 
-    // 系统混音格式（通常 48 kHz 立体声 float32），用 AUTOCONVERTPCM 让引擎统一转换。
-    let mix_ptr = unsafe { client.GetMixFormat() }
-        .map_err(|issue| format!("无法读取系统混音格式：{issue}"))?;
-    if mix_ptr.is_null() {
-        return Err("系统混音格式为空。".to_owned());
-    }
-    let (sample_rate, channels, bits, tag) = unsafe {
-        let mix = &*mix_ptr;
-        // WAVEFORMATEX 为 packed 结构：先按值拷出字段再使用。
-        (
-            mix.nSamplesPerSec,
-            mix.nChannels as usize,
-            mix.wBitsPerSample,
-            mix.wFormatTag,
-        )
-    };
-    let sample_kind = match (tag, bits) {
-        // 共享引擎混音格式：float32，或 WAVE_FORMAT_EXTENSIBLE 包装的 float32。
-        (3, 32) | (0xFFFE, 32) => SampleKind::F32,
-        (1, 16) => SampleKind::I16,
-        _ => {
-            unsafe { CoTaskMemFree(Some(mix_ptr.cast())) };
-            return Err(format!(
-                "暂不支持的系统混音格式（tag {tag}，{bits} bit），请反馈此信息。"
-            ));
-        }
+    // 进程回环（VAD\Process_Loopback）激活的 IAudioClient 不支持 GetMixFormat
+    // （真机 2026-10-23 实测 E_NOTIMPL/0x80004001）；按微软 ApplicationLoopback 官方样例
+    // 的已验证配置直接给定格式：PCM16 / 44100 Hz / 2 ch，由 AUTOCONVERTPCM 完成引擎侧
+    // 转换。依据：f32 48k 配置 Initialize 虽成功但真机捕获全零；MS 样例、NAudio 与
+    // windows-rs #2995 三份参考均用同类 PCM16 配置；探针同配置于 2026-10-23 真机
+    // 取得非零捕获与 440/880 隔离证据（docs/windows-recording-architecture.md §3.1）。
+    let sample_rate: u32 = 44_100;
+    let channels: usize = 2;
+    let sample_kind = SampleKind::I16;
+    let wanted = WAVEFORMATEX {
+        wFormatTag: 1, // WAVE_FORMAT_PCM
+        nChannels: channels as u16,
+        nSamplesPerSec: sample_rate,
+        wBitsPerSample: 16,
+        nBlockAlign: (channels * 2) as u16,
+        nAvgBytesPerSec: sample_rate * channels as u32 * 2,
+        cbSize: 0,
     };
 
-    let stream_flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    // LOOPBACK 为回环流必需（缺它曾致 0x88890021）；EVENTCALLBACK + SetEventHandle 按
+    // 官方样例配齐；duration 0 由引擎按事件节奏自管缓冲。读取循环沿用探针已验证的
+    // 10 ms 轮询（事件句柄按样例绑定但不由循环等待，真机验证绿）。
+    let stream_flags = AUDCLNT_STREAMFLAGS_LOOPBACK
+        | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+        | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
     let init = unsafe {
         client.Initialize(
             AUDCLNT_SHAREMODE_SHARED,
             stream_flags,
-            20_000_000, // 2 秒环形缓冲，容忍调度抖动
             0,
-            mix_ptr,
+            0,
+            std::ptr::from_ref(&wanted),
             None,
         )
     };
-    unsafe { CoTaskMemFree(Some(mix_ptr.cast())) };
     init.map_err(|issue| format!("无法配置应用音频捕获（错误：{issue}）"))?;
+
+    let event_handle = unsafe { CreateEventW(None, false, false, None) }
+        .map_err(|issue| format!("无法创建捕获事件（错误：{issue}）"))?;
+    unsafe { client.SetEventHandle(event_handle) }
+        .map_err(|issue| format!("无法绑定捕获事件（错误：{issue}）"))?;
 
     let capture_client: IAudioCaptureClient = unsafe {
         client
@@ -310,7 +353,10 @@ fn capture(
                 match sample_kind {
                     SampleKind::F32 => {
                         let samples = unsafe {
-                            std::slice::from_raw_parts(data as *const f32, frames as usize * channels)
+                            std::slice::from_raw_parts(
+                                data as *const f32,
+                                frames as usize * channels,
+                            )
                         };
                         for frame in samples.chunks_exact(channels) {
                             let mono = frame.iter().sum::<f32>() / channels as f32;
@@ -321,14 +367,17 @@ fn capture(
                     }
                     SampleKind::I16 => {
                         let samples = unsafe {
-                            std::slice::from_raw_parts(data as *const i16, frames as usize * channels)
+                            std::slice::from_raw_parts(
+                                data as *const i16,
+                                frames as usize * channels,
+                            )
                         };
                         for frame in samples.chunks_exact(channels) {
-                            let mono =
-                                frame.iter().map(|sample| *sample as f32).sum::<f32>()
-                                    / channels as f32;
+                            let mono = frame.iter().map(|sample| *sample as f32).sum::<f32>()
+                                / channels as f32;
                             peak = peak.max((mono / i16::MAX as f32).abs());
-                            wav.write_sample(mono as i16).map_err(|_| write_issue.clone())?;
+                            wav.write_sample(mono as i16)
+                                .map_err(|_| write_issue.clone())?;
                         }
                     }
                 }
@@ -352,6 +401,7 @@ fn capture(
 
     crate::recording::store_level(level, peak);
     let _ = unsafe { client.Stop() };
+    let _ = unsafe { CloseHandle(event_handle) };
     drop(capture_client);
     drop(client);
     if let Ok(mut guard) = writer.lock()
@@ -361,7 +411,9 @@ fn capture(
     }
     drop(operation);
     drop(handler);
-    unsafe { CoUninitialize(); }
+    unsafe {
+        CoUninitialize();
+    }
     Ok(())
 }
 
@@ -438,4 +490,38 @@ fn process_names() -> HashMap<u32, String> {
         let _ = CloseHandle(snap);
     }
     map
+}
+
+/// 真机 TDD 回归测试（Windows 目标）：进程死后即使对象仍被他人句柄持有
+/// （PID 仍可 OpenProcess），也必须报告不存活——T08 状态上报依赖此语义。
+/// 在 2026-10-23 于 Windows 真机先红后绿验证；本模块仅随 windows 目标编译。
+#[cfg(test)]
+mod tests {
+    use super::process_alive;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    #[test]
+    fn process_alive_detects_dead_process_with_lingering_handle() {
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn child");
+        let pid = child.id();
+        assert!(process_alive(pid), "运行中的子进程应报告存活");
+
+        let keep =
+            unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.expect("open");
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(child);
+
+        assert!(
+            !process_alive(pid),
+            "目标已退出但句柄仍被持有时必须报告不存活"
+        );
+        let _ = unsafe { CloseHandle(keep) };
+    }
 }
