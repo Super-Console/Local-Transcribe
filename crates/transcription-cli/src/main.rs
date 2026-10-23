@@ -14,7 +14,6 @@ use voice_to_text_service::{default_data_dir, Request, Response, ServiceClient};
 const USAGE: &str = "Usage:
   local-transcribe status [--data-dir DIR]
   local-transcribe models list [--data-dir DIR]
-  local-transcribe models import <model-dir> [--data-dir DIR]
   local-transcribe models info <model-id> [--data-dir DIR]
   local-transcribe jobs add <media> [--model ID] [--language LANG] [--root DIR] [--data-dir DIR]
   local-transcribe jobs list [--data-dir DIR]
@@ -203,13 +202,6 @@ fn main() -> ExitCode {
     let request = match (parsed.group.as_str(), action.as_str()) {
         ("status", _) => Request::Ping,
         ("models", "list") => Request::Models,
-        ("models", "import") => match parsed.positional.first() {
-            Some(path) => Request::ImportModel { path: path.clone() },
-            None => {
-                eprintln!("models import needs a model directory\n{USAGE}");
-                return ExitCode::from(2);
-            }
-        },
         ("models", "info") => match parsed.positional.first() {
             Some(id) => Request::SelectModel { id: id.clone() },
             None => {

@@ -104,7 +104,9 @@ export const es: Record<MessageKey, Message> = {
   "record.empty": "No se capturó audio. Revisa permisos y fuentes.",
   "model.loadedHint": "Cargado en memoria",
   "model.unknownSize": "Tamaño desconocido",
-  "model.import": "Importar modelo",
+  "model.tierQuality": "Precisión primero",
+  "model.tierSpeed": "Velocidad primero",
+  "model.tierPunctuation": "Modelos auxiliares",
   "model.downloadTitle": "Modelos descargables",
   "model.download": "Descargar",
   "model.downloadCancel": "Cancelar descarga",
@@ -112,10 +114,9 @@ export const es: Record<MessageKey, Message> = {
   "model.downloaded": "Descargado",
   "model.downloadNetworkHint": "Una descarga interrumpida suele indicar un problema de red o de proxy. Revisa la conexión y vuelve a intentarlo.",
   "model.punctuationTag": "Puntuación",
-  "model.emptyTitle": "Aún no has importado modelos",
+  "model.emptyTitle": "Aún no has descargado modelos",
   "model.emptyBody":
-    "Descarga tú mismo un paquete de Whisper, Qwen3-ASR, Paraformer o SenseVoice de sherpa-onnx y luego elige la carpeta para importarlo. La importación se copia al directorio de la app; tus descargas originales no se tocan.",
-  "model.chooseFolder": "Elegir carpeta de modelos",
+    "Descarga arriba uno de los modelos verificados. Están adaptados a esta app y listos para usar; la app solo ejecuta modelos de esta lista y ya no importa carpetas arbitrarias.",
   "model.defaultTag": "Predeterminado",
   "model.installedNotLoaded": "Instalado, no cargado",
   "model.setDefault": "Establecer como predeterminado",
@@ -190,7 +191,6 @@ export const es: Record<MessageKey, Message> = {
 
   // Diálogos y errores
   "dialog.mediaFilter": "Audio o vídeo",
-  "dialog.importModelTitle": "Elegir carpeta de modelos",
   "dialog.deleteModelTitle": "Eliminar modelo",
   "dialog.deleteModelMessage":
     "¿Eliminar la copia interna de «{name}»? Tu descarga original no se borra; la copia se mueve a la Papelera.",

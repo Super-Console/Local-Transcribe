@@ -106,7 +106,9 @@ export const zh = {
   "record.empty": "没有录到音频，请检查权限与录音来源。",
   "model.loadedHint": "已加载到内存",
   "model.unknownSize": "大小未知",
-  "model.import": "导入模型",
+  "model.tierQuality": "准确优先",
+  "model.tierSpeed": "速度优先",
+  "model.tierPunctuation": "辅助模型",
   "model.downloadTitle": "可下载的模型",
   "model.download": "下载",
   "model.downloadCancel": "取消下载",
@@ -114,10 +116,9 @@ export const zh = {
   "model.downloaded": "已下载",
   "model.downloadNetworkHint": "下载中断可能是网络或代理问题：请检查网络连接后重试。",
   "model.punctuationTag": "标点",
-  "model.emptyTitle": "还没有导入模型",
+  "model.emptyTitle": "还没有下载模型",
   "model.emptyBody":
-    "自己下载 sherpa-onnx 的 Whisper、Qwen3-ASR、Paraformer 或 SenseVoice 导出包，然后选择文件夹导入。导入会复制到应用目录，原始下载保持不动。",
-  "model.chooseFolder": "选择模型文件夹",
+    "从上方列表下载经过验证的模型：它们已适配本应用，可以直接使用。应用只运行这份清单里的模型，不接受任意导入。",
   "model.defaultTag": "默认",
   "model.installedNotLoaded": "已安装，未加载",
   "model.setDefault": "设为默认",
@@ -179,7 +180,6 @@ export const zh = {
 
   // 对话框与错误
   "dialog.mediaFilter": "音频或视频",
-  "dialog.importModelTitle": "选择模型文件夹",
   "dialog.deleteModelTitle": "删除模型",
   "dialog.deleteModelMessage":
     "删除「{name}」在应用内的副本？原始下载文件不会被删除，副本会移入废纸篓。",

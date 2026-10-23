@@ -531,21 +531,6 @@
     }
   }
 
-  async function importModel() {
-    error = "";
-    libraryBusy = true;
-    try {
-      const picked = await open({ multiple: false, directory: true, title: t("dialog.importModelTitle") });
-      if (typeof picked !== "string") return;
-      await invoke("import_model", { path: picked });
-      await Promise.all([refreshLibrary(), refreshModel()]);
-    } catch (issue) {
-      error = String(issue);
-    } finally {
-      libraryBusy = false;
-    }
-  }
-
   async function selectModel(id: string) {
     error = "";
     libraryBusy = true;
@@ -833,7 +818,6 @@
         {catalog}
         downloads={modelDownloads}
         busy={libraryBusy}
-        onImport={importModel}
         onSelect={selectModel}
         onDelete={deleteModel}
         onDeleteCatalog={deleteCatalogModel}

@@ -61,7 +61,7 @@ The earlier five-tool, in-process MCP design is superseded. Both entry points no
 the local service over the same Unix socket as everything else; no MCP or CLI process
 loads a model by itself.
 
-- MCP tools (9): `list_models`, `import_model`, `transcribe_file`, `get_job_status`,
+- MCP tools (8): `list_models`, `transcribe_file`, `get_job_status`,
   `list_jobs`, `get_job_result`, `cancel_job`, `retry_job`, `export_result`.
 - File access stays fail-closed: inputs and export destinations must live under an
   explicit `--allow-root`; a request without roots is denied.
@@ -69,7 +69,7 @@ loads a model by itself.
   to poll and `get_job_result` with `includeText` only when the full text is needed.
 - If no service is running, MCP/CLI start one (single-instance lock prevents a second
   engine) and pass their `--allow-root` directories to it.
-- CLI: `local-transcribe status | models list|import|info | jobs add|list|show|cancel|retry|reorder|remove | export`.
+- CLI: `local-transcribe status | models list|info | jobs add|list|show|cancel|retry|reorder|remove | export`.
   Every command prints JSON; exit codes are 0 success, 1 request failure, 2 usage,
   4 service unavailable.
 

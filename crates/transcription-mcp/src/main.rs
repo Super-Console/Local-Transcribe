@@ -50,13 +50,6 @@ struct TranscribeArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct ImportArgs {
-    #[schemars(description = "Absolute path of a model folder under a configured --allow-root")]
-    path: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 struct JobIdArgs {
     #[schemars(description = "Stable task ID returned by transcribe_file")]
     job_id: String,
@@ -107,15 +100,6 @@ struct ModelsReply {
     library_path: Option<String>,
     #[serde(default)]
     note: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct ImportReply {
-    id: String,
-    display_name: String,
-    family: String,
-    bytes: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -358,25 +342,6 @@ impl VoiceToTextServer {
             serde_json::from_value(data).map_err(|error| error.to_string())?;
         reply.note = PROTOCOL_NOTE.to_owned();
         Ok(Json(reply))
-    }
-
-    /// Import a model folder into the app-managed library.
-    #[tool(
-        name = "import_model",
-        description = "Copy a validated model folder into the app-managed library."
-    )]
-    async fn import_model(
-        &self,
-        Parameters(args): Parameters<ImportArgs>,
-    ) -> Result<Json<ImportReply>, String> {
-        let path = self.authorize_input(&args.path)?;
-        let mut client = self.connect()?;
-        let data = Self::data_of(client.request(&Request::ImportModel {
-            path: path.to_string_lossy().into_owned(),
-        })?)?;
-        Ok(Json(
-            serde_json::from_value(data).map_err(|error| error.to_string())?,
-        ))
     }
 
     /// Submit a local media file; returns immediately with a job ID.
@@ -655,7 +620,6 @@ mod tests {
                 "export_result",
                 "get_job_result",
                 "get_job_status",
-                "import_model",
                 "list_jobs",
                 "list_models",
                 "retry_job",

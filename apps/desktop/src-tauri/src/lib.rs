@@ -101,6 +101,12 @@ fn summarize_model(model: &LocalModel) -> ModelSummary {
             ModelFamily::Whisper => "Whisper".to_owned(),
             ModelFamily::Qwen3Asr => "Qwen3-ASR".to_owned(),
             ModelFamily::FireRedAsr => "FireRedASR".to_owned(),
+            ModelFamily::FireRedCtc => "FireRedASR2 CTC".to_owned(),
+            ModelFamily::ZipformerCtc => "Zipformer CTC".to_owned(),
+            ModelFamily::Dolphin => "Dolphin".to_owned(),
+            ModelFamily::TeleSpeech => "TeleSpeech".to_owned(),
+            ModelFamily::FunAsrNano => "FunASR Nano".to_owned(),
+            ModelFamily::Transducer => "Transducer".to_owned(),
         },
     }
 }
@@ -317,6 +323,12 @@ fn family_label(family: ModelFamily) -> &'static str {
         ModelFamily::Whisper => "Whisper",
         ModelFamily::Qwen3Asr => "Qwen3-ASR",
         ModelFamily::FireRedAsr => "FireRedASR",
+        ModelFamily::FireRedCtc => "FireRedASR2 CTC",
+        ModelFamily::ZipformerCtc => "Zipformer CTC",
+        ModelFamily::Dolphin => "Dolphin",
+        ModelFamily::TeleSpeech => "TeleSpeech",
+        ModelFamily::FunAsrNano => "FunASR Nano",
+        ModelFamily::Transducer => "Transducer",
     }
 }
 
@@ -671,17 +683,6 @@ fn library_models(app: AppHandle) -> Result<Vec<LibraryModelSummary>, String> {
             selected: selected.as_deref() == Some(entry.model.id.as_str()),
         })
         .collect())
-}
-
-/// Import = validate + copy into the app-managed library; the download stays.
-#[tauri::command]
-fn import_model(path: String, app: AppHandle) -> Result<LibraryModelSummary, String> {
-    let library = ModelLibrary::new(app_data_dir(&app)?);
-    let imported = library.import(&path)?;
-    if read_selected_model(&app)?.is_none() {
-        save_selected_model(&app, &imported.model)?;
-    }
-    library_summary(&app, imported)
 }
 
 #[tauri::command]
@@ -1592,7 +1593,6 @@ pub fn run() {
             get_active_job_status,
             library_directory,
             library_models,
-            import_model,
             model_download::model_catalog,
             model_download::download_model,
             model_download::cancel_model_download,

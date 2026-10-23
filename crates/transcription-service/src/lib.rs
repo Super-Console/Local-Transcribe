@@ -85,9 +85,6 @@ pub enum Request {
     },
     Runs,
     Models,
-    ImportModel {
-        path: String,
-    },
     SelectModel {
         id: String,
     },
@@ -554,7 +551,6 @@ fn dispatch(request: Request, shared: &Shared) -> Response {
         Request::Status { job_id } => status(&job_id, shared),
         Request::Cancel { job_id } => cancel(&job_id, shared),
         Request::Models => models(shared),
-        Request::ImportModel { path } => import_model(&path, shared),
         Request::SelectModel { id } => select_model(&id, shared),
         Request::Jobs => jobs(shared),
         Request::Retry { job_id } => retry(&job_id, shared),
@@ -842,6 +838,12 @@ fn family_label(family: ModelFamily) -> &'static str {
         ModelFamily::Whisper => "Whisper",
         ModelFamily::Qwen3Asr => "Qwen3-ASR",
         ModelFamily::FireRedAsr => "FireRedASR",
+        ModelFamily::FireRedCtc => "FireRedASR2 CTC",
+        ModelFamily::ZipformerCtc => "Zipformer CTC",
+        ModelFamily::Dolphin => "Dolphin",
+        ModelFamily::TeleSpeech => "TeleSpeech",
+        ModelFamily::FunAsrNano => "FunASR Nano",
+        ModelFamily::Transducer => "Transducer",
     }
 }
 
@@ -896,27 +898,6 @@ fn models(shared: &Shared) -> Response {
             }))
         }
         Err(message) => Response::failure("library_error", message),
-    }
-}
-
-fn import_model(path: &str, shared: &Shared) -> Response {
-    let data_dir = shared.store.data_dir();
-    let library = ModelLibrary::new(data_dir);
-    match library.import(path) {
-        Ok(entry) => {
-            if read_selected_model(data_dir).ok().flatten().is_none() {
-                if let Err(message) = write_selected_model(data_dir, &entry.model) {
-                    return Response::failure("selection_error", message);
-                }
-            }
-            Response::ok_data(json!({
-                "id": entry.model.id,
-                "displayName": entry.model.display_name,
-                "family": family_label(entry.model.family),
-                "bytes": entry.bytes,
-            }))
-        }
-        Err(message) => Response::failure("import_failed", message),
     }
 }
 

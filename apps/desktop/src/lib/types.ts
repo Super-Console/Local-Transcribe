@@ -36,6 +36,7 @@ export type CatalogModel = {
   name: string;
   family: string;
   kind: "asr" | "punctuation";
+  tier: "quality" | "speed" | "punctuation";
   bytes: number;
   installed: boolean;
 };

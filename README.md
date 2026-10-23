@@ -13,7 +13,7 @@ A local-first desktop tool that transcribes user-selected audio/video files into
 - No live dictation/subtitles, no cloud ASR, no translation, summarization or note generation.
 - Local recording is in scope since 1.0: record inside the app (microphone and/or a chosen meeting app), then transcribe the tracks locally. Nothing is uploaded.
 - MCP is local stdio only; no TCP/HTTP listener, no unrestricted filesystem access, no shell execution.
-- Model weights are a separate, explicit import; installed models transcribe fully offline.
+- Models come from a verified in-app list; transcription runs fully offline and never uploads audio.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ All three interfaces talk to the same file-backed service instance, so a job sta
 - **Recording** (1.0): record inside the app with the microphone and/or a chosen application (Core Audio process tap) as two separate tracks; each track is transcribed separately and becomes its own record. No virtual audio driver is installed.
 - **Home** merges transcription and history: an import tile plus date-grouped transcript cards; opening a record shows the transcript in the reader.
 - **Search** in the toolbar matches both file names and transcript text (local JSON, case-insensitive) and shows the matching snippet; the reader has its own in-transcript search with match count and highlighting.
-- **Model picker** in the toolbar lists imported models, marks the default one, and shows a **green dot only when that model is actually resident in memory** (models load on demand, are reused across jobs, and unload after 120 s idle).
+- **Model picker** in the toolbar lists downloaded models, marks the default one, and shows a **green dot only when that model is actually resident in memory** (models load on demand, are reused across jobs, and unload after 120 s idle).
 - **Storage** settings show every app directory (models, history results, job records, app data) and offer automatic cleanup by age (1/3/5/7/30 days) or size (1/5/10 GB), off by default; deletions go to the Trash.
 - **Interface languages**: 简体中文, English, Español, Français, Deutsch (follows macOS by default).
 
@@ -51,19 +51,22 @@ Optional, off by default: transcribe on another computer on your LAN.
 - **Network scope**: desktop sharing binds the selected private address and rejects peers outside its subnet. Transport is HTTP; the app does not configure public access or change the firewall. Legacy saved token fields are ignored and omitted when settings are next saved; old token files are no longer read or generated.
 - See `design/windows-early-beta.html` for the frozen Windows Early Beta design and `docs/architecture/windows-lan-review.md` for the design review.
 
-## Supported model families
+## Supported models
 
-Imported model folders are validated strictly by on-disk layout; nothing is auto-downloaded.
+The model page offers only the measured list (3 accuracy-first + 3 speed-first + Chinese punctuation);
+arbitrary imports are no longer accepted. Every listed model was scored on the same Chinese test audio
+on Apple Silicon; see `docs/model-download-and-quality.md` for the raw numbers.
 
-| Family | Layout | Verified |
+| Family | Layout | Measured CER |
 |---|---|---|
-| Paraformer | `model.onnx` + `tokens.txt` | ✓ real transcription |
-| SenseVoice | `model.onnx` + `tokens.txt` | layout only |
-| Whisper | `encoder*.onnx` + `decoder*.onnx` + `tokens.txt` | layout only |
-| Qwen3-ASR | `conv_frontend.onnx` + encoder/decoder + `tokenizer/` | ✓ real transcription |
-| FireRedASR (v1/v2 AED) | `encoder*.onnx` + `decoder*.onnx` + `tokens.txt` | ✓ real transcription |
+| X-ASR Zipformer (transducer) | `encoder*` + `decoder*` + `joiner*` + `tokens.txt` | 0.84% |
+| FireRedASR2 (AED) | `encoder*.onnx` + `decoder*.onnx` + `tokens.txt` | 1.29% |
+| Qwen3-ASR 0.6B | `conv_frontend.onnx` + encoder/decoder + `tokenizer/` | 1.80% |
+| SenseVoice small (2025) | `model.onnx` + `tokens.txt` | 1.67% |
+| Paraformer zh | `model.onnx` + `tokens.txt` | 1.74% |
+| Zipformer CTC small zh | `model.onnx` + `tokens.txt` | 2.57% |
 
-Verified on Apple Silicon with the official sherpa-onnx int8 packages of **Qwen3-ASR 0.6B**, **FireRedASR2-AED zh+en** and **Paraformer-zh**, including mixed Chinese/English speech and Sichuan/Henan dialect samples. Inference runs on sherpa-onnx 1.13.8 (CPU).
+Inference runs on sherpa-onnx 1.13.8 (CPU).
 
 ## Interfaces
 
@@ -76,7 +79,6 @@ Tauri 2 + Svelte. Drag-and-drop or file picker, incremental transcription displa
 ```sh
 local-transcribe status
 local-transcribe models list
-local-transcribe models import <model-dir>
 local-transcribe jobs add <media> [--model ID] [--root DIR]
 local-transcribe jobs list | show | cancel | retry | remove <job-id>
 local-transcribe export <job-id> --format txt|json --output PATH
@@ -86,7 +88,7 @@ All commands print JSON. The shared service starts on demand.
 
 ### MCP
 
-`voice-to-text-mcp` speaks the MCP protocol over local stdio and exposes exactly nine tools: `transcribe_file`, `get_job_status`, `get_job_result`, `cancel_job`, `retry_job`, `list_jobs`, `list_models`, `import_model`, `export_result`. File access requires explicit `--allow-root DIR` arguments; without any root, all file reads are denied. See [`docs/mcp.md`](docs/mcp.md).
+`voice-to-text-mcp` speaks the MCP protocol over local stdio and exposes exactly eight tools: `transcribe_file`, `get_job_status`, `get_job_result`, `cancel_job`, `retry_job`, `list_jobs`, `list_models`, `export_result`. File access requires explicit `--allow-root DIR` arguments; without any root, all file reads are denied. See [`docs/mcp.md`](docs/mcp.md).
 
 ## Build from source (macOS, Apple Silicon)
 

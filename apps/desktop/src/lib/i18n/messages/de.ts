@@ -105,7 +105,9 @@ export const de: Record<MessageKey, Message> = {
   "record.empty": "Kein Audio aufgenommen. Prüfe Rechte und Quellen.",
   "model.loadedHint": "Im Speicher geladen",
   "model.unknownSize": "Größe unbekannt",
-  "model.import": "Modell importieren",
+  "model.tierQuality": "Genauigkeit zuerst",
+  "model.tierSpeed": "Tempo zuerst",
+  "model.tierPunctuation": "Hilfsmodelle",
   "model.downloadTitle": "Herunterladbare Modelle",
   "model.download": "Herunterladen",
   "model.downloadCancel": "Download abbrechen",
@@ -113,10 +115,9 @@ export const de: Record<MessageKey, Message> = {
   "model.downloaded": "Heruntergeladen",
   "model.downloadNetworkHint": "Ein abgebrochener Download deutet meist auf ein Netzwerk- oder Proxy-Problem hin. Prüfe die Verbindung und versuche es erneut.",
   "model.punctuationTag": "Zeichensetzung",
-  "model.emptyTitle": "Noch keine Modelle importiert",
+  "model.emptyTitle": "Noch keine Modelle heruntergeladen",
   "model.emptyBody":
-    "Lade dir selbst ein Whisper-, Qwen3-ASR-, Paraformer- oder SenseVoice-Exportpaket von sherpa-onnx herunter und wähle dann den Ordner zum Importieren. Der Import wird in den App-Ordner kopiert; deine Original-Downloads bleiben unberührt.",
-  "model.chooseFolder": "Modellordner auswählen",
+    "Lade oben eines der geprüften Modelle herunter. Sie sind für diese App angepasst und sofort nutzbar; die App führt nur Modelle aus dieser Liste aus und importiert keine beliebigen Ordner mehr.",
   "model.defaultTag": "Standard",
   "model.installedNotLoaded": "Installiert, nicht geladen",
   "model.setDefault": "Als Standard festlegen",
@@ -192,7 +193,6 @@ export const de: Record<MessageKey, Message> = {
 
   // Dialoge und Fehler
   "dialog.mediaFilter": "Audio oder Video",
-  "dialog.importModelTitle": "Modellordner auswählen",
   "dialog.deleteModelTitle": "Modell löschen",
   "dialog.deleteModelMessage":
     "Die interne Kopie von „{name}“ löschen? Dein Original-Download bleibt erhalten; die Kopie wird in den Papierkorb gelegt.",

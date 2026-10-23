@@ -13,7 +13,7 @@
 - 不含实时听写/实时字幕、云端 ASR、翻译、摘要或笔记生成。
 - 1.0 起支持**本地录音**：在应用内录麦克风和/或指定会议应用，录完本地转写；音频不上传任何地方。
 - MCP 仅走本地 stdio；无 TCP/HTTP 监听、无任意文件访问、无 shell 执行。
-- 模型权重需用户显式导入；已导入的模型完全离线转写。
+- 模型从应用内经过验证的清单下载；转写完全在本地离线完成，不上传音频。
 
 ## 架构
 
@@ -36,7 +36,7 @@ crates/lan-compute/           局域网 Compute V1.1：任务存储、节点服�
 - **录音**（1.0）：在应用内直接录麦克风和/或指定应用（Core Audio 进程音频捕获），两条音轨分别转写、各自成记录；不安装任何虚拟声卡驱动。
 - **首页**把转写与历史合并：导入磁贴 + 按日期分组的转写卡片；打开记录即在阅读器中查看正文。
 - **搜索**：顶栏搜索同时匹配文件名与转写正文（本地 JSON，不区分大小写）并展示命中片段；阅读器内另有本稿搜索，带匹配计数与高亮。
-- **模型选择器**：顶栏下拉列出已导入模型、标注默认项，且**只有模型真正驻留内存时才显示绿点**（按需加载、同模型复用、空闲 120 秒卸载）。
+- **模型选择器**：顶栏下拉列出已下载模型、标注默认项，且**只有模型真正驻留内存时才显示绿点**（按需加载、同模型复用、空闲 120 秒卸载）。
 - **存储**设置展示所有应用目录（模型库、历史结果、任务记录、应用数据），并提供按时间（1/3/5/7/30 天）或按容量（1/5/10 GB）的自动清理，默认关闭；删除一律进废纸篓。
 - **界面语言**：简体中文、English、Español、Français、Deutsch（默认跟随 macOS）。
 
@@ -51,19 +51,22 @@ crates/lan-compute/           局域网 Compute V1.1：任务存储、节点服�
 - **网络范围**：共享仅监听所选接口，并拒绝子网之外的客户端。使用 HTTP，不配置公网访问或修改防火墙。旧设置中的令牌字段会被忽略，下次保存时不再写入；旧令牌文件不再读取或生成。
 - Windows Early Beta 冻结设计稿见 `design/windows-early-beta.html`，设计评审见 `docs/architecture/windows-lan-review.md`。
 
-## 支持的模型族
+## 支持的模型
 
-导入的模型目录按磁盘布局严格校验，不会自动下载任何东西。
+模型页只提供经过实测的清单（3 个准确优先 + 3 个速度优先 + 中文标点），不再接受任意导入。
+清单里的模型在 Apple Silicon 上用同一套中文测试音频完成过 CER 对照，结果见
+`docs/model-download-and-quality.md`。
 
-| 模型族 | 目录布局 | 验证情况 |
+| 模型族 | 目录布局 | 实测 CER |
 |---|---|---|
-| Paraformer | `model.onnx` + `tokens.txt` | ✓ 真实转写 |
-| SenseVoice | `model.onnx` + `tokens.txt` | 仅布局校验 |
-| Whisper | `encoder*.onnx` + `decoder*.onnx` + `tokens.txt` | 仅布局校验 |
-| Qwen3-ASR | `conv_frontend.onnx` + encoder/decoder + `tokenizer/` | ✓ 真实转写 |
-| FireRedASR (v1/v2 AED) | `encoder*.onnx` + `decoder*.onnx` + `tokens.txt` | ✓ 真实转写 |
+| X-ASR Zipformer（transducer） | `encoder*` + `decoder*` + `joiner*` + `tokens.txt` | 0.84% |
+| FireRedASR2 (AED) | `encoder*.onnx` + `decoder*.onnx` + `tokens.txt` | 1.29% |
+| Qwen3-ASR 0.6B | `conv_frontend.onnx` + encoder/decoder + `tokenizer/` | 1.80% |
+| SenseVoice small（2025） | `model.onnx` + `tokens.txt` | 1.67% |
+| Paraformer zh | `model.onnx` + `tokens.txt` | 1.74% |
+| Zipformer CTC small zh | `model.onnx` + `tokens.txt` | 2.57% |
 
-已在 Apple Silicon 上用 sherpa-onnx 官方 int8 预转换包完成真实验证：**Qwen3-ASR 0.6B**、**FireRedASR2-AED 中英双语**、**Paraformer-zh**，覆盖中英混合语音与四川话、河南话方言样本。推理引擎为 sherpa-onnx 1.13.8（CPU）。
+推理引擎为 sherpa-onnx 1.13.8（CPU）。
 
 ## 三个界面
 
@@ -76,7 +79,6 @@ Tauri 2 + Svelte。拖放或文件选择、增量转写显示、任务队列、�
 ```sh
 local-transcribe status
 local-transcribe models list
-local-transcribe models import <模型目录>
 local-transcribe jobs add <媒体文件> [--model ID] [--root 目录]
 local-transcribe jobs list | show | cancel | retry | remove <job-id>
 local-transcribe export <job-id> --format txt|json --output 输出路径
@@ -86,7 +88,7 @@ local-transcribe export <job-id> --format txt|json --output 输出路径
 
 ### MCP
 
-`voice-to-text-mcp` 通过本地 stdio 说话 MCP 协议，恰好暴露九个工具：`transcribe_file`、`get_job_status`、`get_job_result`、`cancel_job`、`retry_job`、`list_jobs`、`list_models`、`import_model`、`export_result`。文件访问必须显式传 `--allow-root 目录`；不传任何 root 时全部文件读取被拒绝。详见 [`docs/mcp.md`](docs/mcp.md)。
+`voice-to-text-mcp` 通过本地 stdio 说话 MCP 协议，恰好暴露八个工具：`transcribe_file`、`get_job_status`、`get_job_result`、`cancel_job`、`retry_job`、`list_jobs`、`list_models`、`export_result`。文件访问必须显式传 `--allow-root 目录`；不传任何 root 时全部文件读取被拒绝。详见 [`docs/mcp.md`](docs/mcp.md)。
 
 ## 从源码构建（macOS，Apple Silicon）
 

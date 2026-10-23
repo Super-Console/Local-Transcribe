@@ -101,7 +101,7 @@ fn recognizes_a_qwen3_asr_int8_export_layout() {
 }
 
 #[test]
-fn refuses_transducer_layouts_instead_of_mislabeling_them_as_whisper() {
+fn recognizes_transducer_layouts_instead_of_mislabeling_them_as_whisper() {
     let root = scratch("transducer-layout");
     let model_dir = root.join("sherpa-onnx-zipformer-en");
     touch(&model_dir.join("encoder.int8.onnx"), b"encoder-placeholder");
@@ -109,11 +109,8 @@ fn refuses_transducer_layouts_instead_of_mislabeling_them_as_whisper() {
     touch(&model_dir.join("joiner.int8.onnx"), b"joiner-placeholder");
     touch(&model_dir.join("tokens.txt"), b"<blk>\nsil\n");
 
-    let error = inspect_model_directory(&model_dir).expect_err("transducer is unsupported");
-    assert!(
-        error.to_lowercase().contains("transducer"),
-        "error should name the rejected layout: {error}"
-    );
+    let model = inspect_model_directory(&model_dir).expect("transducer layout is supported");
+    assert_eq!(model.family, ModelFamily::Transducer);
 }
 
 #[test]

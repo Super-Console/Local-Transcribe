@@ -316,3 +316,18 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - 下载列表的已安装条目新增「删除」按钮（确认后移入回收站）；模型库列表的删除按钮改为始终显示，默认模型也能删。
 - 后端新增 `delete_catalog_model`、`installed_path`、`delete_installed*`；删除默认模型时先清空选择（写空文件，不删文件），`read_selected_model` 把空文件视为「无默认模型」。ASR 目录走 `ModelLibrary::delete_to`，标点模型走文件级 move 到回收站。
 - 新增 3 个 Rust 用例与 1 个前端用例，先红后绿；`cargo test --workspace` 29 组全 ok、严格 Clippy、fmt、`npm test` 18/18、`check` 0/0 通过。新包 `72d39998…377af` 已装两台（备份 `before-model-delete-20261023-2115`）。
+
+## 模型清单重选、导入移除与 beta.5（2026-10-23 深夜）
+
+- 以中文为主重新实测 11 个候选模型（6 段 MiMo TTS 音频，27–116 s，含 30/60 s 切块边界与难点稿，字符级 CER）：
+  X-ASR Zipformer 0.84%、FireRedASR2 AED 1.29%、SenseVoice 2025 1.67%、Paraformer 2023 1.74%、
+  Qwen3-ASR 1.80%、Zipformer CTC small 2.57%；Whisper small 26.06%、Dolphin 6.82%、
+  TeleSpeech 10.49%、FireRed CTC 3.22%、FunASR Nano 59.65%（KV 512 截断）被淘汰。
+- 模型页改为「准确优先 3 + 速度优先 3 + 标点」分组；清单新增 X-ASR、Zipformer CTC small，
+  SenseVoice 换成 2025-09-09 导出，Whisper small 移除。
+- 移除任意模型导入：GUI 按钮、`import_model` 命令、CLI `models import`、MCP `import_model`
+  全部删除（MCP 工具 9 → 8）；模型库只保留清单下载的模型。
+- transcription-core 新增 6 个模型族布局与配置：FireRed CTC、Zipformer CTC、Dolphin、
+  TeleSpeech、FunASR Nano、transducer（X-ASR），并新增布局检测用例与清单一致性用例。
+- 版本 `1.1.0-beta.5`；文档 `docs/model-download-and-quality.md` 记录全部 CER/速度数据。
+- 待办：Windows 本机构建 MSI、两平台打包发 GitHub；GUI 下载流程仍待 Timmy 验收。

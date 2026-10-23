@@ -7,9 +7,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sherpa_onnx::{
-    OfflineFireRedAsrModelConfig, OfflineParaformerModelConfig, OfflineQwen3ASRModelConfig,
+    OfflineDolphinModelConfig, OfflineFireRedAsrCtcModelConfig, OfflineFireRedAsrModelConfig,
+    OfflineFunASRNanoModelConfig, OfflineParaformerModelConfig, OfflineQwen3ASRModelConfig,
     OfflineRecognizer, OfflineRecognizerConfig, OfflineSenseVoiceModelConfig,
-    OfflineWhisperModelConfig,
+    OfflineTransducerModelConfig, OfflineWhisperModelConfig, OfflineZipformerCtcModelConfig,
 };
 
 use crate::{decode_audio_file, punctuation, InputFile, Transcript, TranscriptSegment};
@@ -26,6 +27,18 @@ pub enum ModelFamily {
     Whisper,
     Qwen3Asr,
     FireRedAsr,
+    /// FireRedASR2 CTC branch (single graph, no attention decoder).
+    FireRedCtc,
+    /// Offline Zipformer CTC (single graph).
+    ZipformerCtc,
+    /// Dolphin multilingual CTC (single graph).
+    Dolphin,
+    /// TeleSpeech Chinese CTC (single graph).
+    TeleSpeech,
+    /// FunASR Nano: embedding + encoder adaptor + Qwen3-based LLM decoder.
+    FunAsrNano,
+    /// Offline transducer (encoder + decoder + joiner).
+    Transducer,
 }
 
 /// The exact on-disk layout detected inside a model directory. Every family
@@ -52,6 +65,20 @@ pub enum ModelFiles {
     FireRedAsr {
         encoder: PathBuf,
         decoder: PathBuf,
+        tokens: PathBuf,
+    },
+    /// FunASR Nano export: embedding, encoder adaptor, LLM decoder, Qwen tokenizer.
+    FunAsrNano {
+        embedding: PathBuf,
+        encoder_adaptor: PathBuf,
+        llm: PathBuf,
+        tokenizer_dir: PathBuf,
+    },
+    /// Transducer export (e.g. X-ASR): encoder, decoder, joiner, flat vocabulary.
+    Transducer {
+        encoder: PathBuf,
+        decoder: PathBuf,
+        joiner: PathBuf,
         tokens: PathBuf,
     },
 }
@@ -131,7 +158,7 @@ pub fn idle_unload_seconds() -> u64 {
     IDLE_UNLOAD.as_secs()
 }
 
-const SUPPORTED_LAYOUTS: &str = "Supported layouts: sherpa-onnx Whisper ONNX exports (encoder + decoder + tokens.txt), sherpa-onnx Qwen3-ASR exports (conv_frontend.onnx + encoder/decoder + tokenizer/), sherpa-onnx FireRedASR exports (encoder + decoder + tokens.txt, keep the original fire-red folder name), and Paraformer or SenseVoice folders (model.onnx + tokens.txt).";
+const SUPPORTED_LAYOUTS: &str = "Supported layouts: sherpa-onnx Whisper ONNX exports (encoder + decoder + tokens.txt), sherpa-onnx Qwen3-ASR exports (conv_frontend.onnx + encoder/decoder + tokenizer/), sherpa-onnx FunASR Nano exports (embedding + encoder_adaptor + llm + tokenizer/), sherpa-onnx FireRedASR exports (encoder + decoder + tokens.txt), offline transducers (encoder + decoder + joiner + tokens.txt), and single-graph CTC exports: Paraformer, SenseVoice, FireRedASR2 CTC, Zipformer CTC, Dolphin or TeleSpeech (model.onnx + tokens.txt, keep the original folder name).";
 
 fn non_empty_file(path: &Path) -> bool {
     path.is_file() && path.metadata().is_ok_and(|meta| meta.len() > 0)
@@ -158,6 +185,41 @@ fn find_by_suffix(directory: &Path, suffixes: &[&str]) -> Option<PathBuf> {
 fn find_exact(directory: &Path, name: &str) -> Option<PathBuf> {
     let candidate = directory.join(name);
     non_empty_file(&candidate).then_some(candidate)
+}
+
+/// Find a non-empty file whose name contains every needle (for exports whose
+/// file names carry a training suffix such as `encoder-epoch-99-avg-1.onnx`).
+fn find_containing(directory: &Path, needles: &[&str]) -> Option<PathBuf> {
+    let mut matches = fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            non_empty_file(path)
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| needles.iter().all(|needle| name.contains(needle)))
+        })
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches.into_iter().next()
+}
+
+/// Locate a sub-directory that holds a complete Qwen-style tokenizer.
+fn find_tokenizer_dir(directory: &Path) -> Option<PathBuf> {
+    let mut candidates = fs::read_dir(directory)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.into_iter().find(|path| {
+        ["vocab.json", "merges.txt", "tokenizer.json"]
+            .iter()
+            .all(|file| non_empty_file(&path.join(file)))
+    })
 }
 
 /// Whisper vocabularies published for sherpa-onnx store one base64-encoded
@@ -204,6 +266,64 @@ fn detect_layout(directory: &Path) -> Result<(ModelFamily, ModelFiles), String> 
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
+
+    // FunASR Nano: embedding.int8.onnx is unique to this family.
+    if let Some(embedding) = find_exact(directory, "embedding.int8.onnx")
+        .or_else(|| find_exact(directory, "embedding.onnx"))
+    {
+        let encoder_adaptor = find_exact(directory, "encoder_adaptor.int8.onnx")
+            .or_else(|| find_exact(directory, "encoder_adaptor.onnx"))
+            .ok_or_else(|| {
+                "This FunASR Nano folder is incomplete: encoder_adaptor.int8.onnx (or encoder_adaptor.onnx) is missing."
+                    .to_owned()
+            })?;
+        let llm = find_exact(directory, "llm.int8.onnx")
+            .or_else(|| find_exact(directory, "llm.onnx"))
+            .ok_or_else(|| {
+                "This FunASR Nano folder is incomplete: llm.int8.onnx (or llm.onnx) is missing."
+                    .to_owned()
+            })?;
+        let tokenizer_dir = find_tokenizer_dir(directory).ok_or_else(|| {
+            "This FunASR Nano folder is incomplete: the Qwen tokenizer folder (vocab.json, merges.txt, tokenizer.json) is missing."
+                .to_owned()
+        })?;
+        return Ok((
+            ModelFamily::FunAsrNano,
+            ModelFiles::FunAsrNano {
+                embedding,
+                encoder_adaptor,
+                llm,
+                tokenizer_dir,
+            },
+        ));
+    }
+
+    // Offline transducer: a joiner graph is the distinguishing file.
+    if find_containing(directory, &["joiner", ".onnx"]).is_some() {
+        let encoder = find_containing(directory, &["encoder", ".onnx"])
+            .filter(|path| !path.to_string_lossy().contains("encoder_adaptor"))
+            .ok_or_else(|| {
+                "This transducer folder is incomplete: the encoder .onnx file is missing."
+                    .to_owned()
+            })?;
+        let decoder = find_containing(directory, &["decoder", ".onnx"]).ok_or_else(|| {
+            "This transducer folder is incomplete: the decoder .onnx file is missing.".to_owned()
+        })?;
+        let joiner = find_containing(directory, &["joiner", ".onnx"]).ok_or_else(|| {
+            "This transducer folder is incomplete: the joiner .onnx file is missing.".to_owned()
+        })?;
+        let tokens = find_by_suffix(directory, &["-tokens.txt", "tokens.txt"])
+            .ok_or_else(|| "This transducer folder must contain tokens.txt.".to_owned())?;
+        return Ok((
+            ModelFamily::Transducer,
+            ModelFiles::Transducer {
+                encoder,
+                decoder,
+                joiner,
+                tokens,
+            },
+        ));
+    }
 
     // Qwen3-ASR: conv_frontend.onnx is unique to this family.
     if let Some(conv_frontend) = find_exact(directory, "conv_frontend.onnx") {
@@ -258,21 +378,6 @@ fn detect_layout(directory: &Path) -> Result<(ModelFamily, ModelFiles), String> 
         ],
     );
     if encoder.is_some() || decoder.is_some() {
-        if find_by_suffix(
-            directory,
-            &[
-                "-joiner.int8.onnx",
-                "-joiner.onnx",
-                "joiner.int8.onnx",
-                "joiner.onnx",
-            ],
-        )
-        .is_some()
-        {
-            return Err(format!(
-                "Transducer models (encoder/decoder/joiner) are not supported. {SUPPORTED_LAYOUTS}"
-            ));
-        }
         let encoder = encoder.ok_or_else(|| {
             "This encoder/decoder folder is incomplete: the encoder .onnx file is missing."
                 .to_owned()
@@ -325,11 +430,19 @@ fn detect_layout(directory: &Path) -> Result<(ModelFamily, ModelFiles), String> 
     let family = if directory_name.contains("sensevoice") || directory_name.contains("sense-voice")
     {
         ModelFamily::SenseVoice
+    } else if directory_name.contains("fire-red") && directory_name.contains("ctc") {
+        ModelFamily::FireRedCtc
+    } else if directory_name.contains("zipformer") && directory_name.contains("ctc") {
+        ModelFamily::ZipformerCtc
+    } else if directory_name.contains("dolphin") {
+        ModelFamily::Dolphin
+    } else if directory_name.contains("telespeech") {
+        ModelFamily::TeleSpeech
     } else if directory_name.contains("paraformer") {
         ModelFamily::Paraformer
     } else {
         return Err(format!(
-            "A single-file model was found, but its family is unknown from the folder name; keep the original Paraformer or SenseVoice folder name. {SUPPORTED_LAYOUTS}"
+            "A single-graph model was found, but its family is unknown from the folder name; keep the original Paraformer, SenseVoice, FireRedASR2 CTC, Zipformer CTC, Dolphin or TeleSpeech folder name. {SUPPORTED_LAYOUTS}"
         ));
     };
     Ok((family, ModelFiles::SingleFile { model, tokens }))
@@ -357,6 +470,12 @@ pub fn inspect_model_directory(path: impl AsRef<Path>) -> Result<LocalModel, Str
         ModelFamily::Whisper => "whisper",
         ModelFamily::Qwen3Asr => "qwen3-asr",
         ModelFamily::FireRedAsr => "fire-red-asr",
+        ModelFamily::FireRedCtc => "fire-red-ctc",
+        ModelFamily::ZipformerCtc => "zipformer-ctc",
+        ModelFamily::Dolphin => "dolphin",
+        ModelFamily::TeleSpeech => "telespeech",
+        ModelFamily::FunAsrNano => "funasr-nano",
+        ModelFamily::Transducer => "transducer",
     };
     Ok(LocalModel {
         id: format!("{family_prefix}-{directory_name}"),
@@ -585,6 +704,85 @@ pub fn transcribe_file_streaming_with_options(
                 decoder: Some(decoder.to_string_lossy().into_owned()),
             };
         }
+        (
+            ModelFamily::FireRedCtc,
+            ModelFiles::SingleFile {
+                model: graph,
+                tokens,
+            },
+        )
+        | (
+            ModelFamily::ZipformerCtc,
+            ModelFiles::SingleFile {
+                model: graph,
+                tokens,
+            },
+        )
+        | (
+            ModelFamily::Dolphin,
+            ModelFiles::SingleFile {
+                model: graph,
+                tokens,
+            },
+        )
+        | (
+            ModelFamily::TeleSpeech,
+            ModelFiles::SingleFile {
+                model: graph,
+                tokens,
+            },
+        ) => {
+            config.model_config.tokens = Some(tokens.to_string_lossy().into_owned());
+            let graph = Some(graph.to_string_lossy().into_owned());
+            match model.family {
+                ModelFamily::FireRedCtc => {
+                    config.model_config.fire_red_asr_ctc =
+                        OfflineFireRedAsrCtcModelConfig { model: graph };
+                }
+                ModelFamily::ZipformerCtc => {
+                    config.model_config.zipformer_ctc =
+                        OfflineZipformerCtcModelConfig { model: graph };
+                }
+                ModelFamily::Dolphin => {
+                    config.model_config.dolphin = OfflineDolphinModelConfig { model: graph };
+                }
+                _ => config.model_config.telespeech_ctc = graph,
+            }
+        }
+        (
+            ModelFamily::FunAsrNano,
+            ModelFiles::FunAsrNano {
+                embedding,
+                encoder_adaptor,
+                llm,
+                tokenizer_dir,
+            },
+        ) => {
+            config.model_config.funasr_nano = OfflineFunASRNanoModelConfig {
+                embedding: Some(embedding.to_string_lossy().into_owned()),
+                encoder_adaptor: Some(encoder_adaptor.to_string_lossy().into_owned()),
+                llm: Some(llm.to_string_lossy().into_owned()),
+                tokenizer: Some(tokenizer_dir.to_string_lossy().into_owned()),
+                language: Some("auto".to_owned()),
+                ..OfflineFunASRNanoModelConfig::default()
+            };
+        }
+        (
+            ModelFamily::Transducer,
+            ModelFiles::Transducer {
+                encoder,
+                decoder,
+                joiner,
+                tokens,
+            },
+        ) => {
+            config.model_config.tokens = Some(tokens.to_string_lossy().into_owned());
+            config.model_config.transducer = OfflineTransducerModelConfig {
+                encoder: Some(encoder.to_string_lossy().into_owned()),
+                decoder: Some(decoder.to_string_lossy().into_owned()),
+                joiner: Some(joiner.to_string_lossy().into_owned()),
+            };
+        }
         _ => {
             return Err(
                 "The selected model's family and file layout do not match. Select the model again."
@@ -692,7 +890,13 @@ pub fn transcribe_file_streaming_with_options(
             ModelFamily::SenseVoice
             | ModelFamily::Whisper
             | ModelFamily::Qwen3Asr
-            | ModelFamily::FireRedAsr => None,
+            | ModelFamily::FireRedAsr
+            | ModelFamily::FireRedCtc
+            | ModelFamily::ZipformerCtc
+            | ModelFamily::Dolphin
+            | ModelFamily::TeleSpeech
+            | ModelFamily::FunAsrNano
+            | ModelFamily::Transducer => None,
         },
         duration_ms: Some(audio.duration_ms),
         text,
@@ -702,7 +906,89 @@ pub fn transcribe_file_streaming_with_options(
 
 #[cfg(test)]
 mod tests {
-    use super::collapse_degenerate_repetitions;
+    use super::{collapse_degenerate_repetitions, inspect_model_directory, ModelFamily};
+    use std::{fs, path::PathBuf};
+
+    fn fixture(name: &str) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("lt-layout-{}-{}", std::process::id(), uuid_like()));
+        let directory = root.join(name);
+        fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    fn uuid_like() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    }
+
+    fn touch(path: PathBuf) {
+        fs::write(path, b"x").unwrap();
+    }
+
+    #[test]
+    fn detects_funasr_nano_layout() {
+        let directory = fixture("sherpa-onnx-funasr-nano-int8");
+        touch(directory.join("embedding.int8.onnx"));
+        touch(directory.join("encoder_adaptor.int8.onnx"));
+        touch(directory.join("llm.int8.onnx"));
+        let tokenizer = directory.join("Qwen3-0.6B");
+        fs::create_dir_all(&tokenizer).unwrap();
+        for file in ["vocab.json", "merges.txt", "tokenizer.json"] {
+            touch(tokenizer.join(file));
+        }
+        let model = inspect_model_directory(&directory).unwrap();
+        assert_eq!(model.family, ModelFamily::FunAsrNano);
+    }
+
+    #[test]
+    fn detects_transducer_layout_with_epoch_suffixes() {
+        let directory = fixture("sherpa-onnx-x-asr-zipformer-int8");
+        touch(directory.join("encoder-epoch-99-avg-1.int8.onnx"));
+        touch(directory.join("decoder-epoch-99-avg-1.onnx"));
+        touch(directory.join("joiner-epoch-99-avg-1.int8.onnx"));
+        touch(directory.join("tokens.txt"));
+        let model = inspect_model_directory(&directory).unwrap();
+        assert_eq!(model.family, ModelFamily::Transducer);
+    }
+
+    #[test]
+    fn detects_single_graph_ctc_families_by_folder_name() {
+        for (folder, expected) in [
+            (
+                "sherpa-onnx-fire-red-asr2-ctc-zh_en-int8",
+                ModelFamily::FireRedCtc,
+            ),
+            (
+                "sherpa-onnx-zipformer-ctc-small-zh-int8",
+                ModelFamily::ZipformerCtc,
+            ),
+            (
+                "sherpa-onnx-dolphin-base-ctc-multi-lang-int8",
+                ModelFamily::Dolphin,
+            ),
+            (
+                "sherpa-onnx-telespeech-ctc-int8-zh",
+                ModelFamily::TeleSpeech,
+            ),
+        ] {
+            let directory = fixture(folder);
+            touch(directory.join("model.int8.onnx"));
+            touch(directory.join("tokens.txt"));
+            let model = inspect_model_directory(&directory).unwrap();
+            assert_eq!(model.family, expected, "{folder}");
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_single_graph_folders() {
+        let directory = fixture("some-random-model");
+        touch(directory.join("model.int8.onnx"));
+        touch(directory.join("tokens.txt"));
+        assert!(inspect_model_directory(&directory).is_err());
+    }
 
     #[test]
     fn collapse_reduces_a_long_run_of_one_character() {

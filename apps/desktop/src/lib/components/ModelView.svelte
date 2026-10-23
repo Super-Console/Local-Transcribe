@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Icon from "./Icon.svelte";
   import { t } from "$lib/i18n.svelte";
   import type { CatalogModel, LibraryModelSummary, ModelDownloadEvent } from "$lib/types";
 
@@ -8,7 +7,6 @@
     catalog,
     downloads,
     busy,
-    onImport,
     onSelect,
     onDelete,
     onDeleteCatalog,
@@ -19,7 +17,6 @@
     catalog: CatalogModel[];
     downloads: Record<string, ModelDownloadEvent>;
     busy: boolean;
-    onImport: () => void;
     onSelect: (id: string) => void;
     onDelete: (model: LibraryModelSummary) => void;
     onDeleteCatalog: (entry: CatalogModel) => void;
@@ -40,68 +37,78 @@
 <section class="content">
   <div class="title-row">
     <h1 class="page-title">{t("nav.model")}</h1>
-    <button type="button" class="btn primary" onclick={onImport} disabled={busy}>
-      <Icon name="plus" size={12} stroke={1.8} />{t("model.import")}
-    </button>
   </div>
 
   {#if catalog.length > 0}
     <div class="list catalog">
       <div class="section-label">{t("model.downloadTitle")}</div>
-      {#each catalog as entry (entry.id)}
-        {@const dl = downloads[entry.id]}
-        {@const active = !!dl && (dl.state === "downloading" || dl.state === "installing")}
-        {@const percent =
-          dl && dl.total > 0 ? Math.min(99, Math.round((dl.received / dl.total) * 100)) : 0}
-        <div class="row">
-          <div class="body">
-            <div class="name">
-              {entry.name}
-              {#if entry.kind === "punctuation"}
-                <span class="tag">{t("model.punctuationTag")}</span>
-              {/if}
-            </div>
-            <div class="meta">
-              <span>{entry.family}</span>
-              <span class="sep">·</span>
-              <span>{sizeLabel(entry.bytes)}</span>
-              {#if active}
-                <span class="sep">·</span>
-                <span>{dl?.state === "installing" ? t("model.installing") : `${percent}%`}</span>
-              {/if}
-            </div>
-            {#if dl?.state === "error" && dl.error}
-              <div class="error-line">{dl.error}</div>
-              <div class="error-line hint">{t("model.downloadNetworkHint")}</div>
-            {/if}
-            {#if active}
-              <div class="progress">
-                <div class="progress-fill" style:width={`${percent}%`}></div>
+      {#each ["quality", "speed", "punctuation"] as tier (tier)}
+        {@const entries = catalog.filter((entry) => entry.tier === tier)}
+        {#if entries.length > 0}
+          <div class="tier-label">
+            {t(tier === "quality" ? "model.tierQuality" : tier === "speed" ? "model.tierSpeed" : "model.tierPunctuation")}
+          </div>
+          {#each entries as entry (entry.id)}
+            {@const dl = downloads[entry.id]}
+            {@const active = !!dl && (dl.state === "downloading" || dl.state === "installing")}
+            {@const percent =
+              dl && dl.total > 0 ? Math.min(99, Math.round((dl.received / dl.total) * 100)) : 0}
+            <div class="row">
+              <div class="body">
+                <div class="name">
+                  {entry.name}
+                  {#if entry.kind === "punctuation"}
+                    <span class="tag">{t("model.punctuationTag")}</span>
+                  {/if}
+                </div>
+                <div class="meta">
+                  <span>{entry.family}</span>
+                  <span class="sep">·</span>
+                  <span>{sizeLabel(entry.bytes)}</span>
+                  {#if active}
+                    <span class="sep">·</span>
+                    <span>{dl?.state === "installing" ? t("model.installing") : `${percent}%`}</span>
+                  {/if}
+                </div>
+                {#if dl?.state === "error" && dl.error}
+                  <div class="error-line">{dl.error}</div>
+                  <div class="error-line hint">{t("model.downloadNetworkHint")}</div>
+                {/if}
+                {#if active}
+                  <div class="progress">
+                    <div class="progress-fill" style:width={`${percent}%`}></div>
+                  </div>
+                {/if}
               </div>
-            {/if}
-          </div>
-          <div class="row-actions">
-            {#if entry.installed}
-              <span class="hint">{t("model.downloaded")}</span>
-              <button
-                type="button"
-                class="act danger"
-                onclick={() => onDeleteCatalog(entry)}
-                disabled={busy}
-              >
-                {t("common.delete")}
-              </button>
-            {:else if active}
-              <button type="button" class="act" onclick={onCancelDownload}>
-                {t("model.downloadCancel")}
-              </button>
-            {:else}
-              <button type="button" class="act" onclick={() => onDownload(entry.id)} disabled={busy}>
-                {t("model.download")}
-              </button>
-            {/if}
-          </div>
-        </div>
+              <div class="row-actions">
+                {#if entry.installed}
+                  <span class="hint">{t("model.downloaded")}</span>
+                  <button
+                    type="button"
+                    class="act danger"
+                    onclick={() => onDeleteCatalog(entry)}
+                    disabled={busy}
+                  >
+                    {t("common.delete")}
+                  </button>
+                {:else if active}
+                  <button type="button" class="act" onclick={onCancelDownload}>
+                    {t("model.downloadCancel")}
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    class="act"
+                    onclick={() => onDownload(entry.id)}
+                    disabled={busy}
+                  >
+                    {t("model.download")}
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        {/if}
       {/each}
     </div>
   {/if}
@@ -112,9 +119,6 @@
       <div class="s">
         {t("model.emptyBody")}
       </div>
-      <button type="button" class="btn" onclick={onImport} disabled={busy}>
-        <Icon name="plus" size={12} stroke={1.8} />{t("model.chooseFolder")}
-      </button>
     </div>
   {:else}
     <div class="list">
@@ -180,40 +184,6 @@
     letter-spacing: -0.02em;
   }
 
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 32px;
-    padding: 0 14px;
-    border-radius: 9px;
-    border: 1px solid var(--hairline-2);
-    background: var(--panel);
-    font-size: 13.5px;
-    font-weight: 500;
-    flex: none;
-  }
-
-  /* 参考设计的主按钮：深色药丸 */
-  .btn.primary {
-    background: var(--text);
-    border-color: var(--text);
-    color: var(--bg);
-  }
-
-  .btn.primary:hover:not(:disabled) {
-    opacity: 0.88;
-    background: var(--text);
-  }
-
-  .btn:hover:not(:disabled) {
-    background: var(--fill);
-  }
-
-  .btn:disabled {
-    opacity: 0.55;
-  }
-
   .list {
     width: 100%;
     max-width: 940px;
@@ -232,6 +202,14 @@
     font-size: 12.5px;
     font-weight: 500;
     letter-spacing: 0.01em;
+    color: var(--text-3);
+  }
+
+  .tier-label {
+    margin: 14px 4px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
     color: var(--text-3);
   }
 

@@ -30,6 +30,24 @@ pub enum CatalogKind {
     Punctuation,
 }
 
+/// 模型在界面上的分组：准确优先 / 速度优先 / 辅助模型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CatalogTier {
+    Quality,
+    Speed,
+    Punctuation,
+}
+
+impl CatalogTier {
+    fn as_str(self) -> &'static str {
+        match self {
+            CatalogTier::Quality => "quality",
+            CatalogTier::Speed => "speed",
+            CatalogTier::Punctuation => "punctuation",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CatalogEntry {
     pub id: &'static str,
@@ -38,6 +56,7 @@ pub struct CatalogEntry {
     pub directory: &'static str,
     pub repository: &'static str,
     pub kind: CatalogKind,
+    pub tier: CatalogTier,
     pub bytes: u64,
     /// (仓库内路径, 本地文件名, 字节数)
     pub files: &'static [(&'static str, &'static str, u64)],
@@ -48,21 +67,30 @@ const PARAFORMER_FILES: &[(&str, &str, u64)] = &[
     ("tokens.txt", "tokens.txt", 75_756),
 ];
 const SENSEVOICE_FILES: &[(&str, &str, u64)] = &[
-    ("model.int8.onnx", "model.int8.onnx", 239_233_841),
+    ("model.int8.onnx", "model.int8.onnx", 237_115_547),
     ("tokens.txt", "tokens.txt", 315_894),
 ];
-const WHISPER_FILES: &[(&str, &str, u64)] = &[
+const X_ASR_FILES: &[(&str, &str, u64)] = &[
     (
-        "small-encoder.int8.onnx",
-        "small-encoder.int8.onnx",
-        112_442_483,
+        "encoder-epoch-99-avg-1.int8.onnx",
+        "encoder-epoch-99-avg-1.int8.onnx",
+        161_744_450,
     ),
     (
-        "small-decoder.int8.onnx",
-        "small-decoder.int8.onnx",
-        262_226_114,
+        "decoder-epoch-99-avg-1.onnx",
+        "decoder-epoch-99-avg-1.onnx",
+        11_309_084,
     ),
-    ("small-tokens.txt", "small-tokens.txt", 816_730),
+    (
+        "joiner-epoch-99-avg-1.int8.onnx",
+        "joiner-epoch-99-avg-1.int8.onnx",
+        2_581_422,
+    ),
+    ("tokens.txt", "tokens.txt", 59_240),
+];
+const ZIPFORMER_CTC_FILES: &[(&str, &str, u64)] = &[
+    ("model.int8.onnx", "model.int8.onnx", 62_666_860),
+    ("tokens.txt", "tokens.txt", 13_366),
 ];
 const QWEN3_FILES: &[(&str, &str, u64)] = &[
     ("conv_frontend.onnx", "conv_frontend.onnx", 44_148_281),
@@ -84,45 +112,17 @@ const FIRERED_FILES: &[(&str, &str, u64)] = &[
 const PUNCT_FILES: &[(&str, &str, u64)] = &[("model.onnx", "model.onnx", 294_372_519)];
 
 pub const CATALOG: &[CatalogEntry] = &[
+    // ---- 准确优先（实测 CER 从低到高）----
     CatalogEntry {
-        id: "paraformer-zh",
-        name: "Paraformer zh · 2023-09-14",
-        family: "Paraformer",
-        directory: "sherpa-onnx-paraformer-zh-2023-09-14",
-        repository: "csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14",
+        id: "x-asr-zh-en",
+        name: "X-ASR Zipformer · zh/en",
+        family: "X-ASR",
+        directory: "sherpa-onnx-x-asr-zipformer-transducer-zh-en-int8-2026-06-03",
+        repository: "csukuangfj2/sherpa-onnx-x-asr-zipformer-transducer-zh-en-int8-2026-06-03",
         kind: CatalogKind::Asr,
-        bytes: 243_446_974,
-        files: PARAFORMER_FILES,
-    },
-    CatalogEntry {
-        id: "sensevoice-small",
-        name: "SenseVoice small · zh/en/ja/ko/yue",
-        family: "SenseVoice",
-        directory: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
-        repository: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
-        kind: CatalogKind::Asr,
-        bytes: 239_549_735,
-        files: SENSEVOICE_FILES,
-    },
-    CatalogEntry {
-        id: "whisper-small",
-        name: "Whisper small · multilingual",
-        family: "Whisper",
-        directory: "sherpa-onnx-whisper-small",
-        repository: "csukuangfj/sherpa-onnx-whisper-small",
-        kind: CatalogKind::Asr,
-        bytes: 375_485_327,
-        files: WHISPER_FILES,
-    },
-    CatalogEntry {
-        id: "qwen3-asr-0.6b",
-        name: "Qwen3-ASR 0.6B (int8)",
-        family: "Qwen3-ASR",
-        directory: "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
-        repository: "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
-        kind: CatalogKind::Asr,
-        bytes: 987_015_347,
-        files: QWEN3_FILES,
+        tier: CatalogTier::Quality,
+        bytes: 175_694_196,
+        files: X_ASR_FILES,
     },
     CatalogEntry {
         id: "fire-red-asr2",
@@ -131,9 +131,56 @@ pub const CATALOG: &[CatalogEntry] = &[
         directory: "sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26",
         repository: "csukuangfj2/sherpa-onnx-fire-red-asr2-zh_en-int8-2026-02-26",
         kind: CatalogKind::Asr,
+        tier: CatalogTier::Quality,
         bytes: 1_234_657_933,
         files: FIRERED_FILES,
     },
+    CatalogEntry {
+        id: "qwen3-asr-0.6b",
+        name: "Qwen3-ASR 0.6B (int8)",
+        family: "Qwen3-ASR",
+        directory: "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+        repository: "csukuangfj2/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+        kind: CatalogKind::Asr,
+        tier: CatalogTier::Quality,
+        bytes: 987_015_347,
+        files: QWEN3_FILES,
+    },
+    // ---- 速度优先 ----
+    CatalogEntry {
+        id: "sensevoice-small",
+        name: "SenseVoice small · zh/en/ja/ko/yue（2025）",
+        family: "SenseVoice",
+        directory: "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
+        repository: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
+        kind: CatalogKind::Asr,
+        tier: CatalogTier::Speed,
+        bytes: 237_431_441,
+        files: SENSEVOICE_FILES,
+    },
+    CatalogEntry {
+        id: "paraformer-zh",
+        name: "Paraformer zh · 2023-09-14",
+        family: "Paraformer",
+        directory: "sherpa-onnx-paraformer-zh-2023-09-14",
+        repository: "csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14",
+        kind: CatalogKind::Asr,
+        tier: CatalogTier::Speed,
+        bytes: 243_446_974,
+        files: PARAFORMER_FILES,
+    },
+    CatalogEntry {
+        id: "zipformer-ctc-small-zh",
+        name: "Zipformer CTC small · zh（体积最小）",
+        family: "Zipformer CTC",
+        directory: "sherpa-onnx-zipformer-ctc-small-zh-int8-2025-07-16",
+        repository: "csukuangfj/sherpa-onnx-zipformer-ctc-small-zh-int8-2025-07-16",
+        kind: CatalogKind::Asr,
+        tier: CatalogTier::Speed,
+        bytes: 62_680_226,
+        files: ZIPFORMER_CTC_FILES,
+    },
+    // ---- 辅助 ----
     CatalogEntry {
         id: "punctuation-zh-en",
         name: "CT-Transformer punctuation · zh/en",
@@ -141,6 +188,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         directory: "punctuation-ct-transformer",
         repository: "csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12",
         kind: CatalogKind::Punctuation,
+        tier: CatalogTier::Punctuation,
         bytes: 294_372_519,
         files: PUNCT_FILES,
     },
@@ -153,6 +201,7 @@ pub struct CatalogState {
     pub name: String,
     pub family: String,
     pub kind: String,
+    pub tier: String,
     pub bytes: u64,
     pub installed: bool,
 }
@@ -254,6 +303,7 @@ pub fn states(app_data: &Path) -> Vec<CatalogState> {
                     CatalogKind::Punctuation => "punctuation",
                 }
                 .to_owned(),
+                tier: entry.tier.as_str().to_owned(),
                 bytes: entry.bytes,
                 installed,
             }
@@ -534,7 +584,9 @@ pub fn cancel_model_download() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CATALOG, CatalogKind, delete_installed_to, entry_by_id, punctuation_model_path};
+    use super::{
+        CATALOG, CatalogKind, CatalogTier, delete_installed_to, entry_by_id, punctuation_model_path,
+    };
 
     #[test]
     fn catalog_ids_are_unique() {
@@ -565,6 +617,8 @@ mod tests {
                         "Whisper" => lower.contains("whisper"),
                         "Qwen3-ASR" => lower.contains("qwen3"),
                         "FireRedASR" => lower.contains("fire-red"),
+                        "X-ASR" => lower.contains("x-asr"),
+                        "Zipformer CTC" => lower.contains("zipformer"),
                         other => panic!("unknown family {other}"),
                     };
                     assert!(expected, "{} directory does not match family", entry.id);
@@ -574,6 +628,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn catalog_offers_three_quality_and_three_speed_models() {
+        let quality = CATALOG
+            .iter()
+            .filter(|entry| entry.kind == CatalogKind::Asr && entry.tier == CatalogTier::Quality)
+            .count();
+        let speed = CATALOG
+            .iter()
+            .filter(|entry| entry.kind == CatalogKind::Asr && entry.tier == CatalogTier::Speed)
+            .count();
+        assert_eq!(quality, 3);
+        assert_eq!(speed, 3);
     }
 
     #[test]

@@ -106,7 +106,9 @@ export const fr: Record<MessageKey, Message> = {
   "record.empty": "Aucun audio capturé. Vérifiez les autorisations et les sources.",
   "model.loadedHint": "Chargé en mémoire",
   "model.unknownSize": "Taille inconnue",
-  "model.import": "Importer un modèle",
+  "model.tierQuality": "Précision d’abord",
+  "model.tierSpeed": "Rapidité d’abord",
+  "model.tierPunctuation": "Modèles auxiliaires",
   "model.downloadTitle": "Modèles téléchargeables",
   "model.download": "Télécharger",
   "model.downloadCancel": "Annuler le téléchargement",
@@ -114,10 +116,9 @@ export const fr: Record<MessageKey, Message> = {
   "model.downloaded": "Téléchargé",
   "model.downloadNetworkHint": "Un téléchargement interrompu indique souvent un problème de réseau ou de proxy. Vérifiez la connexion puis réessayez.",
   "model.punctuationTag": "Ponctuation",
-  "model.emptyTitle": "Aucun modèle importé pour l’instant",
+  "model.emptyTitle": "Aucun modèle téléchargé pour l’instant",
   "model.emptyBody":
-    "Téléchargez vous-même un paquet d’export Whisper, Qwen3-ASR, Paraformer ou SenseVoice depuis sherpa-onnx, puis choisissez son dossier pour l’importer. L’import est copié dans le dossier de l’app ; vos téléchargements d’origine restent intacts.",
-  "model.chooseFolder": "Choisir le dossier des modèles",
+    "Téléchargez ci-dessus l’un des modèles vérifiés. Ils sont adaptés à cette app et prêts à l’emploi ; l’app n’exécute que les modèles de cette liste et n’importe plus de dossier arbitraire.",
   "model.defaultTag": "Par défaut",
   "model.installedNotLoaded": "Installé, non chargé",
   "model.setDefault": "Définir par défaut",
@@ -193,7 +194,6 @@ export const fr: Record<MessageKey, Message> = {
 
   // Dialogues et erreurs
   "dialog.mediaFilter": "Audio ou vidéo",
-  "dialog.importModelTitle": "Choisir le dossier des modèles",
   "dialog.deleteModelTitle": "Supprimer le modèle",
   "dialog.deleteModelMessage":
     "Supprimer la copie interne de « {name} » ? Votre téléchargement d’origine n’est pas supprimé ; la copie est placée dans la corbeille.",
