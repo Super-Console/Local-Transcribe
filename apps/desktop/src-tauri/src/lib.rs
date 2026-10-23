@@ -20,6 +20,8 @@ use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, Ta
 
 mod lan;
 mod recording;
+#[cfg(windows)]
+mod recording_windows;
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
 const SEGMENT_EVENT: &str = "voice-to-text:transcript-segment";
