@@ -31,6 +31,24 @@ export type LibraryModelSummary = {
   selected: boolean;
 };
 
+export type CatalogModel = {
+  id: string;
+  name: string;
+  family: string;
+  kind: "asr" | "punctuation";
+  bytes: number;
+  installed: boolean;
+};
+
+export type ModelDownloadEvent = {
+  id: string;
+  state: "downloading" | "installing" | "done" | "error" | "cancelled";
+  received: number;
+  total: number;
+  error?: string;
+  libraryId?: string;
+};
+
 export type StorageSummary = {
   libraryPath: string;
   libraryBytes: number;

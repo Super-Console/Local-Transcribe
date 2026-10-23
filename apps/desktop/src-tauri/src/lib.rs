@@ -14,12 +14,13 @@ use tauri::{
 };
 use voice_to_text_core::{
     InputFile, JobState, JobStatus, JobStore, LocalModel, ModelFamily, ModelLibrary, Transcript,
-    inspect_model_directory, transcribe_file_streaming,
+    TranscriptionOptions, inspect_model_directory, transcribe_file_streaming_with_options,
 };
 use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, TaskResult};
 
 mod lan;
 mod lan_host;
+mod model_download;
 mod recording;
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
@@ -118,7 +119,7 @@ pub(crate) fn unix_now_ms() -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
-fn read_selected_model(app: &AppHandle) -> Result<Option<LocalModel>, String> {
+pub(crate) fn read_selected_model(app: &AppHandle) -> Result<Option<LocalModel>, String> {
     let path = model_config_path(app)?;
     if !path.exists() {
         return Ok(None);
@@ -137,7 +138,7 @@ fn read_selected_model(app: &AppHandle) -> Result<Option<LocalModel>, String> {
     Ok(Some(model))
 }
 
-fn save_selected_model(app: &AppHandle, model: &LocalModel) -> Result<(), String> {
+pub(crate) fn save_selected_model(app: &AppHandle, model: &LocalModel) -> Result<(), String> {
     let path = model_config_path(app)?;
     let parent = path
         .parent()
@@ -478,9 +479,18 @@ async fn start_transcription(
         let worker = thread::Builder::new()
             .name(format!("transcribe-{job_id}"))
             .spawn(move || {
-                let result = transcribe_file_streaming(
+                let punctuation = worker_app
+                    .path()
+                    .app_local_data_dir()
+                    .ok()
+                    .map(|dir| model_download::punctuation_model_path(&dir))
+                    .filter(|path| path.is_file());
+                let result = transcribe_file_streaming_with_options(
                     &source_path,
                     &model,
+                    &TranscriptionOptions {
+                        punctuation_model: punctuation,
+                    },
                     || {
                         worker_store
                             .cancellation_requested(&worker_job_id)
@@ -1537,6 +1547,9 @@ pub fn run() {
             library_directory,
             library_models,
             import_model,
+            model_download::model_catalog,
+            model_download::download_model,
+            model_download::cancel_model_download,
             select_library_model,
             delete_library_model,
             storage_summary,

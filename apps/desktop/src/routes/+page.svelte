@@ -18,10 +18,12 @@
   import LanView from "$lib/components/LanView.svelte";
   import { t } from "$lib/i18n.svelte";
   import type {
+    CatalogModel,
     HistoryEntry,
     JobStatus,
     LanSettings,
     LibraryModelSummary,
+    ModelDownloadEvent,
     ModelRuntime,
     ModelSummary,
     RecordedTrack,
@@ -37,6 +39,7 @@
 
   const JOB_EVENT = "voice-to-text:job-status";
   const SEGMENT_EVENT = "voice-to-text:transcript-segment";
+  const MODEL_DOWNLOAD_EVENT = "voice-to-text:model-download";
   const OPEN_EVENT = "voice-to-text:open-media";
 
   const tauriAvailable = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -71,6 +74,8 @@
   let dropping = $state(false);
   let libraryModels = $state<LibraryModelSummary[]>([]);
   let libraryBusy = $state(false);
+  let catalog = $state<CatalogModel[]>([]);
+  let modelDownloads = $state<Record<string, ModelDownloadEvent>>({});
   let storage = $state<StorageSummary | null>(null);
   let service = $state<ServiceStatus | null>(null);
 
@@ -380,6 +385,51 @@
     }
   }
 
+  async function refreshCatalog() {
+    if (!tauriAvailable) return;
+    try {
+      catalog = await invoke<CatalogModel[]>("model_catalog");
+    } catch (issue) {
+      error = String(issue);
+    }
+  }
+
+  async function downloadModel(id: string) {
+    try {
+      error = "";
+      modelDownloads = {
+        ...modelDownloads,
+        [id]: { id, state: "downloading", received: 0, total: 0 },
+      };
+      await invoke("download_model", { id });
+    } catch (issue) {
+      error = String(issue);
+      const { [id]: _pending, ...rest } = modelDownloads;
+      modelDownloads = rest;
+    }
+  }
+
+  async function cancelModelDownload() {
+    try {
+      await invoke("cancel_model_download");
+    } catch (issue) {
+      error = String(issue);
+    }
+  }
+
+  function applyDownloadEvent(event: ModelDownloadEvent) {
+    if (event.state === "done" || event.state === "error" || event.state === "cancelled") {
+      const { [event.id]: _finished, ...rest } = modelDownloads;
+      modelDownloads = rest;
+      if (event.state === "done") {
+        void refreshLibrary();
+        void refreshCatalog();
+      }
+      return;
+    }
+    modelDownloads = { ...modelDownloads, [event.id]: event };
+  }
+
   async function refreshService() {
     if (!tauriAvailable) return;
     try {
@@ -527,6 +577,9 @@
           }
         }),
         listen<SegmentEvent>(SEGMENT_EVENT, (event) => upsertSegment(event.payload)),
+        listen<ModelDownloadEvent>(MODEL_DOWNLOAD_EVENT, (event) =>
+          applyDownloadEvent(event.payload),
+        ),
         listen(OPEN_EVENT, () => void pickFile()),
         // 原生标题栏按钮（红绿灯同一行）发出的折叠开关事件。
         listen("voice-to-text:toggle-sidebar", () => toggleSidebar()),
@@ -672,10 +725,14 @@
     {:else if view === "model"}
       <ModelView
         models={libraryModels}
+        {catalog}
+        downloads={modelDownloads}
         busy={libraryBusy}
         onImport={importModel}
         onSelect={selectModel}
         onDelete={deleteModel}
+        onDownload={downloadModel}
+        onCancelDownload={cancelModelDownload}
       />
     {:else if view === "lan"}
       <LanView

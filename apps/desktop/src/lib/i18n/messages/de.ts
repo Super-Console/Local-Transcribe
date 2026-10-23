@@ -103,6 +103,15 @@ export const de: Record<MessageKey, Message> = {
   "model.loadedHint": "Im Speicher geladen",
   "model.unknownSize": "Größe unbekannt",
   "model.import": "Modell importieren",
+  "model.downloadTitle": "Herunterladbare Modelle",
+  "model.downloadHint":
+    "Diese Modelle stammen aus den offiziellen Hugging-Face-Repositories und werden automatisch in die Modellbibliothek installiert; kein manueller Import nötig.",
+  "model.download": "Herunterladen",
+  "model.downloadCancel": "Download abbrechen",
+  "model.installing": "Wird installiert",
+  "model.downloaded": "Heruntergeladen",
+  "model.downloadNetworkHint": "Ein abgebrochener Download deutet meist auf ein Netzwerk- oder Proxy-Problem hin. Prüfe die Verbindung und versuche es erneut.",
+  "model.punctuationTag": "Zeichensetzung",
   "model.emptyTitle": "Noch keine Modelle importiert",
   "model.emptyBody":
     "Lade dir selbst ein Whisper-, Qwen3-ASR-, Paraformer- oder SenseVoice-Exportpaket von sherpa-onnx herunter und wähle dann den Ordner zum Importieren. Der Import wird in den App-Ordner kopiert; deine Original-Downloads bleiben unberührt.",

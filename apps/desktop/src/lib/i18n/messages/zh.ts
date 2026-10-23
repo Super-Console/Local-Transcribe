@@ -104,6 +104,15 @@ export const zh = {
   "model.loadedHint": "已加载到内存",
   "model.unknownSize": "大小未知",
   "model.import": "导入模型",
+  "model.downloadTitle": "可下载的模型",
+  "model.downloadHint":
+    "以上模型来自官方 Hugging Face 仓库，下载完成后自动安装到模型库，无需手动导入。",
+  "model.download": "下载",
+  "model.downloadCancel": "取消下载",
+  "model.installing": "安装中",
+  "model.downloaded": "已下载",
+  "model.downloadNetworkHint": "下载中断可能是网络或代理问题：请检查网络连接后重试。",
+  "model.punctuationTag": "标点",
   "model.emptyTitle": "还没有导入模型",
   "model.emptyBody":
     "自己下载 sherpa-onnx 的 Whisper、Qwen3-ASR、Paraformer 或 SenseVoice 导出包，然后选择文件夹导入。导入会复制到应用目录，原始下载保持不动。",

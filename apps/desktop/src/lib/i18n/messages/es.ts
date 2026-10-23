@@ -102,6 +102,15 @@ export const es: Record<MessageKey, Message> = {
   "model.loadedHint": "Cargado en memoria",
   "model.unknownSize": "Tamaño desconocido",
   "model.import": "Importar modelo",
+  "model.downloadTitle": "Modelos descargables",
+  "model.downloadHint":
+    "Estos modelos provienen de los repositorios oficiales de Hugging Face y se instalan automáticamente en la biblioteca; no hace falta importarlos.",
+  "model.download": "Descargar",
+  "model.downloadCancel": "Cancelar descarga",
+  "model.installing": "Instalando",
+  "model.downloaded": "Descargado",
+  "model.downloadNetworkHint": "Una descarga interrumpida suele indicar un problema de red o de proxy. Revisa la conexión y vuelve a intentarlo.",
+  "model.punctuationTag": "Puntuación",
   "model.emptyTitle": "Aún no has importado modelos",
   "model.emptyBody":
     "Descarga tú mismo un paquete de Whisper, Qwen3-ASR, Paraformer o SenseVoice de sherpa-onnx y luego elige la carpeta para importarlo. La importación se copia al directorio de la app; tus descargas originales no se tocan.",
