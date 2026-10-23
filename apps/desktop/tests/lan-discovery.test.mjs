@@ -1,0 +1,35 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
+const view = read('../src/lib/components/LanView.svelte');
+
+test('LAN scan keeps mDNS first and also probes saved ports over TCP', () => {
+  assert.match(view, /scanTimeoutMs\s*=\s*8_000/);
+  assert.match(view, /ports:\s*nodes\.map/);
+});
+
+test('empty scan result explains the local-network permission risk', () => {
+  const zh = read('../src/lib/i18n/messages/zh.ts');
+  assert.match(zh, /"lan\.scanEmptyHint":/);
+  const en = read('../src/lib/i18n/messages/en.ts');
+  assert.match(en, /"lan\.scanEmptyHint":/);
+  assert.match(view, /t\("lan\.scanEmptyHint"\)/);
+});
+
+test('macOS bundle is re-signed with the stable bundle identifier', () => {
+  const pkg = JSON.parse(read('../package.json'));
+  const script = pkg.scripts['bundle:mac'] ?? '';
+  assert.match(script, /--identifier com\.timmy\.voicetotextapp/);
+});
+
+test('LAN page warns when the system never granted local network access', () => {
+  assert.match(view, /lan_local_access/);
+  assert.match(view, /lan\.permissionTitle/);
+  assert.match(view, /lan\.permissionAction/);
+  for (const lang of ['zh', 'en', 'de', 'es', 'fr']) {
+    const messages = read(`../src/lib/i18n/messages/${lang}.ts`);
+    assert.match(messages, /"lan\.permissionTitle":/, `${lang} needs the permission banner`);
+    assert.match(messages, /"lan\.permissionBody":/, `${lang} needs the permission body`);
+  }
+});

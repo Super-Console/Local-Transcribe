@@ -1,8 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
-  import { confirm, open } from "@tauri-apps/plugin-dialog";
+  import { confirm } from "@tauri-apps/plugin-dialog";
 
   import Icon from "./Icon.svelte";
   import { t } from "$lib/i18n.svelte";
@@ -11,11 +10,9 @@
     LanCollectReport,
     LanHostInterface,
     LanHostStatus,
-    LanMode,
     LanNodeConfig,
     LanNodeInfo,
     LanNodeStatus,
-    LanProgressEvent,
     LanSettings,
     LanStorageInfo,
     LanTask,
@@ -32,11 +29,6 @@
     onSettingsSaved: (settings: LanSettings) => void;
   } = $props();
 
-  const LAN_PROGRESS_EVENT = "lan://progress";
-  const MEDIA_EXTENSIONS = [
-    "wav", "wave", "aiff", "aif", "caf", "mp3", "mp2", "mp1", "m4a",
-    "mp4", "mov", "mkv", "ogg", "oga", "flac", "aac", "opus", "3gp", "webm",
-  ];
   const STATE_LABELS: Record<LanTaskState, MessageKey> = {
     init: "lan.state.init",
     file_transferring: "lan.state.file_transferring",
@@ -54,29 +46,28 @@
   let error = $state("");
   let scanning = $state(false);
   let scanned = $state(false);
-  let sending = $state(false);
   let collecting = $state(false);
   let testingId = $state<string | null>(null);
   let discovered = $state<LanNodeInfo[]>([]);
+  const scanTimeoutMs = 8_000;
+  let localAccess = $state<"granted" | "denied" | "no_network" | null>(null);
   let selectedId = $state<string | null>(null);
   let statuses = $state<Record<string, LanNodeStatus>>({});
   let storages = $state<Record<string, LanStorageInfo>>({});
   let tasks = $state<LanTask[]>([]);
   let tasksLoading = $state(false);
-  let transfers = $state<Record<string, { sent: number; total: number }>>({});
   let result = $state<LanTaskResult | null>(null);
   let resultTaskId = $state<string | null>(null);
   let savedNote = $state("");
   let collectDir = $state("");
   let collectReport = $state<LanCollectReport | null>(null);
-  let draft = $state({ id: "", name: "", host: "", port: "7878", token: "" });
+  let draft = $state({ id: "", name: "", host: "", port: "7878" });
   let host = $state<LanHostStatus | null>(null);
   let hostInterfaces = $state<LanHostInterface[]>([]);
   let hostName = $state("Local Transcribe Mac");
   let hostAddress = $state("");
   let hostPort = $state(7878);
   let hostBusy = $state(false);
-  let hostToken = $state("");
 
   async function refreshHost() {
     if (!tauriAvailable) return;
@@ -93,7 +84,6 @@
     if (hostBusy) return;
     hostBusy = true;
     error = "";
-    hostToken = "";
     try {
       host = host?.running
         ? await invoke<LanHostStatus>("stop_lan_host")
@@ -104,21 +94,8 @@
     finally { hostBusy = false; }
   }
 
-  async function revealHostToken() {
-    try { hostToken = await invoke<string>("lan_host_token"); }
-    catch (issue) { error = String(issue); }
-  }
-
   const nodes = $derived(settings?.nodes ?? []);
   const selectedNode = $derived(nodes.find((node) => node.id === selectedId) ?? null);
-
-  const modes = $derived.by(() => {
-    const list: Array<{ id: LanMode; label: string; desc: string }> = [
-      { id: "local_only", label: t("lan.modeLocalOnly"), desc: t("lan.modeLocalOnlyDesc") },
-      { id: "prefer_lan", label: t("lan.modePreferLan"), desc: t("lan.modePreferLanDesc") },
-    ];
-    return list;
-  });
 
   function sizeLabel(bytes?: number): string {
     if (!bytes) return "0 MB";
@@ -138,26 +115,39 @@
     onSettingsSaved(saved);
   }
 
-  async function changeMode(mode: LanMode) {
-    error = "";
-    try {
-      const saved = await invoke<LanSettings>("set_lan_assignment", { mode });
-      onSettingsSaved(saved);
-    } catch (issue) {
-      error = String(issue);
-    }
-  }
-
   async function scan() {
     error = "";
     scanning = true;
     try {
-      discovered = await invoke<LanNodeInfo[]>("lan_discover", { timeoutMs: 3000 });
+      // mDNS first (cheap, carries name/port/model); the Rust side then probes
+      // the local /24 over TCP for nodes whose multicast never arrives.
+      discovered = await invoke<LanNodeInfo[]>("lan_discover", {
+        timeoutMs: scanTimeoutMs,
+        ports: nodes.map((node) => node.port),
+      });
       scanned = true;
     } catch (issue) {
       error = String(issue);
     } finally {
       scanning = false;
+      void checkLocalAccess();
+    }
+  }
+
+  async function checkLocalAccess() {
+    try {
+      localAccess = await invoke<"granted" | "denied" | "no_network">("lan_local_access");
+    } catch {
+      localAccess = null;
+    }
+  }
+
+  async function openLocalNetworkSettings() {
+    error = "";
+    try {
+      await invoke("open_local_network_settings");
+    } catch (issue) {
+      error = String(issue);
     }
   }
 
@@ -167,12 +157,11 @@
       name: node.name,
       host: node.host,
       port: String(node.port),
-      token: node.token,
     };
   }
 
   function clearDraft() {
-    draft = { id: "", name: "", host: "", port: "7878", token: "" };
+    draft = { id: "", name: "", host: "", port: "7878" };
   }
 
   async function submitDraft() {
@@ -194,7 +183,7 @@
         name: draft.name.trim(),
         host: draft.host.trim(),
         port,
-        token: draft.token,
+        model_id: nodes.find((item) => item.id === draft.id)?.model_id ?? null,
         enabled: draft.id === "" ? true : nodes.find((item) => item.id === draft.id)?.enabled ?? true,
       };
       const nextNodes = draft.id === ""
@@ -202,6 +191,7 @@
         : nodes.map((item) => (item.id === draft.id ? node : item));
       await saveNodes(nextNodes);
       clearDraft();
+      refreshStatuses();
     } catch (issue) {
       error = String(issue);
     }
@@ -217,10 +207,11 @@
           name: info.name,
           host: info.host,
           port: info.port,
-          token: "",
+          model_id: null,
           enabled: true,
         },
       ]);
+      refreshStatuses();
     } catch (issue) {
       error = String(issue);
     }
@@ -270,7 +261,7 @@
         error = `${node.name}: ${status.warning}`;
       }
     } catch (issue) {
-      statuses = { ...statuses, [node.id]: { reachable: false, capabilities: null, latency_ms: null, storage: null, warning: null } };
+      statuses = { ...statuses, [node.id]: { models: [], reachable: false, capabilities: null, latency_ms: null, storage: null, warning: null } };
       error = String(issue);
     }
   }
@@ -312,26 +303,7 @@
     savedNote = "";
     collectReport = null;
     void loadTasks();
-  }
-
-  async function sendFile() {
-    if (!selectedId) return;
-    error = "";
-    try {
-      const picked = await open({
-        multiple: false,
-        directory: false,
-        filters: [{ name: t("dialog.mediaFilter"), extensions: MEDIA_EXTENSIONS }],
-      });
-      if (typeof picked !== "string") return;
-      sending = true;
-      await invoke<string>("lan_submit_file", { nodeId: selectedId, filePath: picked, modelId: null });
-      await loadTasks();
-    } catch (issue) {
-      error = String(issue);
-    } finally {
-      sending = false;
-    }
+    void loadStatus(node);
   }
 
   async function cancelTask(task: LanTask) {
@@ -388,16 +360,8 @@
   onMount(() => {
     if (!tauriAvailable) return;
     void refreshHost();
+    void checkLocalAccess();
     refreshStatuses();
-    const unlisteners: Array<Promise<() => void>> = [
-      listen<LanProgressEvent>(LAN_PROGRESS_EVENT, (event) => {
-        const payload = event.payload;
-        transfers = {
-          ...transfers,
-          [payload.task_id]: { sent: payload.sent, total: payload.total },
-        };
-      }),
-    ];
     // 任务状态 2 秒一轮（页面可见时才发请求）；节点在线状态 10 秒一轮。
     const taskTimer = window.setInterval(() => {
       if (document.visibilityState !== "visible") return;
@@ -410,9 +374,6 @@
     return () => {
       window.clearInterval(taskTimer);
       window.clearInterval(statusTimer);
-      for (const pending of unlisteners) {
-        void pending.then((stop) => stop()).catch(() => {});
-      }
     };
   });
 </script>
@@ -424,35 +385,30 @@
   </div>
   <p class="subtitle">{t("lan.subtitle")}</p>
 
+  {#if localAccess === "denied"}
+    <div class="perm" role="alert">
+      <div class="perm-head">
+        <Icon name="warn" size={14} />
+        <span>{t("lan.permissionTitle")}</span>
+      </div>
+      <p class="perm-body">{t("lan.permissionBody")}</p>
+      <div class="perm-actions">
+        <button type="button" class="btn primary" onclick={() => void openLocalNetworkSettings()}>
+          {t("lan.permissionAction")}
+        </button>
+        <button type="button" class="btn" onclick={() => void checkLocalAccess()}>
+          {t("lan.permissionRecheck")}
+        </button>
+      </div>
+    </div>
+  {/if}
+
   {#if error}
     <div class="banner" role="alert">
       <Icon name="warn" size={14} />
       <span>{error}</span>
     </div>
   {/if}
-
-  <div class="group">
-    <div class="group-head">
-      <div class="group-title">{t("lan.modeLabel")}</div>
-    </div>
-    <div class="seg" role="group" aria-label={t("lan.modeLabel")}>
-      {#each modes as option (option.id)}
-        <button
-          type="button"
-          aria-pressed={settings?.mode === option.id}
-          class:on={settings?.mode === option.id}
-          onclick={() => void changeMode(option.id)}
-        >
-          {option.label}
-        </button>
-      {/each}
-    </div>
-    {#each modes as option (option.id)}
-      {#if settings?.mode === option.id}
-        <p class="note mode-note">{option.desc}</p>
-      {/if}
-    {/each}
-  </div>
 
   {#if host?.supported}
     <div class="group host-sharing" aria-busy={hostBusy}>
@@ -468,16 +424,6 @@
       <p class="note" id="host-sharing-description">{t("lan.hostDesc")}</p>
       {#if host.running}
         <div class="meta" role="status">{t("lan.hostRunning", { name: host.name, address: host.address, port: host.port })}</div>
-        <p class="note">{t("lan.hostModel", { model: host.model })}</p>
-        <button type="button" class="btn" onclick={() => hostToken ? hostToken = "" : void revealHostToken()}>
-          {hostToken ? t("lan.hostHideToken") : t("lan.hostShowToken")}
-        </button>
-        {#if hostToken}
-          <label class="field host-token"><span>{t("lan.nodeFormToken")}</span>
-            <input type="text" value={hostToken} readonly autocomplete="off" spellcheck={false} />
-          </label>
-        {/if}
-        <p class="note">{t("lan.hostStopNote")}</p>
       {:else}
         <div class="form-grid">
           <label class="field"><span>{t("lan.nodeFormName")}</span>
@@ -536,6 +482,7 @@
       </div>
     {:else if scanned}
       <p class="note">{t("lan.scanEmpty")}</p>
+      <p class="note">{t("lan.scanEmptyHint")}</p>
     {/if}
 
     <div class="form">
@@ -552,10 +499,6 @@
         <label class="field small">
           <span>{t("lan.nodeFormPort")}</span>
           <input type="text" inputmode="numeric" bind:value={draft.port} placeholder="7878" />
-        </label>
-        <label class="field">
-          <span>{t("lan.nodeFormToken")}</span>
-          <input type="password" bind:value={draft.token} placeholder="••••••" />
         </label>
       </div>
       <div class="form-actions">
@@ -653,16 +596,10 @@
           <span class="sub">{selectedNode.name}</span>
         {/if}
       </div>
-      {#if selectedNode}
-        <button type="button" class="btn primary" onclick={() => void sendFile()} disabled={sending}>
-          <Icon name="plus" size={12} stroke={1.8} />
-          {sending ? t("lan.sending") : t("lan.sendFile")}
-        </button>
-      {/if}
     </div>
 
     {#if !selectedNode}
-      <p class="note">{t("lan.noNodeSelected")}</p>
+      <!-- No node selected: the task list stays empty. -->
     {:else if tasks.length === 0}
       <p class="note">{tasksLoading ? t("history.loading") : t("lan.noTasks")}</p>
     {:else}
@@ -683,17 +620,10 @@
               {/if}
             </div>
             <div class="td" role="cell">
-              {#if task.state === "file_transferring" && transfers[task.id]}
-                {t("lan.transferred", {
-                  sent: sizeLabel(transfers[task.id].sent),
-                  total: sizeLabel(transfers[task.id].total),
-                })}
-              {:else}
-                {t("lan.transferred", {
-                  sent: sizeLabel(task.received_bytes),
-                  total: sizeLabel(task.file_size),
-                })}
-              {/if}
+              {t("lan.transferred", {
+                sent: sizeLabel(task.received_bytes),
+                total: sizeLabel(task.file_size),
+              })}
             </div>
             <div class="td right" role="cell">
               {#if !["completed", "failed", "cancelled"].includes(task.state) && task.state !== "cancel_requested"}
@@ -811,6 +741,37 @@
     margin: 18px auto 0;
   }
 
+  .perm {
+    width: 100%;
+    max-width: 940px;
+    margin: 14px auto 0;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--orange, #d98b2b) 10%, transparent);
+    color: var(--text-2);
+  }
+
+  .perm-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .perm-body {
+    margin: 6px 0 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  .perm-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
   .group-head {
     display: flex;
     align-items: center;
@@ -830,33 +791,6 @@
     font-size: 13px;
     font-weight: 400;
     color: var(--text-3);
-  }
-
-  .seg {
-    display: inline-flex;
-    gap: 2px;
-    padding: 3px;
-    border-radius: 9px;
-    background: var(--fill);
-  }
-
-  .seg button {
-    padding: 5px 12px;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    font-size: 12.5px;
-    color: var(--text-2);
-  }
-
-  .seg button.on {
-    background: var(--panel);
-    color: var(--text);
-    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
-  }
-
-  :global(:root[data-theme="dark"]) .seg button.on {
-    background: #3a3a3e;
   }
 
   .note {
@@ -901,6 +835,7 @@
     flex-direction: column;
     border-top: 1px solid var(--hairline);
   }
+
 
   .list-label {
     padding: 10px 2px 4px;
@@ -1070,11 +1005,10 @@
     width: 100%;
   }
 
-  .host-token { margin-top: 12px; }
 
   .host-sharing .group-head { flex-wrap: wrap; gap: 10px; }
   .host-sharing .note { font-size: 13px; color: var(--text-2); }
-  .host-sharing .meta, .mode-note { font-size: 12.5px; color: var(--text-2); }
+  .host-sharing .meta { font-size: 12.5px; color: var(--text-2); }
   .host-sharing .field { font-size: 12.5px; color: var(--text-2); }
 
   .form-actions {

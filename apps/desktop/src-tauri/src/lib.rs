@@ -14,12 +14,13 @@ use tauri::{
 };
 use voice_to_text_core::{
     InputFile, JobState, JobStatus, JobStore, LocalModel, ModelFamily, ModelLibrary, Transcript,
-    inspect_model_directory, transcribe_file_streaming,
+    TranscriptionOptions, inspect_model_directory, transcribe_file_streaming_with_options,
 };
 use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, TaskResult};
 
 mod lan;
 mod lan_host;
+mod model_download;
 mod recording;
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
@@ -118,13 +119,17 @@ pub(crate) fn unix_now_ms() -> u64 {
         .map_or(0, |duration| duration.as_millis() as u64)
 }
 
-fn read_selected_model(app: &AppHandle) -> Result<Option<LocalModel>, String> {
+pub(crate) fn read_selected_model(app: &AppHandle) -> Result<Option<LocalModel>, String> {
     let path = model_config_path(app)?;
     if !path.exists() {
         return Ok(None);
     }
     let bytes =
         fs::read(path).map_err(|_| "Could not read the saved model selection.".to_owned())?;
+    // An empty file means "no default model" (cleared when its model was deleted).
+    if bytes.is_empty() {
+        return Ok(None);
+    }
     let model: LocalModel = serde_json::from_slice(&bytes).map_err(|_| {
         "The saved model selection is invalid. Please choose the model folder again.".to_owned()
     })?;
@@ -137,7 +142,7 @@ fn read_selected_model(app: &AppHandle) -> Result<Option<LocalModel>, String> {
     Ok(Some(model))
 }
 
-fn save_selected_model(app: &AppHandle, model: &LocalModel) -> Result<(), String> {
+pub(crate) fn save_selected_model(app: &AppHandle, model: &LocalModel) -> Result<(), String> {
     let path = model_config_path(app)?;
     let parent = path
         .parent()
@@ -159,6 +164,15 @@ fn save_selected_model(app: &AppHandle, model: &LocalModel) -> Result<(), String
         return Err("The saved model selection did not match the chosen model.".to_owned());
     }
     Ok(())
+}
+
+/// Forget the default model (its files are gone or are about to be).
+pub(crate) fn clear_selected_model(app: &AppHandle) -> Result<(), String> {
+    let path = model_config_path(app)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    fs::write(&path, b"").map_err(|_| "Could not clear the saved model selection.".to_owned())
 }
 
 #[cfg(test)]
@@ -478,9 +492,18 @@ async fn start_transcription(
         let worker = thread::Builder::new()
             .name(format!("transcribe-{job_id}"))
             .spawn(move || {
-                let result = transcribe_file_streaming(
+                let punctuation = worker_app
+                    .path()
+                    .app_local_data_dir()
+                    .ok()
+                    .map(|dir| model_download::punctuation_model_path(&dir))
+                    .filter(|path| path.is_file());
+                let result = transcribe_file_streaming_with_options(
                     &source_path,
                     &model,
+                    &TranscriptionOptions {
+                        punctuation_model: punctuation,
+                    },
                     || {
                         worker_store
                             .cancellation_requested(&worker_job_id)
@@ -674,10 +697,26 @@ fn delete_library_model(id: String, app: AppHandle) -> Result<String, String> {
     if let Some(selected) = read_selected_model(&app)?
         && selected.id == id
     {
-        return Err("这是当前默认模型，请先把默认模型换成其他模型再删除。".to_owned());
+        // Deleting the default model is allowed; the app just stops pre-selecting
+        // a model until one is chosen again.
+        clear_selected_model(&app)?;
     }
     let library = ModelLibrary::new(app_data_dir(&app)?);
     let moved = library.delete(&id)?;
+    Ok(moved.to_string_lossy().into_owned())
+}
+
+/// Delete a model that came from the built-in download catalog.
+#[tauri::command]
+fn delete_catalog_model(id: String, app: AppHandle) -> Result<String, String> {
+    let data = app_data_dir(&app)?;
+    if let Some(target) = model_download::installed_path(&data, &id)
+        && let Some(selected) = read_selected_model(&app)?
+        && (selected.directory == target || selected.directory.starts_with(&target))
+    {
+        clear_selected_model(&app)?;
+    }
+    let moved = model_download::delete_installed(&data, &id)?;
     Ok(moved.to_string_lossy().into_owned())
 }
 
@@ -1216,11 +1255,6 @@ fn lan_host_status(
 }
 
 #[tauri::command]
-fn lan_host_token(state: State<'_, Arc<lan_host::HostState>>) -> Result<String, String> {
-    state.token()
-}
-
-#[tauri::command]
 async fn start_lan_host(
     name: String,
     address: String,
@@ -1230,10 +1264,20 @@ async fn start_lan_host(
 ) -> Result<lan_host::HostStatus, String> {
     let state = Arc::clone(state.inner());
     let root = app_data_dir(&app)?;
-    let model = read_selected_model(&app)?.ok_or("Choose a local model before sharing compute.")?;
-    tauri::async_runtime::spawn_blocking(move || state.start(&root, name, address, port, model))
-        .await
-        .map_err(|_| "Could not start LAN sharing.".to_owned())?
+    let mut models = ModelLibrary::new(&root)
+        .list()?
+        .into_iter()
+        .map(|entry| entry.model)
+        .collect::<Vec<_>>();
+    if let Some(selected) = read_selected_model(&app)? {
+        models.retain(|model| model.id != selected.id);
+        models.insert(0, selected);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        state.start_models(&root, name, address, port, models)
+    })
+    .await
+    .map_err(|_| "Could not start LAN sharing.".to_owned())?
 }
 
 #[tauri::command]
@@ -1260,8 +1304,18 @@ fn set_lan_assignment(mode: lan::LanMode, app: AppHandle) -> Result<lan::LanSett
 }
 
 #[tauri::command]
-async fn lan_discover(timeout_ms: u32) -> Result<Vec<NodeInfo>, String> {
-    lan::discover_nodes(timeout_ms).await
+async fn lan_discover(timeout_ms: u32, ports: Vec<u16>) -> Result<Vec<NodeInfo>, String> {
+    lan::discover_nodes(timeout_ms, ports).await
+}
+
+#[tauri::command]
+fn lan_local_access() -> voice_to_text_lan::client::LocalNetworkAccess {
+    lan::local_access()
+}
+
+#[tauri::command]
+fn open_local_network_settings() -> Result<(), String> {
+    lan::open_local_network_settings()
 }
 
 #[tauri::command]
@@ -1537,6 +1591,10 @@ pub fn run() {
             library_directory,
             library_models,
             import_model,
+            model_download::model_catalog,
+            model_download::download_model,
+            model_download::cancel_model_download,
+            delete_catalog_model,
             select_library_model,
             delete_library_model,
             storage_summary,
@@ -1560,12 +1618,13 @@ pub fn run() {
             get_lan_settings,
             lan_host_interfaces,
             lan_host_status,
-            lan_host_token,
             start_lan_host,
             stop_lan_host,
             set_lan_settings,
             set_lan_assignment,
             lan_discover,
+            lan_local_access,
+            open_local_network_settings,
             lan_node_status,
             lan_submit_file,
             lan_tasks,

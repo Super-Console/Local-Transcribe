@@ -179,6 +179,12 @@ pub struct NodeInfo {
 
 /// What a node can do, reported by `GET /api/v1/capabilities`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteModel {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     pub proto_version: u32,
     pub max_chunk_bytes: u64,
@@ -186,6 +192,14 @@ pub struct Capabilities {
     pub role: String,
     pub model_id: Option<String>,
     pub platform: String,
+    /// Display name of the node.
+    ///
+    /// Added for TCP fallback discovery, where there is no mDNS TXT record to
+    /// read the name from. Nodes built before this field simply omit it, so
+    /// deserialization defaults to an empty string and the client falls back
+    /// to the address.
+    #[serde(default)]
+    pub name: String,
 }
 
 /// A node registering itself or updating its display name and role.

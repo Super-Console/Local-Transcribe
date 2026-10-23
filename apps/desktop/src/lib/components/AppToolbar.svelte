@@ -10,21 +10,36 @@
     model,
     models = [],
     loadedModelId = null,
+    remoteGroups = [],
+    remoteLabel = null,
+    remoteSelection = null,
     search = "",
     onSearchChange,
     onSelectModel,
+    onSelectRemote,
     onManageModels,
   }: {
     model: ModelSummary | null;
     models?: LibraryModelSummary[];
     loadedModelId?: string | null;
+    remoteGroups?: Array<{
+      id: string;
+      name: string;
+      models: Array<{ id: string; displayName: string }>;
+    }>;
+    remoteLabel?: string | null;
+    remoteSelection?: { nodeId: string; modelId: string } | null;
     search?: string;
     onSearchChange: (value: string) => void;
     onSelectModel: (id: string) => void;
+    onSelectRemote?: (nodeId: string, modelId: string) => void;
     onManageModels: () => void;
   } = $props();
 
   let open = $state(false);
+  // A selected remote model is as "active" as a loaded local model: the dot
+  // next to the chip must stay green when the menu closes.
+  const remoteDotOn = $derived(remoteSelection !== null);
   // 搜索框默认收起成放大镜，点击展开；有查询词时保持展开。
   let searchOpen = $state(false);
   let searchField = $state<HTMLInputElement | null>(null);
@@ -118,12 +133,12 @@
     >
       <span
         class="dot"
-        class:on={!!model && model.id === loadedModelId}
-        title={model && model.id === loadedModelId ? t("model.loadedHint") : undefined}
+        class:on={remoteDotOn || (!!model && model.id === loadedModelId)}
+        title={remoteDotOn || (model && model.id === loadedModelId) ? t("model.loadedHint") : undefined}
         aria-hidden="true"
       ></span>
-      <span class="name" title={model?.displayName ?? t("common.noModel")}
-        >{model?.displayName ?? t("common.noModel")}</span
+      <span class="name" title={remoteLabel ?? model?.displayName ?? t("common.noModel")}
+        >{remoteLabel ?? model?.displayName ?? t("common.noModel")}</span
       >
       <Icon name="chevronDown" size={12} stroke={1.6} />
     </button>
@@ -136,6 +151,7 @@
         onclick={() => (open = false)}
       ></button>
       <div class="menu" in:scale={{ duration: 200, easing: quintOut, start: 0.96 }} out:fade={{ duration: 120 }} role="listbox" aria-label={t("toolbar.defaultModel")}>
+        <div class="menu-group">{t("toolbar.localSection")}</div>
         {#each models as entry (entry.id)}
           <button
             type="button"
@@ -162,6 +178,33 @@
           </button>
         {:else}
           <div class="item empty">{t("common.noModel")}</div>
+        {/each}
+        {#each remoteGroups as group (group.id)}
+          <div class="menu-sep"></div>
+          <div class="menu-group">{group.name}</div>
+          {#each group.models as remote (remote.id)}
+            {@const active =
+              remoteSelection?.nodeId === group.id && remoteSelection?.modelId === remote.id}
+            <button
+              type="button"
+              class="item"
+              role="option"
+              aria-selected={active}
+              onclick={() => {
+                onSelectRemote?.(group.id, remote.id);
+                open = false;
+              }}
+            >
+              <span class="item-dot on"></span>
+              <span class="item-body">
+                <span class="item-name">{remote.displayName}</span>
+                <span class="item-meta">{t("toolbar.remoteTag", { node: group.name })}</span>
+              </span>
+              {#if active}
+                <span class="check" aria-hidden="true">✓</span>
+              {/if}
+            </button>
+          {/each}
         {/each}
         <div class="menu-sep"></div>
         <button
@@ -436,6 +479,15 @@
     height: 1px;
     margin: 5px 4px;
     background: var(--hairline);
+  }
+
+  .menu-group {
+    padding: 6px 10px 3px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
   }
 
   .item.manage,

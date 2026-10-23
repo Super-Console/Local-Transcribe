@@ -1,6 +1,6 @@
 [package]
 name = "voice-to-text-desktop"
-version = "1.1.0-beta.3"
+version = "1.1.0-beta.4"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
@@ -31,6 +31,9 @@ uuid = { version = "1", features = ["v4"] }
 tauri-plugin-dialog = "2"
 cpal = "0.16"
 hound = "3"
+# 官方模型下载：流式读取 + 系统 TLS（macOS Security.framework / Windows SChannel，
+# 不需要交叉编译 C 依赖）。仅本机直连 Hugging Face 及其镜像。
+reqwest = { version = "0.13", default-features = false, features = ["stream", "native-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.191"

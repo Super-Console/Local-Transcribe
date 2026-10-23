@@ -12,7 +12,7 @@ use sherpa_onnx::{
     OfflineWhisperModelConfig,
 };
 
-use crate::{decode_audio_file, InputFile, Transcript, TranscriptSegment};
+use crate::{decode_audio_file, punctuation, InputFile, Transcript, TranscriptSegment};
 
 const SAMPLE_RATE: u32 = 16_000;
 const CHUNK_SECONDS: usize = 30;
@@ -367,6 +367,66 @@ pub fn inspect_model_directory(path: impl AsRef<Path>) -> Result<LocalModel, Str
     })
 }
 
+/// 解码退化重复折叠。自回归模型偶尔陷入循环（实机样本：同一字连续 231 次），
+/// 这里做保守兜底：连续同一字 ≥6 次保留 2 次；同一短语（1–6 字）连续 ≥4 次且
+/// 总长度 ≥12 字保留 2 次。正常口语重复（「对对对」「好的好的」）不受影响。
+fn collapse_degenerate_repetitions(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let mut index = 0;
+    while index < chars.len() {
+        let mut best: Option<(usize, usize)> = None;
+        for unit_len in 1..=6usize {
+            if index + unit_len * 4 > chars.len() {
+                break;
+            }
+            let unit = &chars[index..index + unit_len];
+            let mut repeats = 1;
+            while index + (repeats + 1) * unit_len <= chars.len()
+                && &chars[index + repeats * unit_len..index + (repeats + 1) * unit_len] == unit
+            {
+                repeats += 1;
+            }
+            let total = repeats * unit_len;
+            let degenerate =
+                (unit_len == 1 && repeats >= 6) || (unit_len > 1 && repeats >= 4 && total >= 12);
+            if degenerate && total > best.map_or(0, |(_, total)| total) {
+                best = Some((unit_len, total));
+            }
+        }
+        match best {
+            Some((unit_len, total)) => {
+                out.extend_from_slice(&chars[index..index + 2 * unit_len]);
+                index += total;
+            }
+            None => {
+                out.push(chars[index]);
+                index += 1;
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// 转写后处理选项。默认为空，行为与旧版完全一致。
+#[derive(Debug, Clone, Default)]
+pub struct TranscriptionOptions {
+    /// 可选中文标点模型（`model.onnx`）路径；为空时不做标点后处理。
+    pub punctuation_model: Option<PathBuf>,
+}
+
+/// 固定切块长度（秒）。`LT_CHUNK_SECONDS` 为仅供 A/B 测量的实验开关。
+fn chunk_seconds() -> usize {
+    std::env::var("LT_CHUNK_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|value| (5..=120).contains(value))
+        .unwrap_or(CHUNK_SECONDS)
+}
+
 /// Transcribe a local media file using an installed model. Progress is chunk-count based, not guessed.
 pub fn transcribe_file(
     source_path: impl AsRef<Path>,
@@ -390,6 +450,25 @@ pub fn transcribe_file_cancellable(
 pub fn transcribe_file_streaming(
     source_path: impl AsRef<Path>,
     model: &LocalModel,
+    is_cancelled: impl FnMut() -> bool,
+    on_progress: impl FnMut(TranscriptionProgress),
+    on_segment: impl FnMut(TranscriptionSegmentUpdate),
+) -> Result<Transcript, String> {
+    transcribe_file_streaming_with_options(
+        source_path,
+        model,
+        &TranscriptionOptions::default(),
+        is_cancelled,
+        on_progress,
+        on_segment,
+    )
+}
+
+/// 与 [`transcribe_file_streaming`] 相同，但允许传入可选后处理（目前是标点模型）。
+pub fn transcribe_file_streaming_with_options(
+    source_path: impl AsRef<Path>,
+    model: &LocalModel,
+    options: &TranscriptionOptions,
     mut is_cancelled: impl FnMut() -> bool,
     mut on_progress: impl FnMut(TranscriptionProgress),
     mut on_segment: impl FnMut(TranscriptionSegmentUpdate),
@@ -410,7 +489,11 @@ pub fn transcribe_file_streaming(
     if is_cancelled() {
         return Err("Transcription was cancelled.".to_owned());
     }
-    let chunk_samples = SAMPLE_RATE as usize * CHUNK_SECONDS;
+    let punctuator = match options.punctuation_model.as_deref() {
+        Some(path) => Some(punctuation::Punctuator::create(path)?),
+        None => None,
+    };
+    let chunk_samples = SAMPLE_RATE as usize * chunk_seconds();
     let chunks: Vec<&[f32]> = audio.samples.chunks(chunk_samples).collect();
     if chunks.is_empty() {
         return Err("The selected media contains no audio to transcribe.".to_owned());
@@ -547,8 +630,12 @@ pub fn transcribe_file_streaming(
         let result = stream
             .get_result()
             .ok_or_else(|| "The speech engine returned no result for an audio chunk.".to_owned())?;
-        let text = result.text.trim().to_owned();
+        let text = collapse_degenerate_repetitions(result.text.trim());
         if !text.is_empty() {
+            let text = match &punctuator {
+                Some(punctuator) => punctuator.punctuate(&text),
+                None => text,
+            };
             let start_ms = (index * chunk_samples * 1_000 / SAMPLE_RATE as usize) as u64;
             let end_sample = ((index + 1) * chunk_samples).min(audio.samples.len());
             let end_ms = (end_sample * 1_000 / SAMPLE_RATE as usize) as u64;
@@ -611,4 +698,36 @@ pub fn transcribe_file_streaming(
         text,
         segments: Some(segments),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collapse_degenerate_repetitions;
+
+    #[test]
+    fn collapse_reduces_a_long_run_of_one_character() {
+        let degraded = "有".repeat(231) + "。";
+        let fixed = collapse_degenerate_repetitions(&degraded);
+        assert_eq!(fixed, "有有。");
+    }
+
+    #[test]
+    fn collapse_keeps_normal_spoken_repetition() {
+        for text in ["对对对，就这样", "好的好的", "不不不，不用了"] {
+            assert_eq!(collapse_degenerate_repetitions(text), text);
+        }
+    }
+
+    #[test]
+    fn collapse_reduces_a_long_phrase_loop() {
+        let degraded = "我们今天".to_owned() + &"讨论".repeat(8) + "这个问题";
+        let fixed = collapse_degenerate_repetitions(&degraded);
+        assert_eq!(fixed, "我们今天讨论讨论这个问题");
+    }
+
+    #[test]
+    fn collapse_leaves_long_sentences_untouched() {
+        let text = "这次会议主要讨论四件事情，第一是关于新的录音软件，第二是关于课程安排。";
+        assert_eq!(collapse_degenerate_repetitions(text), text);
+    }
 }

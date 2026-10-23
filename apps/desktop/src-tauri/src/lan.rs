@@ -2,7 +2,7 @@
 //!
 //! 消费 `voice-to-text-lan` 的公共 API：mDNS 发现、任务提交（4 MiB 分块上传）、
 //! 状态轮询、取消、结果取回与收集。设置持久化在应用数据目录
-//! `lan-settings.json`（原子写）；访问令牌只存本地文件，绝不打印日志。
+//! `lan-settings.json`（原子写）。
 //!
 //! 本模块的对外数据一律 snake_case（与 LAN 协议 wire 格式一致）。
 //! 转写阶段文案以稳定 key（`lan.phase.*`）返回，由前端 i18n 渲染。
@@ -19,9 +19,9 @@ use voice_to_text_core::{
     InputFile, JobLease, JobState, JobStatus, JobStore, LocalModel, Transcript, TranscriptSegment,
     transcribe_file_streaming,
 };
-use voice_to_text_lan::client::{LanClient, LanError, discover_blocking};
+use voice_to_text_lan::client::{LanClient, LanError, LocalNetworkAccess, discover_with_scan};
 use voice_to_text_lan::protocol::{
-    Capabilities, CollectReport, NodeInfo, StorageInfo, Task, TaskResult, TaskState,
+    Capabilities, CollectReport, NodeInfo, RemoteModel, StorageInfo, Task, TaskResult, TaskState,
 };
 
 use crate::{AppState, app_data_dir, apply_retention, save_transcript, unix_now_ms, update_job};
@@ -55,8 +55,9 @@ pub struct LanNodeConfig {
     pub name: String,
     pub host: String,
     pub port: u16,
-    /// 节点访问令牌。只存本地配置文件，不写日志。
-    pub token: String,
+    /// Remote model ID, independent of the client's installed models.
+    #[serde(default)]
+    pub model_id: Option<String>,
     pub enabled: bool,
 }
 
@@ -79,19 +80,20 @@ impl Default for LanSettings {
 /// 单节点探测结果。
 #[derive(Debug, Clone, Serialize)]
 pub struct LanNodeStatus {
+    pub models: Vec<RemoteModel>,
     pub reachable: bool,
     pub capabilities: Option<Capabilities>,
     pub latency_ms: Option<u64>,
     /// Storage probe result; independent from reachability.
     pub storage: Option<StorageInfo>,
-    /// Non-fatal probe problem (e.g. storage rejected the token), kept
+    /// Non-fatal probe problem (e.g. storage unavailable), kept
     /// separate so it can never overwrite a reachable node as offline.
     pub warning: Option<String>,
 }
 
 /// Assemble the node overview from independent probes. Reachability is
 /// decided by the health probe alone: a node that answers but refuses a
-/// later call (bad token, storage endpoint down) is still online, and the
+/// later call (storage endpoint down) is still online, and the
 /// caller gets the specific problem in `warning`.
 fn assemble_status(
     health: Result<bool, String>,
@@ -101,6 +103,7 @@ fn assemble_status(
 ) -> LanNodeStatus {
     if !matches!(health, Ok(true)) {
         return LanNodeStatus {
+            models: Vec::new(),
             reachable: false,
             capabilities: None,
             latency_ms: None,
@@ -110,6 +113,7 @@ fn assemble_status(
     }
     match storage {
         Ok(storage) => LanNodeStatus {
+            models: Vec::new(),
             reachable: true,
             capabilities,
             latency_ms: Some(latency_ms),
@@ -117,6 +121,7 @@ fn assemble_status(
             warning: None,
         },
         Err(warning) => LanNodeStatus {
+            models: Vec::new(),
             reachable: true,
             capabilities,
             latency_ms: Some(latency_ms),
@@ -134,7 +139,7 @@ pub struct LanProgressEvent {
     pub total: u64,
 }
 
-/// 校验设置：节点必须有 id/名称/主机/端口，且 id 不重复。错误信息不含令牌。
+/// 校验设置：节点必须有 id/名称/主机/端口，且 id 不重复。
 fn validate_lan_settings(settings: &LanSettings) -> Result<(), String> {
     let mut ids = std::collections::HashSet::new();
     for node in &settings.nodes {
@@ -273,7 +278,7 @@ fn find_node(app: &AppHandle, node_id: &str) -> Result<LanNodeConfig, String> {
 }
 
 fn client_for(node: &LanNodeConfig) -> LanClient {
-    LanClient::new(node.host.clone(), node.port, node.token.clone())
+    LanClient::new(node.host.clone(), node.port)
 }
 
 /// 单次节点请求：超时返回可读错误；`LanError` 的展示从不携带令牌。
@@ -311,13 +316,13 @@ async fn submit_upload(
     Ok(task)
 }
 
-/// 派发决策：首个通过认证且启用计算的节点（每个最多 [`NODE_TIMEOUT`]）。
+/// 派发决策：首个启用计算的可达节点（每个最多 [`NODE_TIMEOUT`]）。
 pub(crate) async fn first_reachable_node(
     settings: &LanSettings,
 ) -> Result<Option<LanNodeConfig>, String> {
     for node in enabled_nodes(settings) {
         let client = client_for(&node);
-        // A health response alone does not prove authentication or compute readiness.
+        // A health response alone does not prove compute readiness.
         if matches!(timed(client.capabilities()).await, Ok(caps) if caps.compute_enabled) {
             return Ok(Some(node));
         }
@@ -347,12 +352,36 @@ pub(crate) fn set_assignment(app: &AppHandle, mode: LanMode) -> Result<LanSettin
     Ok(settings)
 }
 
-/// mDNS 扫描局域网节点（阻塞实现放线程池，避免卡住界面）。
-pub(crate) async fn discover_nodes(timeout_ms: u32) -> Result<Vec<NodeInfo>, String> {
+/// mDNS + TCP fallback discovery (blocking part on the thread pool).
+pub(crate) async fn discover_nodes(
+    timeout_ms: u32,
+    ports: Vec<u16>,
+) -> Result<Vec<NodeInfo>, String> {
     let timeout = Duration::from_millis(u64::from(timeout_ms.clamp(500, 15_000)));
-    tauri::async_runtime::spawn_blocking(move || discover_blocking(timeout))
+    tauri::async_runtime::spawn_blocking(move || discover_with_scan(timeout, &ports))
         .await
         .map_err(|error| format!("Node discovery failed: {error}"))
+}
+
+/// 检查本进程能否访问局域网（macOS 按应用授权，未授权时界面需要提示）。
+pub(crate) fn local_access() -> LocalNetworkAccess {
+    voice_to_text_lan::client::local_network_access()
+}
+
+/// 打开 macOS「隐私与安全性 → 本地网络」设置页。
+pub(crate) fn open_local_network_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork")
+            .status()
+            .map_err(|error| format!("Cannot open System Settings: {error}"))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Local network permissions are managed by macOS.".into())
+    }
 }
 
 /// 探测一个已保存节点：可达性、能力与延迟。节点不可达不是错误。
@@ -377,12 +406,19 @@ pub(crate) async fn node_status(app: &AppHandle, node_id: &str) -> Result<LanNod
     } else {
         None
     };
-    Ok(assemble_status(
+    let mut status = assemble_status(
         health.map_err(|error| error.to_string()),
         latency_ms,
         capabilities,
         storage,
-    ))
+    );
+    if status.reachable {
+        match timed(client.models()).await {
+            Ok(models) => status.models = models,
+            Err(error) => status.warning = Some(error),
+        }
+    }
+    Ok(status)
 }
 
 /// 发送一个文件到节点并返回节点任务 id（上传进度走 `lan://progress` 事件）。
@@ -600,8 +636,8 @@ pub(crate) fn start_lan_transcription(
         job_id: status.job_id.clone(),
         source_path: input.path.clone(),
         file_name: input.file_name.clone(),
+        model_id: node.model_id.clone(),
         node,
-        model_id: local_model.as_ref().map(|model| model.id.clone()),
         local_model,
         failure: None,
         started_at_ms: status.started_at_ms.unwrap_or_default(),
@@ -839,6 +875,14 @@ mod tests {
     }
 
     #[test]
+    fn old_node_credentials_are_ignored_and_never_serialized_again() {
+        let node: LanNodeConfig = serde_json::from_str(r#"{"id":"legacy","name":"old","host":"127.0.0.1","port":7878,"enabled":true,"token":"obsolete-secret"}"#).unwrap();
+        assert_eq!(node.model_id, None);
+        let saved = serde_json::to_value(node).unwrap();
+        assert!(saved.get("token").is_none());
+    }
+
+    #[test]
     fn only_failures_fall_back_never_cancellations_or_success() {
         assert!(should_fallback(JobState::Failed, false));
         assert!(!should_fallback(JobState::Failed, true));
@@ -847,21 +891,19 @@ mod tests {
     }
 
     #[test]
-    fn automatic_dispatch_skips_compute_off_and_bad_pairing() {
+    fn automatic_dispatch_skips_compute_off_without_pairing() {
         use voice_to_text_lan::node::{NodeConfig, NodeServer};
         let root = std::env::temp_dir().join(format!("lan-dispatch-{}", uuid::Uuid::new_v4()));
         let running = NodeServer::start(NodeConfig {
             data_dir: root,
             listen: "127.0.0.1:0".parse().unwrap(),
-            token: "test-pairing".into(),
             ..NodeConfig::default()
         })
         .unwrap();
         let mut candidate = node("loopback", "test", true);
         candidate.host = "127.0.0.1".into();
         candidate.port = running.port();
-        for token in ["test-pairing", "wrong-pairing"] {
-            candidate.token = token.into();
+        {
             let settings = LanSettings {
                 mode: LanMode::PreferLan,
                 nodes: vec![candidate.clone()],
@@ -882,7 +924,7 @@ mod tests {
             name: name.to_owned(),
             host: "REDACTED-LAN-IP".to_owned(),
             port: 7878,
-            token: "secret-token".to_owned(),
+            model_id: None,
             enabled,
         }
     }

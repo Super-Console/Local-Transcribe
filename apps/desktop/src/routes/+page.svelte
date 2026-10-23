@@ -18,10 +18,13 @@
   import LanView from "$lib/components/LanView.svelte";
   import { t } from "$lib/i18n.svelte";
   import type {
+    CatalogModel,
     HistoryEntry,
     JobStatus,
     LanSettings,
+    LanNodeStatus,
     LibraryModelSummary,
+    ModelDownloadEvent,
     ModelRuntime,
     ModelSummary,
     RecordedTrack,
@@ -37,6 +40,7 @@
 
   const JOB_EVENT = "voice-to-text:job-status";
   const SEGMENT_EVENT = "voice-to-text:transcript-segment";
+  const MODEL_DOWNLOAD_EVENT = "voice-to-text:model-download";
   const OPEN_EVENT = "voice-to-text:open-media";
 
   const tauriAvailable = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -71,6 +75,8 @@
   let dropping = $state(false);
   let libraryModels = $state<LibraryModelSummary[]>([]);
   let libraryBusy = $state(false);
+  let catalog = $state<CatalogModel[]>([]);
+  let modelDownloads = $state<Record<string, ModelDownloadEvent>>({});
   let storage = $state<StorageSummary | null>(null);
   let service = $state<ServiceStatus | null>(null);
 
@@ -89,6 +95,31 @@
   let searchBusy = $state(false);
   let retention = $state<RetentionPolicy | null>(null);
   let lanSettings = $state<LanSettings | null>(null);
+  /** Models each enabled node offers, for the toolbar's grouped menu. */
+  let lanGroups = $state<
+    Array<{ id: string; name: string; models: Array<{ id: string; displayName: string }> }>
+  >([]);
+
+  const remoteSelection = $derived(
+    lanSettings?.mode === "prefer_lan"
+      ? (() => {
+          const node = lanSettings.nodes.find((entry) => entry.enabled && entry.model_id);
+          return node?.model_id ? { nodeId: node.id, modelId: node.model_id } : null;
+        })()
+      : null,
+  );
+
+  const remoteLabel = $derived(
+    remoteSelection
+      ? (() => {
+          const node = lanSettings?.nodes.find((entry) => entry.id === remoteSelection.nodeId);
+          const model = lanGroups
+            .find((group) => group.id === remoteSelection.nodeId)
+            ?.models.find((entry) => entry.id === remoteSelection.modelId);
+          return node ? `${node.name} · ${model?.displayName ?? remoteSelection.modelId}` : null;
+        })()
+      : null,
+  );
 
   const fullText = $derived(
     transcript?.text ?? segments.map((segment) => segment.text).join("\n"),
@@ -219,8 +250,52 @@
     if (!tauriAvailable) return;
     try {
       lanSettings = await invoke<LanSettings>("get_lan_settings");
+      await refreshLanGroups(lanSettings);
     } catch {
       /* 浏览器预览没有 Tauri 后端 */
+    }
+  }
+
+  /** Ask each enabled node which models it offers; failures just hide that node. */
+  async function refreshLanGroups(settings: LanSettings) {
+    const enabled = settings.nodes.filter((node) => node.enabled);
+    const groups = await Promise.all(
+      enabled.map(async (node) => {
+        try {
+          const status = await invoke<LanNodeStatus>("lan_node_status", { nodeId: node.id });
+          return {
+            id: node.id,
+            name: node.name,
+            models: status.models.map((model) => ({
+              id: model.id,
+              displayName: model.display_name,
+            })),
+          };
+        } catch {
+          return { id: node.id, name: node.name, models: [] };
+        }
+      }),
+    );
+    lanGroups = groups.filter((group) => group.models.length > 0);
+  }
+
+  /** Pick a model on a remote node: the next job goes there (LAN first, local fallback). */
+  async function selectRemoteModel(nodeId: string, modelId: string) {
+    if (!lanSettings) return;
+    libraryBusy = true;
+    try {
+      const next: LanSettings = {
+        mode: "prefer_lan",
+        nodes: lanSettings.nodes.map((node) =>
+          node.id === nodeId ? { ...node, model_id: modelId, enabled: true } : node,
+        ),
+      };
+      lanSettings = await invoke<LanSettings>("set_lan_settings", { settings: next });
+      await refreshLanGroups(lanSettings);
+    } catch (issue) {
+      error = String(issue);
+    } finally {
+      libraryBusy = false;
     }
   }
 
@@ -249,7 +324,11 @@
       void refreshLanSettings();
     }
     if (next === "lan") void refreshLanSettings();
-    if (next === "model") void refreshLibrary();
+    if (next === "home") void refreshLanSettings();
+    if (next === "model") {
+      void refreshLibrary();
+      void refreshCatalog();
+    }
   }
 
   async function loadHistory() {
@@ -380,6 +459,51 @@
     }
   }
 
+  async function refreshCatalog() {
+    if (!tauriAvailable) return;
+    try {
+      catalog = await invoke<CatalogModel[]>("model_catalog");
+    } catch (issue) {
+      error = String(issue);
+    }
+  }
+
+  async function downloadModel(id: string) {
+    try {
+      error = "";
+      modelDownloads = {
+        ...modelDownloads,
+        [id]: { id, state: "downloading", received: 0, total: 0 },
+      };
+      await invoke("download_model", { id });
+    } catch (issue) {
+      error = String(issue);
+      const { [id]: _pending, ...rest } = modelDownloads;
+      modelDownloads = rest;
+    }
+  }
+
+  async function cancelModelDownload() {
+    try {
+      await invoke("cancel_model_download");
+    } catch (issue) {
+      error = String(issue);
+    }
+  }
+
+  function applyDownloadEvent(event: ModelDownloadEvent) {
+    if (event.state === "done" || event.state === "error" || event.state === "cancelled") {
+      const { [event.id]: _finished, ...rest } = modelDownloads;
+      modelDownloads = rest;
+      if (event.state === "done") {
+        void refreshLibrary();
+        void refreshCatalog();
+      }
+      return;
+    }
+    modelDownloads = { ...modelDownloads, [event.id]: event };
+  }
+
   async function refreshService() {
     if (!tauriAvailable) return;
     try {
@@ -427,7 +551,32 @@
     libraryBusy = true;
     try {
       await invoke("select_library_model", { id });
+      // Choosing a local model means "run here": drop back to local-only if a
+      // remote model was driving the home screen.
+      if (lanSettings?.mode === "prefer_lan") {
+        lanSettings = await invoke<LanSettings>("set_lan_assignment", { mode: "local_only" });
+      }
       await Promise.all([refreshLibrary(), refreshModel()]);
+    } catch (issue) {
+      error = String(issue);
+    } finally {
+      libraryBusy = false;
+    }
+  }
+
+  async function deleteCatalogModel(entry: CatalogModel) {
+    const approved = await confirm(t("dialog.deleteModelMessage", { name: entry.name }), {
+      title: t("dialog.deleteModelTitle"),
+      kind: "warning",
+      okLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+    });
+    if (!approved) return;
+    error = "";
+    libraryBusy = true;
+    try {
+      await invoke("delete_catalog_model", { id: entry.id });
+      await Promise.all([refreshLibrary(), refreshCatalog(), refreshModel()]);
     } catch (issue) {
       error = String(issue);
     } finally {
@@ -498,6 +647,8 @@
       });
     void refreshRetention();
     void refreshLanSettings();
+    void refreshLibrary();
+    void refreshCatalog();
 
     const onKeydown = (event: KeyboardEvent) => {
       if (SIDEBAR_COLLAPSE_ENABLED && (event.metaKey || event.ctrlKey) && event.key === "\\") {
@@ -527,6 +678,9 @@
           }
         }),
         listen<SegmentEvent>(SEGMENT_EVENT, (event) => upsertSegment(event.payload)),
+        listen<ModelDownloadEvent>(MODEL_DOWNLOAD_EVENT, (event) =>
+          applyDownloadEvent(event.payload),
+        ),
         listen(OPEN_EVENT, () => void pickFile()),
         // 原生标题栏按钮（红绿灯同一行）发出的折叠开关事件。
         listen("voice-to-text:toggle-sidebar", () => toggleSidebar()),
@@ -605,9 +759,13 @@
       {model}
       models={libraryModels}
       {loadedModelId}
+      remoteGroups={lanGroups}
+      {remoteLabel}
+      {remoteSelection}
       search={searchQuery}
       onSearchChange={(value) => (searchQuery = value)}
       onSelectModel={selectModel}
+      onSelectRemote={selectRemoteModel}
       onManageModels={() => (view = "model")}
     />
     </div>
@@ -672,10 +830,15 @@
     {:else if view === "model"}
       <ModelView
         models={libraryModels}
+        {catalog}
+        downloads={modelDownloads}
         busy={libraryBusy}
         onImport={importModel}
         onSelect={selectModel}
         onDelete={deleteModel}
+        onDeleteCatalog={deleteCatalogModel}
+        onDownload={downloadModel}
+        onCancelDownload={cancelModelDownload}
       />
     {:else if view === "lan"}
       <LanView

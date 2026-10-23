@@ -42,7 +42,6 @@ impl Default for HostStatus {
 struct HostedNode {
     node: RunningNode,
     status: HostStatus,
-    token: String,
 }
 
 #[derive(Default)]
@@ -59,15 +58,7 @@ impl HostState {
             .unwrap_or_default())
     }
 
-    pub fn token(&self) -> Result<String, String> {
-        self.0
-            .lock()
-            .map_err(|_| "Node state unavailable.")?
-            .as_ref()
-            .map(|host| host.token.clone())
-            .ok_or_else(|| "Start sharing first.".into())
-    }
-
+    #[cfg(test)]
     pub fn start(
         &self,
         root: &Path,
@@ -75,6 +66,17 @@ impl HostState {
         address: String,
         port: u16,
         model: LocalModel,
+    ) -> Result<HostStatus, String> {
+        self.start_models(root, name, address, port, vec![model])
+    }
+
+    pub fn start_models(
+        &self,
+        root: &Path,
+        name: String,
+        address: String,
+        port: u16,
+        models: Vec<LocalModel>,
     ) -> Result<HostStatus, String> {
         let mut current = self.0.lock().map_err(|_| "Node state unavailable.")?;
         if current.is_some() {
@@ -89,19 +91,23 @@ impl HostState {
             .ok_or("Choose a currently connected private LAN interface.")?;
         let data_dir = root.join("lan-host");
         std::fs::create_dir_all(&data_dir).map_err(|_| "Cannot prepare node storage.")?;
-        let token = pairing_token(&data_dir)?;
-        let node = NodeServer::start_on_lan(
+        let model_names = models
+            .iter()
+            .map(|model| model.display_name.clone())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let node = NodeServer::start_on_lan_with_models(
             NodeConfig {
                 name: name.trim().into(),
                 data_dir,
                 listen: (interface.address, port).into(),
-                token: token.clone(),
                 compute_enabled: true,
                 role: "cpu".into(),
-                model_dir: Some(model.directory.clone()),
+                model_dir: None,
                 media_root: None,
             },
             interface.mask,
+            models,
         )
         .map_err(|error| error.to_string())?;
         let status = HostStatus {
@@ -110,12 +116,11 @@ impl HostState {
             name: name.trim().into(),
             address,
             port: node.port(),
-            model: model.display_name,
+            model: model_names,
         };
         *current = Some(HostedNode {
             node,
             status: status.clone(),
-            token,
         });
         Ok(status)
     }
@@ -135,51 +140,6 @@ impl Drop for HostState {
     fn drop(&mut self) {
         let _ = self.stop();
     }
-}
-
-#[cfg(target_os = "macos")]
-fn pairing_token(directory: &Path) -> Result<String, String> {
-    use std::{
-        io::Write,
-        os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    };
-    let path = directory.join("pairing-token");
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&path)
-    {
-        Ok(mut file) => {
-            let token = format!(
-                "{}{}",
-                uuid::Uuid::new_v4().simple(),
-                uuid::Uuid::new_v4().simple()
-            );
-            file.write_all(token.as_bytes())
-                .map_err(|_| "Cannot save pairing token.")?;
-            file.sync_all().map_err(|_| "Cannot save pairing token.")?;
-            Ok(token)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let metadata =
-                std::fs::symlink_metadata(&path).map_err(|_| "Cannot inspect pairing token.")?;
-            if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-                return Err("Pairing token must be an owner-only regular file.".into());
-            }
-            let token = std::fs::read_to_string(path).map_err(|_| "Cannot read pairing token.")?;
-            if token.len() != 64 || !token.bytes().all(|c| c.is_ascii_hexdigit()) {
-                return Err("Invalid saved pairing token.".into());
-            }
-            Ok(token)
-        }
-        Err(_) => Err("Cannot create pairing token.".into()),
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn pairing_token(_directory: &Path) -> Result<String, String> {
-    Err("Desktop sharing is currently available on macOS only.".into())
 }
 
 #[cfg(target_os = "macos")]
@@ -247,27 +207,8 @@ mod tests {
     fn sharing_is_off_by_default_and_stop_is_idempotent() {
         let state = HostState::default();
         assert!(!state.status().unwrap().running);
-        assert!(state.token().is_err());
         assert!(!state.stop().unwrap().running);
         assert!(!state.stop().unwrap().running);
-    }
-
-    #[test]
-    fn token_is_private_and_stable_across_restarts() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(format!("lan-token-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let first = pairing_token(&root).unwrap();
-        assert_eq!(first.len(), 64);
-        assert_eq!(first, pairing_token(&root).unwrap());
-        let metadata = std::fs::metadata(root.join("pairing-token")).unwrap();
-        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-        std::fs::set_permissions(
-            root.join("pairing-token"),
-            std::fs::Permissions::from_mode(0o644),
-        )
-        .unwrap();
-        assert!(pairing_token(&root).is_err());
     }
 
     #[test]
@@ -314,7 +255,6 @@ mod tests {
             std::time::Duration::from_secs(3),
         )
         .expect("the newly bound private-address socket must accept a TCP connection");
-        let token = state.token().unwrap();
         assert!(
             state
                 .start(
@@ -326,16 +266,11 @@ mod tests {
                 )
                 .is_err()
         );
-        let client = LanClient::new(interface.address.to_string(), port, token.clone());
+        let client = LanClient::new(interface.address.to_string(), port);
         tauri::async_runtime::block_on(async {
             assert!(client.health().await.unwrap());
             assert!(client.capabilities().await.unwrap().compute_enabled);
-            assert!(
-                LanClient::new(interface.address.to_string(), port, "wrong".into())
-                    .capabilities()
-                    .await
-                    .is_err()
-            );
+            assert_eq!(client.models().await.unwrap().len(), 1);
         });
         assert!(!state.stop().unwrap().running);
         assert!(
@@ -371,7 +306,7 @@ mod tests {
                 .unwrap()
                 .running
         );
-        assert_eq!(state.token().unwrap(), token);
+        assert!(!root.join("lan-host/pairing-token").exists());
         state.stop().unwrap();
     }
 
@@ -408,7 +343,7 @@ mod tests {
                 model,
             )
             .unwrap();
-        let client = LanClient::new(interface.address.to_string(), port, state.token().unwrap());
+        let client = LanClient::new(interface.address.to_string(), port);
         tauri::async_runtime::block_on(async {
             let task = client
                 .create_task("fixture.wav", original.len() as u64, 1, None)

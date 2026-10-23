@@ -46,11 +46,7 @@ async fn lan_client_bypasses_ambient_proxy_env() {
     std::env::set_var("no_proxy", "example.invalid");
 
     let (addr, handle) = health_server().await;
-    let client = voice_to_text_lan::client::LanClient::new(
-        addr.ip().to_string(),
-        addr.port(),
-        String::new(),
-    );
+    let client = voice_to_text_lan::client::LanClient::new(addr.ip().to_string(), addr.port());
     // A hanging proxy connect must not hang the test; treat it as failure.
     let result =
         match tokio::time::timeout(std::time::Duration::from_secs(5), client.health()).await {

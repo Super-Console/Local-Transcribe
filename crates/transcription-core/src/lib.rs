@@ -3,11 +3,13 @@ mod input_file;
 mod jobs;
 mod library;
 mod media;
+mod punctuation;
 
 pub use asr::{
     idle_unload_seconds, inspect_model_directory, loaded_model_id, transcribe_file,
-    transcribe_file_cancellable, transcribe_file_streaming, LocalModel, ModelFamily, ModelFiles,
-    TranscriptionProgress, TranscriptionSegmentUpdate,
+    transcribe_file_cancellable, transcribe_file_streaming, transcribe_file_streaming_with_options,
+    LocalModel, ModelFamily, ModelFiles, TranscriptionOptions, TranscriptionProgress,
+    TranscriptionSegmentUpdate,
 };
 pub use input_file::{InputFile, InputFileError};
 pub use jobs::{JobLease, JobState, JobStatus, JobStore};

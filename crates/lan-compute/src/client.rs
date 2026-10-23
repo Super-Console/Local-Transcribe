@@ -4,14 +4,18 @@
 //! [`crate::protocol`]. Discovery uses mDNS/DNS-SD and never touches the
 //! network beyond the local segment.
 
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
-    Capabilities, CollectReport, NodeInfo, StorageInfo, Task, TaskResult, UploadProgress,
-    MDNS_SERVICE_TYPE, TXT_COMPUTE, TXT_COMPUTE_ON, TXT_MODEL, TXT_NAME, TXT_ROLE, TXT_VER,
+    Capabilities, CollectReport, NodeInfo, RemoteModel, StorageInfo, Task, TaskResult,
+    UploadProgress, MDNS_SERVICE_TYPE, TXT_COMPUTE, TXT_COMPUTE_ON, TXT_MODEL, TXT_NAME, TXT_ROLE,
+    TXT_VER,
 };
 
 /// Failure reported by [`LanClient`]. Never carries credentials.
@@ -50,10 +54,9 @@ pub fn ensure_crypto_provider() {
     }
 }
 
-/// HTTP client for one node: `http://<host>:<port>` plus the bearer token.
+/// Direct HTTP client for a user-selected LAN node.
 pub struct LanClient {
     base_url: String,
-    token: String,
     http: reqwest::Client,
 }
 
@@ -61,7 +64,6 @@ impl std::fmt::Debug for LanClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LanClient")
             .field("base_url", &self.base_url)
-            .field("token", &"[REDACTED]")
             .finish()
     }
 }
@@ -74,11 +76,10 @@ impl LanClient {
     /// addresses (100.x / 192.168.x). Nodes are only ever reached on the local
     /// network, so environment proxies are unconditionally bypassed; see the
     /// `proxy_policy` integration test.
-    pub fn new(host: impl Into<String>, port: u16, token: String) -> Self {
+    pub fn new(host: impl Into<String>, port: u16) -> Self {
         ensure_crypto_provider();
         Self {
             base_url: format!("http://{}:{}", host.into(), port),
-            token,
             http: reqwest::Client::builder()
                 .no_proxy()
                 .connect_timeout(std::time::Duration::from_secs(3))
@@ -99,6 +100,10 @@ impl LanClient {
         self.get_json("/api/v1/capabilities").await
     }
 
+    pub async fn models(&self) -> Result<Vec<RemoteModel>, LanError> {
+        self.get_json("/api/v1/models").await
+    }
+
     /// `POST /api/v1/tasks`: register a task in `file_transferring` state.
     pub async fn create_task(
         &self,
@@ -116,7 +121,6 @@ impl LanClient {
         let request = self
             .http
             .post(format!("{}/api/v1/tasks", self.base_url))
-            .bearer_auth(&self.token)
             .json(&body);
         let response = request.send().await.map_err(network_error)?;
         parse_json(response).await
@@ -171,7 +175,6 @@ impl LanClient {
                     "{}/api/v1/tasks/{}/files/content",
                     self.base_url, task_id
                 ))
-                .bearer_auth(&self.token)
                 .query(&[("offset", offset)])
                 .body(buffer[..filled].to_vec())
                 .send()
@@ -204,8 +207,7 @@ impl LanClient {
     pub async fn cancel(&self, task_id: &str) -> Result<Task, LanError> {
         let request = self
             .http
-            .post(format!("{}/api/v1/tasks/{}/cancel", self.base_url, task_id))
-            .bearer_auth(&self.token);
+            .post(format!("{}/api/v1/tasks/{}/cancel", self.base_url, task_id));
         let response = request.send().await.map_err(network_error)?;
         parse_json(response).await
     }
@@ -222,7 +224,6 @@ impl LanClient {
         let request = self
             .http
             .post(format!("{}/api/v1/collect", self.base_url))
-            .bearer_auth(&self.token)
             .json(&body);
         let response = request.send().await.map_err(network_error)?;
         parse_json(response).await
@@ -240,10 +241,7 @@ impl LanClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, LanError> {
-        let request = self
-            .http
-            .get(format!("{}{}", self.base_url, path))
-            .bearer_auth(&self.token);
+        let request = self.http.get(format!("{}{}", self.base_url, path));
         let response = request.send().await.map_err(network_error)?;
         parse_json(response).await
     }
@@ -323,6 +321,209 @@ pub async fn discover(timeout: Duration) -> Vec<NodeInfo> {
         .unwrap_or_default()
 }
 
+/// Whether this process may use the local network.
+///
+/// macOS gates local network access per app; until it is granted, packets to
+/// the local segment (mDNS included) fail with `EHOSTUNREACH`/`EPERM`. The
+/// probe lets the UI say so instead of silently showing an empty list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalNetworkAccess {
+    Granted,
+    Denied,
+    NoNetwork,
+}
+
+/// Classify a failed local-network send.
+///
+/// `HostUnreachable` is how macOS reports both "permission not granted" and
+/// "no route to that host"; the UI only uses this to show a hint, so treating
+/// it as denied is the useful reading.
+pub fn classify_local_network_error(error: &std::io::Error) -> LocalNetworkAccess {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::PermissionDenied | ErrorKind::HostUnreachable => LocalNetworkAccess::Denied,
+        _ => LocalNetworkAccess::NoNetwork,
+    }
+}
+
+/// Send one throwaway multicast datagram to see whether the local network is
+/// reachable from this process. The packet carries no protocol meaning.
+pub fn local_network_access() -> LocalNetworkAccess {
+    let Ok(socket) = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)) else {
+        return LocalNetworkAccess::NoNetwork;
+    };
+    let _ = socket.set_multicast_ttl_v4(1);
+    let _ = socket.set_multicast_loop_v4(false);
+    match socket.send_to(&[0u8; 1], (Ipv4Addr::new(224, 0, 0, 251), 5353)) {
+        Ok(_) => LocalNetworkAccess::Granted,
+        Err(error) => classify_local_network_error(&error),
+    }
+}
+
+/// Port a node listens on unless the user picked another one.
+pub const DEFAULT_NODE_PORT: u16 = 7878;
+
+/// Discovery with a TCP fallback.
+///
+/// mDNS is tried first because it carries the node name, port and model in one
+/// answer. Many networks — and some hosts whose network stack blocks multicast
+/// for ordinary processes — never deliver those packets, so the remaining time
+/// is spent probing the local /24 over TCP. The TCP path only speaks
+/// `/api/v1/capabilities`, so it works with any node the protocol supports and
+/// needs no platform-specific API.
+pub fn discover_with_scan(timeout: Duration, extra_ports: &[u16]) -> Vec<NodeInfo> {
+    let started = Instant::now();
+    let mut ports = vec![DEFAULT_NODE_PORT];
+    for port in extra_ports {
+        if !ports.contains(port) {
+            ports.push(*port);
+        }
+    }
+
+    let scanned = match local_scan_hosts() {
+        Some(hosts) => scan_blocking(
+            &hosts,
+            &ports,
+            Duration::from_millis(250),
+            Duration::from_millis(800),
+        ),
+        None => Vec::new(),
+    };
+
+    let remaining = timeout.saturating_sub(started.elapsed());
+    let mdns = if remaining >= Duration::from_millis(300) {
+        discover_blocking(remaining)
+    } else {
+        Vec::new()
+    };
+
+    merge_discovered(mdns, scanned)
+}
+
+/// mDNS results win; TCP results only fill in hosts mDNS did not report.
+pub fn merge_discovered(mdns: Vec<NodeInfo>, scanned: Vec<NodeInfo>) -> Vec<NodeInfo> {
+    let mut merged = mdns;
+    for node in scanned {
+        if !merged
+            .iter()
+            .any(|known| known.host == node.host && known.port == node.port)
+        {
+            merged.push(node);
+        }
+    }
+    merged
+}
+
+/// Hosts of the local /24, excluding this machine.
+///
+/// The prefix length is not read here: a UDP `connect` only asks the routing
+/// table which source address would be used, which keeps this cross-platform
+/// and dependency free. /24 matches every home and small-office LAN the app
+/// targets; wider networks simply get a partial scan.
+pub fn local_scan_hosts() -> Option<Vec<Ipv4Addr>> {
+    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    socket.connect((Ipv4Addr::new(1, 1, 1, 1), 53)).ok()?;
+    let local = match socket.local_addr().ok()? {
+        SocketAddr::V4(address) => *address.ip(),
+        SocketAddr::V6(_) => return None,
+    };
+    if !local.is_private() {
+        return None;
+    }
+    let octets = local.octets();
+    let mut hosts = Vec::with_capacity(255);
+    for last in 1u8..=254 {
+        let host = Ipv4Addr::new(octets[0], octets[1], octets[2], last);
+        if host != local {
+            hosts.push(host);
+        }
+    }
+    Some(hosts)
+}
+
+/// Probe `hosts` × `ports` in parallel and keep whoever answers as a node.
+pub fn scan_blocking(
+    hosts: &[Ipv4Addr],
+    ports: &[u16],
+    connect_timeout: Duration,
+    response_timeout: Duration,
+) -> Vec<NodeInfo> {
+    let targets: Vec<(Ipv4Addr, u16)> = hosts
+        .iter()
+        .flat_map(|host| ports.iter().map(move |port| (*host, *port)))
+        .collect();
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let workers = targets.len().min(64);
+    let queue = std::sync::Mutex::new(targets);
+    let found = std::sync::Mutex::new(Vec::new());
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let next = queue.lock().ok().and_then(|mut queue| queue.pop());
+                let Some((host, port)) = next else { break };
+                if let Some(node) = probe_node(host, port, connect_timeout, response_timeout) {
+                    if let Ok(mut found) = found.lock() {
+                        found.push(node);
+                    }
+                }
+            });
+        }
+    });
+
+    let mut found = found.into_inner().unwrap_or_default();
+    found.sort_by_key(|node| (node.host.clone(), node.port));
+    found
+}
+
+fn probe_node(
+    host: Ipv4Addr,
+    port: u16,
+    connect_timeout: Duration,
+    response_timeout: Duration,
+) -> Option<NodeInfo> {
+    let address = SocketAddr::from((host, port));
+    let mut stream = TcpStream::connect_timeout(&address, connect_timeout).ok()?;
+    stream.set_read_timeout(Some(response_timeout)).ok()?;
+    stream.set_write_timeout(Some(response_timeout)).ok()?;
+    let request = format!(
+        "GET /api/v1/capabilities HTTP/1.1\r\nHost: {host}:{port}\r\nAccept: application/json\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut response = Vec::new();
+    (&mut stream)
+        .take(64 * 1024)
+        .read_to_end(&mut response)
+        .ok()?;
+    let text = String::from_utf8_lossy(&response);
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    if !head.starts_with("HTTP/1.") || !head.lines().next()?.contains(" 200") {
+        return None;
+    }
+    let start = body.find('{')?;
+    let json = &body[start..];
+    let end = json.rfind('}')?;
+    let capabilities: Capabilities = serde_json::from_str(&json[..=end]).ok()?;
+    let name = if capabilities.name.trim().is_empty() {
+        host.to_string()
+    } else {
+        capabilities.name
+    };
+    Some(NodeInfo {
+        name,
+        host: host.to_string(),
+        port,
+        proto_version: capabilities.proto_version,
+        compute_enabled: capabilities.compute_enabled,
+        role: capabilities.role,
+        model_id: capabilities.model_id,
+    })
+}
+
 fn node_info_from_resolved(info: &mdns_sd::ResolvedService) -> NodeInfo {
     let properties = info.get_properties();
     let name = properties
@@ -348,15 +549,12 @@ fn node_info_from_resolved(info: &mdns_sd::ResolvedService) -> NodeInfo {
         .get_property_val_str(TXT_MODEL)
         .filter(|value| *value != "none")
         .map(str::to_owned);
-    let mut host = info.get_hostname().trim_end_matches('.').to_owned();
-    if host.is_empty() {
-        host = info
-            .get_addresses_v4()
-            .iter()
-            .next()
-            .map(|addr| addr.to_string())
-            .unwrap_or_default();
-    }
+    let host = info
+        .get_addresses_v4()
+        .iter()
+        .next()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|| info.get_hostname().trim_end_matches('.').to_owned());
     NodeInfo {
         name,
         host,
@@ -392,7 +590,9 @@ mod tests {
         let resolved = info.as_resolved_service();
         let node = node_info_from_resolved(&resolved);
         assert_eq!(node.name, "study-room");
-        assert_eq!(node.host, "study-room.local");
+        // Use the resolved address, not a second system-resolver lookup of a
+        // synthetic hostname (which can collide between two default-named Macs).
+        assert_eq!(node.host, "192.0.2.10");
         assert_eq!(node.port, 7878);
         assert_eq!(node.proto_version, 1);
         assert!(node.compute_enabled);

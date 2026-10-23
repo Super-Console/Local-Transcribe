@@ -22,13 +22,12 @@ fn start_node(
     compute: bool,
     model_dir: Option<PathBuf>,
     media_root: Option<PathBuf>,
-    token: &str,
+    _legacy_token: &str,
 ) -> RunningNode {
     let config = NodeConfig {
         name: "test-node".to_owned(),
         data_dir: dir.join("data"),
         listen: "127.0.0.1:0".parse().expect("listen addr"),
-        token: token.to_owned(),
         compute_enabled: compute,
         role: "auto".to_owned(),
         model_dir,
@@ -42,18 +41,16 @@ fn base_url(node: &RunningNode) -> String {
 }
 
 #[test]
-fn node_rejects_empty_pairing_token() {
+fn node_starts_without_pairing_token() {
     let dir = scratch("empty-token");
     let result = NodeServer::start(NodeConfig {
         listen: "127.0.0.1:0".parse().unwrap(),
         data_dir: dir,
         ..NodeConfig::default()
     });
-    if let Ok(node) = result {
-        node.shutdown();
-        node.wait();
-        panic!("an empty pairing token must not open a listener");
-    }
+    let node = result.expect("credentials are not required");
+    node.shutdown();
+    node.wait();
 }
 
 #[test]
@@ -88,7 +85,7 @@ async fn compute_node_rejects_a_different_model_before_media_upload() {
     std::fs::write(model_dir.join("model.onnx"), b"layout-only fixture").unwrap();
     std::fs::write(model_dir.join("tokens.txt"), b"a 1\n").unwrap();
     let node = start_node(&dir, true, Some(model_dir), None, "model-token");
-    let client = LanClient::new("127.0.0.1", node.port(), "model-token".into());
+    let client = LanClient::new("127.0.0.1", node.port());
     let result = client
         .create_task("test.wav", 100, 1, Some("a-different-model"))
         .await;
@@ -105,7 +102,7 @@ async fn full_lifecycle_upload_resume_cancel_and_result_gate() {
     let dir = scratch("lifecycle");
     let token = "secret-token-1";
     let node = start_node(&dir, false, None, None, token);
-    let client = LanClient::new("127.0.0.1", node.port(), token.to_owned());
+    let client = LanClient::new("127.0.0.1", node.port());
 
     assert!(client.health().await.expect("health"));
     let caps = client.capabilities().await.expect("capabilities");
@@ -217,7 +214,7 @@ async fn full_lifecycle_upload_resume_cancel_and_result_gate() {
 }
 
 #[tokio::test]
-async fn protected_endpoints_require_the_bearer_token() {
+async fn endpoints_do_not_require_or_validate_legacy_credentials() {
     let dir = scratch("auth");
     let token = "secret-token-2";
     let node = start_node(&dir, false, None, None, token);
@@ -225,7 +222,7 @@ async fn protected_endpoints_require_the_bearer_token() {
     let http = reqwest::Client::new();
 
     let response = http.get(&url).send().await.expect("no token request");
-    assert_eq!(response.status().as_u16(), 401, "missing token must be 401");
+    assert_eq!(response.status().as_u16(), 200, "no credentials needed");
 
     let response = http
         .get(&url)
@@ -233,7 +230,11 @@ async fn protected_endpoints_require_the_bearer_token() {
         .send()
         .await
         .expect("wrong token request");
-    assert_eq!(response.status().as_u16(), 401, "wrong token must be 401");
+    assert_eq!(
+        response.status().as_u16(),
+        200,
+        "legacy credentials are ignored"
+    );
 
     let response = http
         .get(format!("{}/api/v1/health", base_url(&node)))
@@ -254,7 +255,7 @@ async fn collect_rejects_output_outside_the_media_root() {
     std::fs::create_dir_all(&media_root).expect("media root");
     let token = "secret-token-3";
     let node = start_node(&dir, false, None, Some(media_root.clone()), token);
-    let client = LanClient::new("127.0.0.1", node.port(), token.to_owned());
+    let client = LanClient::new("127.0.0.1", node.port());
 
     let outside = dir.join("outside").to_string_lossy().into_owned();
     let err = client.collect(&outside).await.expect_err("outside root");
@@ -317,7 +318,7 @@ async fn collect_exports_completed_task_with_dataset_zip() {
 
     let token = "secret-token-4";
     let node = start_node(&dir, false, None, Some(media_root.clone()), token);
-    let client = LanClient::new("127.0.0.1", node.port(), token.to_owned());
+    let client = LanClient::new("127.0.0.1", node.port());
 
     let export_dir = media_root.join("export");
     let report = client
@@ -379,14 +380,11 @@ async fn collect_exports_completed_task_with_dataset_zip() {
 #[tokio::test]
 async fn debug_output_never_contains_the_token() {
     let token = "top-secret-token-value";
-    let config = NodeConfig {
-        token: token.to_owned(),
-        ..Default::default()
-    };
+    let config = NodeConfig::default();
     assert!(!format!("{config:?}").contains(token));
     assert!(!format!("{config:#?}").contains(token));
 
-    let client = LanClient::new("127.0.0.1", 9, token.to_owned());
+    let client = LanClient::new("127.0.0.1", 9);
     assert!(!format!("{client:?}").contains(token));
     let _ = &client;
 }
@@ -403,7 +401,7 @@ async fn compute_node_transcribes_uploaded_media() {
     let dir = scratch("compute");
     let token = "secret-token-5";
     let node = start_node(&dir, true, Some(model_dir), None, token);
-    let client = LanClient::new("127.0.0.1", node.port(), token.to_owned());
+    let client = LanClient::new("127.0.0.1", node.port());
 
     let size = std::fs::metadata(&media).expect("media metadata").len();
     let file_name = media

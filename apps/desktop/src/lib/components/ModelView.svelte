@@ -1,20 +1,30 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import { t } from "$lib/i18n.svelte";
-  import type { LibraryModelSummary } from "$lib/types";
+  import type { CatalogModel, LibraryModelSummary, ModelDownloadEvent } from "$lib/types";
 
   let {
     models,
+    catalog,
+    downloads,
     busy,
     onImport,
     onSelect,
     onDelete,
+    onDeleteCatalog,
+    onDownload,
+    onCancelDownload,
   }: {
     models: LibraryModelSummary[];
+    catalog: CatalogModel[];
+    downloads: Record<string, ModelDownloadEvent>;
     busy: boolean;
     onImport: () => void;
     onSelect: (id: string) => void;
     onDelete: (model: LibraryModelSummary) => void;
+    onDeleteCatalog: (entry: CatalogModel) => void;
+    onDownload: (id: string) => void;
+    onCancelDownload: () => void;
   } = $props();
 
   function sizeLabel(bytes: number): string {
@@ -34,6 +44,67 @@
       <Icon name="plus" size={12} stroke={1.8} />{t("model.import")}
     </button>
   </div>
+
+  {#if catalog.length > 0}
+    <div class="list catalog">
+      <div class="section-label">{t("model.downloadTitle")}</div>
+      {#each catalog as entry (entry.id)}
+        {@const dl = downloads[entry.id]}
+        {@const active = !!dl && (dl.state === "downloading" || dl.state === "installing")}
+        {@const percent =
+          dl && dl.total > 0 ? Math.min(99, Math.round((dl.received / dl.total) * 100)) : 0}
+        <div class="row">
+          <div class="body">
+            <div class="name">
+              {entry.name}
+              {#if entry.kind === "punctuation"}
+                <span class="tag">{t("model.punctuationTag")}</span>
+              {/if}
+            </div>
+            <div class="meta">
+              <span>{entry.family}</span>
+              <span class="sep">·</span>
+              <span>{sizeLabel(entry.bytes)}</span>
+              {#if active}
+                <span class="sep">·</span>
+                <span>{dl?.state === "installing" ? t("model.installing") : `${percent}%`}</span>
+              {/if}
+            </div>
+            {#if dl?.state === "error" && dl.error}
+              <div class="error-line">{dl.error}</div>
+              <div class="error-line hint">{t("model.downloadNetworkHint")}</div>
+            {/if}
+            {#if active}
+              <div class="progress">
+                <div class="progress-fill" style:width={`${percent}%`}></div>
+              </div>
+            {/if}
+          </div>
+          <div class="row-actions">
+            {#if entry.installed}
+              <span class="hint">{t("model.downloaded")}</span>
+              <button
+                type="button"
+                class="act danger"
+                onclick={() => onDeleteCatalog(entry)}
+                disabled={busy}
+              >
+                {t("common.delete")}
+              </button>
+            {:else if active}
+              <button type="button" class="act" onclick={onCancelDownload}>
+                {t("model.downloadCancel")}
+              </button>
+            {:else}
+              <button type="button" class="act" onclick={() => onDownload(entry.id)} disabled={busy}>
+                {t("model.download")}
+              </button>
+            {/if}
+          </div>
+        </div>
+      {/each}
+    </div>
+  {/if}
 
   {#if models.length === 0}
     <div class="empty">
@@ -67,12 +138,12 @@
               <button type="button" class="act" onclick={() => onSelect(model.id)} disabled={busy}>
                 {t("model.setDefault")}
               </button>
-              <button type="button" class="act danger" onclick={() => onDelete(model)} disabled={busy}>
-                {t("common.delete")}
-              </button>
             {:else}
               <span class="hint">{t("model.currentDefault")}</span>
             {/if}
+            <button type="button" class="act danger" onclick={() => onDelete(model)} disabled={busy}>
+              {t("common.delete")}
+            </button>
           </div>
         </div>
       {/each}
@@ -150,6 +221,39 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .list.catalog {
+    margin-bottom: 26px;
+  }
+
+  .section-label {
+    margin: 2px 4px 2px;
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--text-3);
+  }
+
+  .error-line {
+    margin-top: 4px;
+    font-size: 12.5px;
+    color: var(--red);
+    line-height: 1.5;
+  }
+
+  .progress {
+    margin-top: 8px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--sunken);
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--text);
+    transition: width var(--speed-fast) var(--ease-out);
   }
 
   .row {

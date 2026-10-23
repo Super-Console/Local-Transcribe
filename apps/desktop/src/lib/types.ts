@@ -31,6 +31,24 @@ export type LibraryModelSummary = {
   selected: boolean;
 };
 
+export type CatalogModel = {
+  id: string;
+  name: string;
+  family: string;
+  kind: "asr" | "punctuation";
+  bytes: number;
+  installed: boolean;
+};
+
+export type ModelDownloadEvent = {
+  id: string;
+  state: "downloading" | "installing" | "done" | "error" | "cancelled";
+  received: number;
+  total: number;
+  error?: string;
+  libraryId?: string;
+};
+
 export type StorageSummary = {
   libraryPath: string;
   libraryBytes: number;
@@ -141,7 +159,7 @@ export type LanNodeConfig = {
   name: string;
   host: string;
   port: number;
-  token: string;
+  model_id?: string | null;
   enabled: boolean;
 };
 
@@ -170,12 +188,13 @@ export type LanCapabilities = {
 };
 
 export type LanNodeStatus = {
+  models: { id: string; display_name: string }[];
   reachable: boolean;
   capabilities: LanCapabilities | null;
   latency_ms: number | null;
   /** Storage probe result; independent from reachability. */
   storage: LanStorageInfo | null;
-  /** Non-fatal probe problem (e.g. storage rejected the token). */
+  /** Non-fatal probe problem (e.g. storage unavailable). */
   warning: string | null;
 };
 

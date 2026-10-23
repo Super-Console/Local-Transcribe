@@ -1,10 +1,8 @@
 //! LAN compute node: HTTP API, mDNS announcement and the serial
 //! transcription worker.
 //!
-//! Network surface: one HTTP listener (LAN-reachable) where every route
-//! except `/api/v1/health` requires `Authorization: Bearer <token>` compared
-//! in constant time, plus an optional mDNS announcement. The token is never
-//! logged and never appears in `Debug` output.
+//! User-enabled trusted-LAN HTTP listener, with optional mDNS announcement.
+//! Desktop sharing is bound and scoped to the selected private subnet.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -15,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, State};
-use axum::http::{header, Request, StatusCode};
+use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -27,9 +25,10 @@ use tokio::sync::Notify;
 use voice_to_text_core::{inspect_model_directory, transcribe_file_cancellable, LocalModel};
 
 use crate::protocol::{
-    ApiError, Capabilities, CollectReport, Segment, StorageInfo, Task, TaskError, TaskResult,
-    TaskState, UploadProgress, MAX_UPLOAD_CHUNK_BYTES, MDNS_SERVICE_TYPE, PROTOCOL_VERSION,
-    TXT_COMPUTE, TXT_COMPUTE_OFF, TXT_COMPUTE_ON, TXT_MODEL, TXT_NAME, TXT_ROLE, TXT_VER,
+    ApiError, Capabilities, CollectReport, RemoteModel, Segment, StorageInfo, Task, TaskError,
+    TaskResult, TaskState, UploadProgress, MAX_UPLOAD_CHUNK_BYTES, MDNS_SERVICE_TYPE,
+    PROTOCOL_VERSION, TXT_COMPUTE, TXT_COMPUTE_OFF, TXT_COMPUTE_ON, TXT_MODEL, TXT_NAME, TXT_ROLE,
+    TXT_VER,
 };
 use crate::store::{StoreError, TaskStore};
 
@@ -50,8 +49,6 @@ pub struct NodeConfig {
     pub data_dir: PathBuf,
     /// Bind address; port `0` picks a free port reported by [`RunningNode::port`].
     pub listen: SocketAddr,
-    /// Bearer token required on every route except `/api/v1/health`.
-    pub token: String,
     /// Whether this node transcribes locally (`Queued` -> `Completed`).
     pub compute_enabled: bool,
     /// Compute role advertised to peers: `"gpu"`, `"cpu"` or `"auto"`.
@@ -68,7 +65,6 @@ impl Default for NodeConfig {
             name: "local-transcribe-node".to_owned(),
             data_dir: PathBuf::from("local-transcribe-data"),
             listen: SocketAddr::from(([0, 0, 0, 0], 0)),
-            token: String::new(),
             compute_enabled: false,
             role: "auto".to_owned(),
             model_dir: None,
@@ -83,7 +79,6 @@ impl std::fmt::Debug for NodeConfig {
             .field("name", &self.name)
             .field("data_dir", &self.data_dir)
             .field("listen", &self.listen)
-            .field("token", &"[REDACTED]")
             .field("compute_enabled", &self.compute_enabled)
             .field("role", &self.role)
             .field("model_dir", &self.model_dir)
@@ -92,7 +87,7 @@ impl std::fmt::Debug for NodeConfig {
     }
 }
 
-/// Failure raised while starting the node. Never contains the token.
+/// Failure raised while starting the node.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {
     #[error("invalid node configuration: {0}")]
@@ -158,7 +153,7 @@ impl NodeServer {
     /// Validate the configuration, bind the listener, start the compute
     /// worker and (for non-loopback listeners) announce over mDNS.
     pub fn start(config: NodeConfig) -> Result<RunningNode, NodeError> {
-        Self::start_scoped(config, None)
+        Self::start_scoped(config, None, Vec::new())
     }
 
     /// Desktop sharing: bind one RFC1918 interface and reject peers outside
@@ -170,27 +165,54 @@ impl NodeServer {
             ));
         };
         let scope = LanScope::new(address, mask)?;
-        Self::start_scoped(config, Some(scope))
+        Self::start_scoped(config, Some(scope), Vec::new())
     }
 
-    fn start_scoped(config: NodeConfig, scope: Option<LanScope>) -> Result<RunningNode, NodeError> {
-        if config.token.trim().is_empty() {
+    /// Desktop exports its validated library, not arbitrary filesystem paths.
+    pub fn start_on_lan_with_models(
+        config: NodeConfig,
+        mask: Ipv4Addr,
+        models: Vec<LocalModel>,
+    ) -> Result<RunningNode, NodeError> {
+        let IpAddr::V4(address) = config.listen.ip() else {
             return Err(NodeError::Configuration(
-                "A pairing token is required.".into(),
+                "Choose a private IPv4 interface.".into(),
+            ));
+        };
+        Self::start_scoped(config, Some(LanScope::new(address, mask)?), models)
+    }
+
+    pub fn start_with_models(
+        config: NodeConfig,
+        models: Vec<LocalModel>,
+    ) -> Result<RunningNode, NodeError> {
+        Self::start_scoped(config, None, models)
+    }
+
+    fn start_scoped(
+        config: NodeConfig,
+        scope: Option<LanScope>,
+        mut models: Vec<LocalModel>,
+    ) -> Result<RunningNode, NodeError> {
+        if let Some(directory) = &config.model_dir {
+            let model = inspect_model_directory(directory).map_err(NodeError::Model)?;
+            models.retain(|entry| entry.id != model.id);
+            models.insert(0, model);
+        }
+        if config.compute_enabled && models.is_empty() {
+            return Err(NodeError::Model(
+                "No installed model is available for sharing.".into(),
             ));
         }
-        let model = match (&config.model_dir, config.compute_enabled) {
-            (Some(directory), _) => Some(Arc::new(
-                inspect_model_directory(directory).map_err(NodeError::Model)?,
-            )),
-            (None, true) => {
-                return Err(NodeError::Model(
-                    "compute is enabled but no model directory is configured".to_owned(),
-                ));
-            }
-            (None, false) => None,
-        };
-        let model_id = model.as_ref().map(|model| model.id.clone());
+        let model_id = models.first().map(|model| model.id.clone());
+        let remote_models = models
+            .iter()
+            .map(|model| RemoteModel {
+                id: model.id.clone(),
+                display_name: model.display_name.clone(),
+            })
+            .collect();
+        let models = Arc::new(models);
 
         let store = Arc::new(TaskStore::new(config.data_dir.clone()));
 
@@ -212,9 +234,10 @@ impl NodeServer {
             let store = Arc::clone(&store);
             let stopping = Arc::clone(&stopping);
             let compute_enabled = config.compute_enabled;
+            let models = Arc::clone(&models);
             std::thread::Builder::new()
                 .name("lan-compute-worker".to_owned())
-                .spawn(move || worker_loop(store, model, compute_enabled, stopping))
+                .spawn(move || worker_loop(store, models, compute_enabled, stopping))
                 .map_err(|error| NodeError::Io(error.to_string()))?
         };
 
@@ -230,10 +253,11 @@ impl NodeServer {
         let shutdown = Arc::new(Notify::new());
         let state = AppState {
             store,
-            token: Arc::from(config.token.as_str()),
+            name: config.name.clone(),
             compute_enabled: config.compute_enabled,
             role: config.role.clone(),
             model_id,
+            models: remote_models,
             media_root: config.media_root.clone(),
         };
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -366,16 +390,18 @@ async fn require_lan_peer(
 #[derive(Clone)]
 struct AppState {
     store: Arc<TaskStore>,
-    token: Arc<str>,
+    name: String,
     compute_enabled: bool,
     role: String,
     model_id: Option<String>,
+    models: Vec<RemoteModel>,
     media_root: Option<PathBuf>,
 }
 
 fn build_router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/v1/capabilities", get(capabilities))
+        .route("/api/v1/models", get(list_models))
         .route("/api/v1/tasks", post(create_task).get(list_tasks))
         .route("/api/v1/tasks/{id}", get(get_task))
         .route("/api/v1/tasks/{id}/files/content", put(upload_content))
@@ -384,46 +410,15 @@ fn build_router(state: AppState) -> Router {
         .route("/api/v1/tasks/{id}/result", get(task_result))
         .route("/api/v1/collect", post(collect))
         .route("/api/v1/storage", get(storage))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_CHUNK_BYTES as usize))
-        .layer(middleware::from_fn_with_state(state.clone(), require_token));
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_CHUNK_BYTES as usize));
     Router::new()
         .route("/api/v1/health", get(health))
         .merge(protected)
         .with_state(state)
 }
 
-async fn require_token(
-    State(state): State<AppState>,
-    request: Request<axum::body::Body>,
-    next: Next,
-) -> Response {
-    let authorized = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|provided| constant_time_eq(provided.as_bytes(), state.token.as_bytes()));
-    if authorized {
-        next.run(request).await
-    } else {
-        error_response(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "missing or invalid bearer token",
-        )
-    }
-}
-
-/// Constant-time comparison so a wrong token cannot be guessed byte by byte.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let mut difference = 0u8;
-    for (a, b) in left.iter().zip(right.iter()) {
-        difference |= a ^ b;
-    }
-    difference == 0
+async fn list_models(State(state): State<AppState>) -> Json<Vec<RemoteModel>> {
+    Json(state.models)
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -441,6 +436,7 @@ async fn capabilities(State(state): State<AppState>) -> Json<Capabilities> {
         role: state.role.clone(),
         model_id: state.model_id.clone(),
         platform: std::env::consts::OS.to_owned(),
+        name: state.name.clone(),
     })
 }
 
@@ -460,7 +456,7 @@ async fn create_task(
         && request
             .model_id
             .as_ref()
-            .is_some_and(|id| state.model_id.as_ref() != Some(id))
+            .is_some_and(|id| !state.models.iter().any(|model| &model.id == id))
     {
         return error_response(
             StatusCode::CONFLICT,
@@ -469,7 +465,7 @@ async fn create_task(
         );
     }
     let model_id = if state.compute_enabled {
-        state.model_id.as_deref()
+        request.model_id.as_deref().or(state.model_id.as_deref())
     } else {
         request.model_id.as_deref()
     };
@@ -878,7 +874,7 @@ fn normalize_path(path: &Path) -> PathBuf {
 
 fn worker_loop(
     store: Arc<TaskStore>,
-    model: Option<Arc<LocalModel>>,
+    models: Arc<Vec<LocalModel>>,
     compute_enabled: bool,
     stopping: Arc<AtomicBool>,
 ) {
@@ -902,15 +898,26 @@ fn worker_loop(
         }
 
         // Strictly one transcription at a time, oldest queued task first.
-        if compute_enabled {
-            if let Some(model) = &model {
-                let next = store
-                    .list()
-                    .into_iter()
-                    .rfind(|task| task.state == TaskState::Queued);
-                if let Some(task) = next {
-                    eprintln!("[lan-node] transcribing task {}", task.id);
+        if compute_enabled && !models.is_empty() {
+            let next = store
+                .list()
+                .into_iter()
+                .rfind(|task| task.state == TaskState::Queued);
+            if let Some(task) = next {
+                eprintln!("[lan-node] transcribing task {}", task.id);
+                if let Some(model) = models
+                    .iter()
+                    .find(|model| Some(&model.id) == task.model_id.as_ref())
+                {
                     run_task(&store, &task, model, &stopping);
+                } else {
+                    let _ = store.finish_err(
+                        &task.id,
+                        TaskError {
+                            code: "model_unavailable".into(),
+                            message: "The selected model is no longer available.".into(),
+                        },
+                    );
                 }
             }
         }
@@ -1038,7 +1045,13 @@ fn register_mdns(
         (TXT_ROLE, config.role.as_str()),
         (TXT_MODEL, model_id.unwrap_or("none")),
     ];
-    let hostname = format!("{}.local.", sanitize_hostname(instance));
+    // Two Macs may use the same display name. Their DNS host records must not
+    // compete for that one name and accidentally send uploads to the wrong Mac.
+    let hostname = format!(
+        "{}-{}.local.",
+        sanitize_hostname(instance),
+        uuid::Uuid::new_v4().simple()
+    );
     let address = if config.listen.ip().is_unspecified() {
         detect_primary_ipv4()
     } else {

@@ -250,6 +250,7 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - UI 用 mock Tauri 的独立 headless 浏览器验证两模式、开关、令牌按需显示、浅深色和 900/640px 无溢出。未在真实 Tauri 窗口点击完整链路；未做两台电脑间断线回退端到端验收；Windows 本轮未验证。
 - macOS 最终 `.app` 打包通过（26.02 MiB，未签名/未公证），bundle 中局域网用途与 Bonjour 声明已回读。随后按 Timmy 授权更新 `~/Applications/Local Transcribe.app`：旧版备份至 `Local Transcribe Backups/before-lan-sharing-20261023-133520/`，安装前后 SHA-256 一致（`4953c749…592d3`，adhoc linker-signed），从安装路径启动后真实窗口 AX 验证两模式、共享开关默认关闭、真实私有接口列出。设置文件的旧 `prefer_local` 按读取时 alias 生效为仅本机，下次保存设置才改写。不提交 Git、不发布、不安装新工具或下载模型。完整记录见 `logs/2026-10/2026-10-23-macos-lan-sharing.md`。
 - 同日 14:25 将同一构建（`4953c749…592d3`）部署到 MBA（SSH `airm1`）：暂存与安装后哈希均一致，上午 beta.2 版本备份至 Air 的 `Local Transcribe Backups/before-lan-sharing-20261023-142456/`，`open` 启动后进程级验证通过（PID 存活、可执行路径正确、无崩溃记录）；GUI 交互验证待 Timmy 在 Air 上查看，两台设备间配对/上传/回退仍未端到端实测。详情见 `logs/2026-10/2026-10-23-MBA-beta2-installation.md`。
+- 同日傍晚修复长期存在的 macOS 窗口拖不动问题（上游 `tauri#9503` Overlay 拖动 bug + 本地 `data-tauri-drag-region` 命中区被子元素遮挡的双层根因）：TDD 先红后绿（7/7 测试、0/0 警告），标题栏改为显式 `startDragging()`；本机安装并三点位实测拖动全部恢复、按钮点击不受影响（备份 `before-dragfix-20261023-152953/`，新包 `f67b9430…1d16`）。修复未提交、MBA 未更新。另发现发布链路问题：`1.1.0-beta.3` 升版未进入提交 `48a327e` 但 tag 已指向它，发布继续前须先修正。详情见 `logs/2026-10/2026-10-23-window-drag-fix.md`。
 
 ## Windows 本机验证 1.1.0-beta.2 与跨平台测试修复（2026-10-23）
 
@@ -257,3 +258,61 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - Windows 真机（Windows 11 build 26300，SAC 强制）：依赖核查后仅做项目本地 `npm ci`（61 包，锁文件哈希不变），未装全局工具；`cargo fmt --check` 通过。`cargo test --workspace` 受 Smart App Control 阻断（未签名 build-script，os error 4551；CI 3033/3077），未绕过；真实 Windows Rust 验证由 Actions run `39899731019`（全绿）承担。
 - beta.2 MSI 本机安装成功（1.0.0 → 1.1.0.2，`C:\Program Files\Local Transcribe\`）；安装 exe 与 CI 暂存 exe 仅 3 字节差异（Tauri `_TAURI_BUNDLE_TYPE_VAR_UNK`→`_TAURI_BUNDLE_TYPE_VAR_MSI` 打包标记，良性）。**启动被 SAC 阻止**（CI 3033/3077，13:04:15）：未签名应用在 SAC 强制 Windows 上「可安装、不可运行」。GUI/ASR 本机验收在该机受阻，不以安装成功冒充验收；SAC 保护机器分发需受信任代码签名（待 Timmy 决策）。
 - 详情见 `logs/2026-10/2026-10-23-windows-beta2-local-validation.md` 与 CM 机器日志 `Windows电脑/2026-10/2026-10-23-Win-VoiceToTextApp-beta2本机验证.md`。
+
+## 可信局域网 / 远端模型改造（2026-10-23，发布暂停）
+
+- Timmy 已确认删除整个认证功能、精简共享文案，客户端获取并选择主机模型。已移除认证中间件、令牌生成/读取/GUI/CLI 字段与认证头，加入模型列表接口与逐任务模型选择；mDNS 连接使用解析后的 IP 并避免默认同名主机名碰撞。
+- TDD 先红后绿；workspace tests、严格 Clippy、npm 9/9、check 0/0、release app 构建通过。两机均已安装新包（402df46e…a05b8），备份完整；当前改动未提交。
+- **真实两机仍受阻，不能宣布修通**：Air→MBP 以及 MBP 自访真实 LAN 地址均 TCP 成功但 HTTP 超时；Python 对照双端 HTTP 200。系统 ALF 日志与 AX 弹窗证实 MBP 正等待 Local Transcribe.app 入站连接授权，未代点允许或关闭防火墙；Air CuaDriver 另缺 Screen Recording。MBP 共享 GUI 已确认展示三个真实模型且无令牌控件；完整转写与 Air GUI 选择尚未验收。
+- beta.3 仍暂停；先前提交 2fc8ed2 的 CI 不代表本轮改造已过 Windows。beta.1 四个获批裸 exe 已删，剩 dmg/msi/校验和。详情见 `logs/2026-10/2026-10-23-trusted-lan-remote-models.md`。
+
+## 两机重构建安装与旧备份清理（2026-10-23 17:50）
+
+- Timmy 要求在两台 Mac 安装最新版并删除旧版。经确认按「当前工作区源码重构建」执行（含 16:31 未提交的 lan.rs / node.rs / types.ts 改动），旧版指两台 `~/Applications/Local Transcribe Backups/` 现有备份。
+- 验证：`cargo test --workspace --offline` 0 failed（真实权重/接口用例仍 ignored）、严格 Clippy 与 fmt 通过、`npm test` 9/9、`check` 0/0、`tauri build --bundles app --no-sign` 成功（26.02 MiB，未签名/未公证）。
+- 新包 SHA-256 `854e59c7…6dd18`，已装到 MBP 与 Air 的 `~/Applications/Local Transcribe.app`，安装后哈希与构建产物一致；两机均由安装路径启动（进程 73951 / 19629），MBP GUI 截图确认正常渲染，Air GUI 未验证（CuaDriver 缺 Screen Recording）。
+- 旧备份仅 `mv` 入废纸篓：MBP 6 个（约 154 MB）、Air 3 个（约 74 MB）→ `~/.Trash/local-transcribe-old-backups-20261023-1750/`；两机各留一个回滚点 `before-rebuild-20261023-1752`（原 `402df46e…a05b8`）。未用 `rm`、未清空废纸篓、未动用户数据与模型。
+- 仍未做：真实 ASR 重跑、两机 LAN 端到端、Windows 验证；改动未提交，beta.3 发布仍暂停。详情见 `logs/2026-10/2026-10-23-macos-rebuild-and-old-backup-trash.md`。
+
+## 局域网发现：TCP 回退（2026-10-23 傍晚）
+
+- 两机互不可见的根因分成三层：MBP 上普通进程收发局域网多播失败（`EHOSTUNREACH`，`nc` 可连、`python3` 不可，system mDNSResponder 正常）；Air 当时共享关闭无服务可发现；Air 节点列表另有一条 name/host 写反的旧记录。详见 `logs/2026-10/2026-10-23-lan-tcp-fallback-discovery.md`。
+- 按 Timmy「不用 Apple Bonjour、保持跨平台」的要求，`client.rs` 增加纯 Rust 的 TCP 回退发现：`local_scan_hosts`（UDP connect 取本机 /24）+ `scan_blocking`（并发探测端口并校验 `GET /api/v1/capabilities`）+ `merge_discovered`（mDNS 优先、按 host:port 去重）+ `discover_with_scan`。`Capabilities` 新增 `name`（serde default，兼容旧节点）。
+- 界面扫描窗口 3 s → 8 s，空结果增加「本地网络权限 / 对方未共享」提示（五语言 `lan.scanEmptyHint`）。`bundle:mac` 脚本在打包后用 `codesign --identifier com.timmy.voicetotextapp` 重签，代码标识从此稳定。
+- 验证：新增 3 个 Rust 测试（TCP 扫描发现节点并读到名字、裸端口不算节点、合并去重）与 3 个前端测试，先红后绿；workspace 测试 0 failed、严格 Clippy、fmt、`npm test` 12/12、`check` 0/0 通过；`bundle:mac` 产出 26.06 MiB，`codesign -dv` 为 `com.timmy.voicetotextapp`，`--verify --deep --strict` 通过（仍 ad-hoc 未公证）。
+- 两台均已换装 `8a5bacec…22e73`（旧包备份至 `before-scan-discovery-20261023-1835`）。Air 侧用同代码探针在真实 /24 上成功发现临时节点，TCP 路径单测用 127.0.0.1 夹具验证。
+- 未验证：MBP 应用内点击扫描（当时屏幕锁定）、授权后 mDNS 是否直接可用、两台间的完整转写链路、Windows。Air 需开启共享才会被 MBP 发现。
+
+## 局域网权限提醒与首页远程模型菜单（2026-10-23 晚）
+
+- 局域网页新增权限横幅：应用内探测（一次丢弃式多播发包，`PermissionDenied`/`HostUnreachable` 判为未授权），页面加载与每次扫描后各检测一次；未授权时给出说明、`打开系统设置`（本地网络）与`重新检测`。同一台 MBP 上应用进程报 granted、普通 shell 进程报 denied，说明探测反映的是应用自身授权，不会误报。
+- 删除共享区块的「可用模型」与「关闭共享/退出应用」两段文案（五语 key 一并删除）；修复节点模型下拉下方的大块空白（`.list` 纵向 flex 中 `.field` 被 flex-basis 撑高，改为 `flex: 0 0 auto`）。
+- 首页模型菜单按设备分组：`本机` + 每个已启用节点一段；选远程模型会启用该节点并切到 `prefer_lan`，选本地模型切回 `local_only`；按钮显示`节点 · 模型`。
+- 验证：新增前端测试先红后绿，`npm test` 15/15、`check` 0/0、`build` 通过；新包 `bf78401d…471385` 已装 MBP 与 Air（备份 `before-ui-tweaks-20261023-1915`），签名标识保持 `com.timmy.voicetotextapp`。视觉与交互验收由 Timmy 自行完成。
+
+## 局域网页收窄与首页模型指示灯修复（2026-10-23 晚二）
+
+- 局域网页不再承担添加任务与选择模型：移除计算方式分段控件、节点「转写模型」下拉、「发送文件…」按钮及相关逻辑/事件监听；只保留共享开关、节点管理、选中节点的任务列表与结果保存/回收。模式由首页模型菜单决定（远端模型 → prefer_lan，本机模型 → local_only），设置页该项改为只读说明。
+- 修复首页模型按钮圆点在选中远端模型后变灰：新增 `remoteDotOn`，选中远端模型即保持绿点；同步修正 tooltip。
+- 文案改动（五语）：`lan.subtitle` 说明新流程；删除 `lan.sendFile`/`lan.sending`/`lan.remoteModel`/`lan.remoteDefault`。
+- 验证：`npm test` 17/17、`check` 0/0、`build` 通过；workspace 测试 28 组全 ok、严格 Clippy、fmt 通过。新包 `41cd00f8…975c0` 已装两台（备份 `before-lan-scope-20261023-1945`），未提交。
+
+## 模型下载功能并回当前构建（2026-10-23 晚三）
+
+- 现象：模型页的「可下载的模型」不见了。原因不是回退——该功能一直在 `model-download-quality` 分支（另一 worktree `VoiceToTextApp-mq`），而安装的构建来自 `main`。分支与 main 无分叉（合并基即 main tip）。
+- 处理：未提交 Git，把分支内容并入当前工作区。直接取分支文件（`model_download.rs`、`ModelView.svelte`、transcription-core 的标点/质量修复、`tauri.conf.json`、`Cargo.toml`、`Cargo.lock`、`package-lock.json`、测试与文档），手工合并 `lib.rs`、`+page.svelte`、`types.ts`、五语言文案与 `package.json` 版本。
+- 修掉分支自身的一个缺口：catalog 只在下载完成后刷新，页面初次打开是空的；补上挂载与进入模型页时的 `refreshCatalog()`。
+- 版本统一为 `1.1.0-beta.4`；`cargo test --workspace` 29 组全 ok、严格 Clippy、fmt、`npm test` 17/17、`check` 0/0、`build` 通过。新包 `ecd77e14…2f966`（26.17 MiB，签名标识不变）已装 MBP 与 Air，备份 `before-model-download-20261023-2020`。
+- 未验证：真实下载与下载后推理质量（由 Timmy 验收）。
+
+## 模型下载说明文案删除与两机换装（2026-10-23 20:45）
+
+- 删除模型页「以上模型来自官方 Hugging Face 仓库…」说明（`model.downloadHint` 五语言 key 一并移除）；`npm test` 17/17、`check` 0/0 通过。
+- 重新打包 `1.1.0-beta.4`，可执行文件 `231fb48c…bc9dbc`，签名标识 `com.timmy.voicetotextapp`。
+- 两台机器先备份被替换的 `ecd77e14…2f966` 到 `before-hint-removal-20261023-2045`，安装后哈希核对一致；其余 6 个旧备份目录整体移入 `~/.Trash/local-transcribe-old-backups-<时间戳>/`，仅 mv、未清空废纸篓，各机保留本次一份回滚点。
+
+## 已下载模型的删除入口（2026-10-23 21:15）
+
+- 下载列表的已安装条目新增「删除」按钮（确认后移入回收站）；模型库列表的删除按钮改为始终显示，默认模型也能删。
+- 后端新增 `delete_catalog_model`、`installed_path`、`delete_installed*`；删除默认模型时先清空选择（写空文件，不删文件），`read_selected_model` 把空文件视为「无默认模型」。ASR 目录走 `ModelLibrary::delete_to`，标点模型走文件级 move 到回收站。
+- 新增 3 个 Rust 用例与 1 个前端用例，先红后绿；`cargo test --workspace` 29 组全 ok、严格 Clippy、fmt、`npm test` 18/18、`check` 0/0 通过。新包 `72d39998…377af` 已装两台（备份 `before-model-delete-20261023-2115`）。
