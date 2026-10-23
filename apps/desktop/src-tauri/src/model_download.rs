@@ -324,15 +324,17 @@ async fn run(
         }
         let url_primary = format!("{HF_BASE}/{}/resolve/main/{}", entry.repository, remote);
         let url_mirror = format!("{HF_MIRROR}/{}/resolve/main/{}", entry.repository, remote);
+        let mut progress = |received: u64, total: u64| {
+            emit(app, entry.id, "downloading", received, total, None, None);
+        };
         match fetch(
             &client,
             &url_primary,
             &target,
             cancel,
-            app,
-            entry.id,
             &mut received,
             total,
+            &mut progress,
         )
         .await
         {
@@ -347,10 +349,9 @@ async fn run(
                     &url_mirror,
                     &target,
                     cancel,
-                    app,
-                    entry.id,
                     &mut received,
                     total,
+                    &mut progress,
                 )
                 .await
                 .map_err(|mirror_error| {
@@ -401,16 +402,15 @@ async fn run(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+/// 下载单个文件到 `target`，累计进度经回调上报（便于无界面测试）。
 async fn fetch(
     client: &reqwest::Client,
     url: &str,
     target: &Path,
     cancel: &AtomicBool,
-    app: &AppHandle,
-    id: &str,
     received: &mut u64,
     total: u64,
+    on_progress: &mut (dyn FnMut(u64, u64) + Send),
 ) -> Result<(), String> {
     let mut response = client
         .get(url)
@@ -440,13 +440,13 @@ async fn fetch(
             .map_err(|error| format!("无法写入文件：{error}"))?;
         *received += chunk.len() as u64;
         if last_emit.elapsed() >= Duration::from_millis(200) {
-            emit(app, id, "downloading", *received, total, None, None);
+            on_progress(*received, total);
             last_emit = Instant::now();
         }
     }
     file.flush()
         .map_err(|error| format!("无法完成写入：{error}"))?;
-    emit(app, id, "downloading", *received, total, None, None);
+    on_progress(*received, total);
     Ok(())
 }
 
@@ -531,6 +531,48 @@ mod tests {
     fn lookup_returns_known_entries_only() {
         assert!(entry_by_id("paraformer-zh").is_some());
         assert!(entry_by_id("not-a-model").is_none());
+    }
+
+    #[test]
+    #[ignore = "network access to huggingface.co; run manually"]
+    fn downloads_a_small_catalog_file_with_progress() {
+        use std::sync::atomic::AtomicBool;
+        let target = std::env::temp_dir().join("lt-download-test-tokens.txt");
+        tauri::async_runtime::block_on(async {
+            let client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(15))
+                .read_timeout(std::time::Duration::from_secs(45))
+                .build()
+                .expect("client builds");
+            let url = "https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14/resolve/main/tokens.txt";
+            let mut received = 0u64;
+            let mut samples: Vec<u64> = Vec::new();
+            let mut on_progress = |got: u64, _total: u64| {
+                samples.push(got);
+            };
+            super::fetch(
+                &client,
+                url,
+                &target,
+                &AtomicBool::new(false),
+                &mut received,
+                75_756,
+                &mut on_progress,
+            )
+            .await
+            .expect("download succeeds");
+            assert_eq!(received, 75_756);
+            assert!(!samples.is_empty(), "progress callback fired");
+            assert!(
+                samples.windows(2).all(|pair| pair[0] <= pair[1]),
+                "progress must not go backwards"
+            );
+        });
+        let size = std::fs::metadata(&target)
+            .expect("downloaded file exists")
+            .len();
+        assert_eq!(size, 75_756, "downloaded bytes match the manifest");
+        let _ = std::fs::remove_file(&target);
     }
 
     #[test]
