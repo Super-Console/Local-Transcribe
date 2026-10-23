@@ -48,7 +48,6 @@
   const LAN_MODE_LABELS = $derived.by(() => {
     const labels: Record<LanMode, string> = {
       local_only: t("lan.modeLocalOnly"),
-      prefer_local: t("lan.modePreferLocal"),
       prefer_lan: t("lan.modePreferLan"),
     };
     return labels;

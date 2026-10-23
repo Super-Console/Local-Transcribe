@@ -11,3 +11,7 @@
 9. Windows verification requires a real Windows build/test run (or clearly identified CI run). A macOS cross-compile is not equivalent to Windows UI/runtime acceptance. If the Windows host is unreachable, record the exact criterion as blocked.
 10. Do not create Git commits or remotes unless Timmy asks. Stage only reviewed project files if later asked to commit.
 11. Update `PROJECT_STATUS.md` when a milestone changes, recording verified facts separately from proposals and blockers.
+
+## Timmy's explicitly requested future release
+
+- Timmy asked for help packaging the macOS version and publishing it on GitHub. Treat this as a pending release task, not authorization to publish immediately. When he asks to continue, inspect the current Git status and GitHub repository/remote first, review the exact release files, build and verify the macOS package, then prepare the GitHub release. Preserve all existing safety rules: never include secrets, `GPT聊天记录/`, `.DS_Store`, personal recordings, model weights, or generated transcription output; do not fabricate signing/notarization or validation status. Confirm any still-unspecified release target or irreversible publication details with Timmy before publishing.

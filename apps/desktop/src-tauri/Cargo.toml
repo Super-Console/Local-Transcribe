@@ -33,6 +33,7 @@ cpal = "0.16"
 hound = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+libc = "=0.2.191"
 core-foundation = "0.10"
 objc2-core-audio = "0.3"
 objc2-core-foundation = "0.3"

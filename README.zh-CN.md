@@ -46,7 +46,9 @@ crates/lan-compute/           局域网 Compute V1.1：任务存储、节点服�
 
 - **Node**（`local-transcribe-node`）提供本地 HTTP API（`/api/v1`，Bearer 令牌认证）：分块上传（支持断点续传）、串行计算队列、结果/收集/导出 API、mDNS 发现（`_localtranscribe._tcp.local.`）。
 - **Client**（桌面 GUI「局域网」视图）：发现节点、令牌配对、带进度与续传的发送、九态任务状态跟踪（init → file_transferring → queued → transcribing → post_processing → completed / failed / cancelled）、结果取回。
-- **计算模式**：仅本机 / 优先本机 / 优先局域网。媒体只会上传到你配对的节点，全程不涉及任何云服务。
+- **计算模式**：仅本机 / 局域网优先。旧的“本机优先”设置按“仅本机”读取。仅本机不自动外发（仍可在局域网页手动发送）；局域网优先选择已认证且启用计算的节点，节点不可用或执行/传输/结果获取失败时在本机重新转写，需要已安装并选定本地模型。主动取消不会重跑；回退沿用同一任务 ID 和历史条目。失联时只能尽力取消远端，不能保证远端立即停算。
+- **共享本机算力（macOS）**：在「局域网」开启“允许其他设备使用本机算力”。默认关闭、退出后不自动重启；选择私有 IPv4 Wi-Fi / 以太网接口、名称与端口，使用开启时的默认模型。仅监听该接口地址，并拒绝该子网之外的客户端；凭令牌访问，不配置公网访问或修改防火墙。令牌默认隐藏，保存在应用数据目录 `lan-host/pairing-token`（0600）；接收的媒体/任务也存于 `lan-host`，不自动清理。关闭共享会停止监听并中止节点计算。更换模型需重新开启共享。
+- **网络边界**：当前 LAN 协议为未加密 HTTP，配对令牌不是传输加密；只在可信网络使用。应用不配置端口转发，但无法控制用户自行设置的路由器 NAT / 反向代理；不要对公网转发此端口。
 - Windows Early Beta 冻结设计稿见 `design/windows-early-beta.html`，设计评审见 `docs/architecture/windows-lan-review.md`。
 
 ## 支持的模型族

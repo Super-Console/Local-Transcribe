@@ -9,6 +9,8 @@
   import type { MessageKey } from "$lib/i18n/messages/zh";
   import type {
     LanCollectReport,
+    LanHostInterface,
+    LanHostStatus,
     LanMode,
     LanNodeConfig,
     LanNodeInfo,
@@ -68,6 +70,44 @@
   let collectDir = $state("");
   let collectReport = $state<LanCollectReport | null>(null);
   let draft = $state({ id: "", name: "", host: "", port: "7878", token: "" });
+  let host = $state<LanHostStatus | null>(null);
+  let hostInterfaces = $state<LanHostInterface[]>([]);
+  let hostName = $state("Local Transcribe Mac");
+  let hostAddress = $state("");
+  let hostPort = $state(7878);
+  let hostBusy = $state(false);
+  let hostToken = $state("");
+
+  async function refreshHost() {
+    if (!tauriAvailable) return;
+    try {
+      host = await invoke<LanHostStatus>("lan_host_status");
+      hostInterfaces = await invoke<LanHostInterface[]>("lan_host_interfaces");
+      if (!hostAddress || !hostInterfaces.some((item) => item.address === hostAddress)) {
+        hostAddress = hostInterfaces[0]?.address ?? "";
+      }
+    } catch (issue) { error = String(issue); }
+  }
+
+  async function toggleHost() {
+    if (hostBusy) return;
+    hostBusy = true;
+    error = "";
+    hostToken = "";
+    try {
+      host = host?.running
+        ? await invoke<LanHostStatus>("stop_lan_host")
+        : await invoke<LanHostStatus>("start_lan_host", {
+            name: hostName, address: hostAddress, port: Number(hostPort),
+          });
+    } catch (issue) { error = String(issue); }
+    finally { hostBusy = false; }
+  }
+
+  async function revealHostToken() {
+    try { hostToken = await invoke<string>("lan_host_token"); }
+    catch (issue) { error = String(issue); }
+  }
 
   const nodes = $derived(settings?.nodes ?? []);
   const selectedNode = $derived(nodes.find((node) => node.id === selectedId) ?? null);
@@ -75,7 +115,6 @@
   const modes = $derived.by(() => {
     const list: Array<{ id: LanMode; label: string; desc: string }> = [
       { id: "local_only", label: t("lan.modeLocalOnly"), desc: t("lan.modeLocalOnlyDesc") },
-      { id: "prefer_local", label: t("lan.modePreferLocal"), desc: t("lan.modePreferLocalDesc") },
       { id: "prefer_lan", label: t("lan.modePreferLan"), desc: t("lan.modePreferLanDesc") },
     ];
     return list;
@@ -348,6 +387,7 @@
 
   onMount(() => {
     if (!tauriAvailable) return;
+    void refreshHost();
     refreshStatuses();
     const unlisteners: Array<Promise<() => void>> = [
       listen<LanProgressEvent>(LAN_PROGRESS_EVENT, (event) => {
@@ -395,12 +435,11 @@
     <div class="group-head">
       <div class="group-title">{t("lan.modeLabel")}</div>
     </div>
-    <div class="seg" role="radiogroup" aria-label={t("lan.modeLabel")}>
+    <div class="seg" role="group" aria-label={t("lan.modeLabel")}>
       {#each modes as option (option.id)}
         <button
           type="button"
-          role="radio"
-          aria-checked={settings?.mode === option.id}
+          aria-pressed={settings?.mode === option.id}
           class:on={settings?.mode === option.id}
           onclick={() => void changeMode(option.id)}
         >
@@ -410,10 +449,56 @@
     </div>
     {#each modes as option (option.id)}
       {#if settings?.mode === option.id}
-        <p class="note">{option.desc}</p>
+        <p class="note mode-note">{option.desc}</p>
       {/if}
     {/each}
   </div>
+
+  {#if host?.supported}
+    <div class="group host-sharing" aria-busy={hostBusy}>
+      <div class="group-head">
+        <div class="group-title" id="host-sharing-label">{t("lan.hostTitle")}</div>
+        <button type="button" class="btn" role="switch"
+          aria-labelledby="host-sharing-label" aria-describedby="host-sharing-description"
+          aria-checked={host.running} disabled={hostBusy || (!host.running && !hostAddress)}
+          onclick={() => void toggleHost()}>
+          {hostBusy ? t("lan.hostChanging") : host.running ? t("lan.hostOn") : t("lan.hostOff")}
+        </button>
+      </div>
+      <p class="note" id="host-sharing-description">{t("lan.hostDesc")}</p>
+      {#if host.running}
+        <div class="meta" role="status">{t("lan.hostRunning", { name: host.name, address: host.address, port: host.port })}</div>
+        <p class="note">{t("lan.hostModel", { model: host.model })}</p>
+        <button type="button" class="btn" onclick={() => hostToken ? hostToken = "" : void revealHostToken()}>
+          {hostToken ? t("lan.hostHideToken") : t("lan.hostShowToken")}
+        </button>
+        {#if hostToken}
+          <label class="field host-token"><span>{t("lan.nodeFormToken")}</span>
+            <input type="text" value={hostToken} readonly autocomplete="off" spellcheck={false} />
+          </label>
+        {/if}
+        <p class="note">{t("lan.hostStopNote")}</p>
+      {:else}
+        <div class="form-grid">
+          <label class="field"><span>{t("lan.nodeFormName")}</span>
+            <input type="text" bind:value={hostName} maxlength="80" disabled={hostBusy} />
+          </label>
+          <label class="field"><span>{t("lan.hostInterface")}</span>
+            <select bind:value={hostAddress} disabled={hostBusy}>
+              {#each hostInterfaces as item (item.address)}
+                <option value={item.address}>{item.name} · {item.address}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="field small"><span>{t("lan.nodeFormPort")}</span>
+            <input type="number" min="1" max="65535" bind:value={hostPort} disabled={hostBusy} />
+          </label>
+        </div>
+        <button type="button" class="act" onclick={() => void refreshHost()} disabled={hostBusy}>{t("lan.hostRefresh")}</button>
+        {#if hostInterfaces.length === 0}<p class="note">{t("lan.hostNoInterface")}</p>{/if}
+      {/if}
+    </div>
+  {/if}
 
   <div class="group">
     <div class="group-head">
@@ -972,7 +1057,8 @@
     flex: 1 1 320px;
   }
 
-  .field input {
+  .field input,
+  .field select {
     height: 30px;
     padding: 0 9px;
     border-radius: 8px;
@@ -983,6 +1069,13 @@
     font-family: inherit;
     width: 100%;
   }
+
+  .host-token { margin-top: 12px; }
+
+  .host-sharing .group-head { flex-wrap: wrap; gap: 10px; }
+  .host-sharing .note { font-size: 13px; color: var(--text-2); }
+  .host-sharing .meta, .mode-note { font-size: 12.5px; color: var(--text-2); }
+  .host-sharing .field { font-size: 12.5px; color: var(--text-2); }
 
   .form-actions {
     display: flex;

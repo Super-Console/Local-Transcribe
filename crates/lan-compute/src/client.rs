@@ -81,6 +81,8 @@ impl LanClient {
             token,
             http: reqwest::Client::builder()
                 .no_proxy()
+                .connect_timeout(std::time::Duration::from_secs(3))
+                .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
         }

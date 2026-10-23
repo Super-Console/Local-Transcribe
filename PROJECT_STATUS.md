@@ -232,3 +232,28 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - 许可证：MIT（LICENSE）。README 双语更新（架构/局域网/构建/验证状态/许可证）。
 - 真机档案：目标 Windows 11 Pro（build 26300，x64，AMD RX 6600、无 NVIDIA）、WebView2 155 已装、SSH 管理员权限可用；HA `pc_wake` 实体交叉验证后以同 MAC/同广播魔术包唤醒（HA API 无可用 token 的等效做法，已记录）。
 - 状态：GUI Client 端集成、真机安装/跨设备实测、测试报告与 Early Beta 发布见后续追加条目（本条记录到 2d034df/34799d3 为止的已验证事实）。
+
+## Sidebar / 窗口顶部融合迭代（2026-10-23）
+
+- Timmy 参照 TranscribeX 截图授权调整侧栏，并要求直接更新 MBP、打开验收。本轮保留现有功能与浅色暖色 token，仍为待验收的视觉迭代，不代表最终产品名/视觉定稿。
+- 侧栏宽 204px、导航 13px / 最小行高 32px、品牌 16px；管理入口放到主导航下方；恢复可见键盘焦点。共享 52px 顶栏延续侧栏底色，macOS 使用 Overlay、保留原生红绿灯并调整位置；没有新增材质依赖。
+- 本轮恢复前端折叠入口、⌘\\ / Ctrl+\\ 与持久化；使用共享前端按钮，旧 Rust 原生 accessory 开关仍关闭，避免重复按钮。按钮不在折叠区域内，折叠时导航 inert。
+- 验证：结构回归测试先出现 3 项预期失败，再实现后 `npm test` 4/4；`npm run check` 0 errors / 0 warnings；`npm run build` 和离线 Tauri release `.app` 打包成功（未签名，25.41 MiB）。独立 headless 浏览器验证 900/640px、顶栏/侧栏对齐、展开/收起、inert、刷新后记忆与快捷键，检查浅深色截图。
+- 在 `tims-mbp` 更新 `~/Applications/Local Transcribe.app`，源/安装可执行文件 SHA-256 一致：`a21cfcb748dc377fbeef7d23f8adef116c3062af1e3a01298e4e56f06fcaee9e`。旧版与第一次对齐前的中间版保存在 `~/Applications/Local Transcribe Backups/`，未删除应用或用户数据。精确路径启动后核实进程来自安装位置；真实 Tauri 窗口截图确认红绿灯同排、侧栏通顶、历史显示；AX 操作验证折叠/展开，最后留在展开首页供 Timmy 验收。
+- 限制：Windows 本轮未验证；没有重跑真实 ASR。`cargo test --workspace --offline` 在未改动的 `voice-to-text-lan` 测试 `client::tests::resolved_service_txt_records_map_to_node_info` 失败（`ParseIpAddr("invalid IP address syntax")`），不能宣称全工作区全绿。本轮未修改该模块。详情见 `logs/2026-10/2026-10-23-sidebar-window-integration.md`。
+
+## macOS 局域网共享与两模式收敛（2026-10-23）
+
+- 按 Timmy 明确授权，只保留「仅本机」「局域网优先」；旧 prefer_local 按 local_only 读取。节点失败自动在原任务 ID / lease 内本地重跑；需已选本地模型，主动取消不重跑。节点能力需认证且启用计算；模型不匹配上传前拒绝。
+- 局域网页增加默认关闭的「允许其他设备使用本机算力」（仅 macOS）：私有 IPv4 Wi-Fi/以太网接口、名称、端口、当前模型、状态、显式显示配对令牌。只绑定选定地址并限制同私有子网，不配置公网/防火墙；正常退出关闭，不自动重启。HTTP 未加密的限制已明示；接收媒体留在 lan-host，不自动清理。
+- 验证：默认 workspace tests、严格 Clippy、前端 check/build/tests 均通过；显式真实 Mac 接口的节点启停/令牌/端口冲突测试，以及已安装 Paraformer + scratch WAV 经真实本机 LAN 地址上传/转写/取回结果并校验源文件未改均通过。子网/伪造 forwarded headers/模型不匹配/卡住上传停止回归通过。
+- UI 用 mock Tauri 的独立 headless 浏览器验证两模式、开关、令牌按需显示、浅深色和 900/640px 无溢出。未在真实 Tauri 窗口点击完整链路；未做两台电脑间断线回退端到端验收；Windows 本轮未验证。
+- macOS 最终 `.app` 打包通过（26.02 MiB，未签名/未公证），bundle 中局域网用途与 Bonjour 声明已回读。随后按 Timmy 授权更新 `~/Applications/Local Transcribe.app`：旧版备份至 `Local Transcribe Backups/before-lan-sharing-20261023-133520/`，安装前后 SHA-256 一致（`4953c749…592d3`，adhoc linker-signed），从安装路径启动后真实窗口 AX 验证两模式、共享开关默认关闭、真实私有接口列出。设置文件的旧 `prefer_local` 按读取时 alias 生效为仅本机，下次保存设置才改写。不提交 Git、不发布、不安装新工具或下载模型。完整记录见 `logs/2026-10/2026-10-23-macos-lan-sharing.md`。
+- 同日 14:25 将同一构建（`4953c749…592d3`）部署到 MBA（SSH `airm1`）：暂存与安装后哈希均一致，上午 beta.2 版本备份至 Air 的 `Local Transcribe Backups/before-lan-sharing-20261023-142456/`，`open` 启动后进程级验证通过（PID 存活、可执行路径正确、无崩溃记录）；GUI 交互验证待 Timmy 在 Air 上查看，两台设备间配对/上传/回退仍未端到端实测。详情见 `logs/2026-10/2026-10-23-MBA-beta2-installation.md`。
+
+## Windows 本机验证 1.1.0-beta.2 与跨平台测试修复（2026-10-23）
+
+- 修复 `npm test` 在 Windows 的唯一失败（`core.autocrlf=true` 使 `Cargo.lock` 工作区为 CRLF，版本同步断言以 `\n` 字面匹配）。按 TDD 先加 LF/CRLF 双夹具回归测试并确认预期失败，再最小修复为 `\r?\n`；仅改 `apps/desktop/tests/sidebar-shell.test.mjs`，未改产品代码与 Git 换行策略。macOS 与 Windows 双端定向/全量 `npm test` 6/6、`npm run check` 0/0、`npm run build` 均通过（未提交，工作区另有并行改动未触碰）。
+- Windows 真机（Windows 11 build 26300，SAC 强制）：依赖核查后仅做项目本地 `npm ci`（61 包，锁文件哈希不变），未装全局工具；`cargo fmt --check` 通过。`cargo test --workspace` 受 Smart App Control 阻断（未签名 build-script，os error 4551；CI 3033/3077），未绕过；真实 Windows Rust 验证由 Actions run `39899731019`（全绿）承担。
+- beta.2 MSI 本机安装成功（1.0.0 → 1.1.0.2，`C:\Program Files\Local Transcribe\`）；安装 exe 与 CI 暂存 exe 仅 3 字节差异（Tauri `_TAURI_BUNDLE_TYPE_VAR_UNK`→`_TAURI_BUNDLE_TYPE_VAR_MSI` 打包标记，良性）。**启动被 SAC 阻止**（CI 3033/3077，13:04:15）：未签名应用在 SAC 强制 Windows 上「可安装、不可运行」。GUI/ASR 本机验收在该机受阻，不以安装成功冒充验收；SAC 保护机器分发需受信任代码签名（待 Timmy 决策）。
+- 详情见 `logs/2026-10/2026-10-23-windows-beta2-local-validation.md` 与 CM 机器日志 `Windows电脑/2026-10/2026-10-23-Win-VoiceToTextApp-beta2本机验证.md`。

@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use voice_to_text_core::{
-    InputFile, JobLease, JobState, JobStatus, JobStore, Transcript, TranscriptSegment,
+    InputFile, JobLease, JobState, JobStatus, JobStore, LocalModel, Transcript, TranscriptSegment,
+    transcribe_file_streaming,
 };
 use voice_to_text_lan::client::{LanClient, LanError, discover_blocking};
 use voice_to_text_lan::protocol::{
@@ -42,8 +43,8 @@ const MAX_POLL_FAILURES: u32 = 5;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LanMode {
+    #[serde(alias = "prefer_local")]
     LocalOnly,
-    PreferLocal,
     PreferLan,
 }
 
@@ -310,13 +311,14 @@ async fn submit_upload(
     Ok(task)
 }
 
-/// 派发决策：启用中的节点里第一个能应答健康检查的（每个最多 [`NODE_TIMEOUT`]）。
+/// 派发决策：首个通过认证且启用计算的节点（每个最多 [`NODE_TIMEOUT`]）。
 pub(crate) async fn first_reachable_node(
     settings: &LanSettings,
 ) -> Result<Option<LanNodeConfig>, String> {
     for node in enabled_nodes(settings) {
         let client = client_for(&node);
-        if matches!(timed(client.health()).await, Ok(true)) {
+        // A health response alone does not prove authentication or compute readiness.
+        if matches!(timed(client.capabilities()).await, Ok(caps) if caps.compute_enabled) {
             return Ok(Some(node));
         }
     }
@@ -494,19 +496,23 @@ struct LanJob {
     app: AppHandle,
     state: Arc<AppState>,
     store: JobStore,
-    lease: JobLease,
+    lease: std::sync::Mutex<JobLease>,
     job_id: String,
     source_path: PathBuf,
     file_name: String,
     node: LanNodeConfig,
     model_id: Option<String>,
+    local_model: Option<LocalModel>,
+    failure: Option<String>,
     started_at_ms: u64,
 }
 
 impl LanJob {
     /// 每次状态变化都持久化 + 推给界面（与本机任务同一事件）。
-    fn publish(&mut self, status: JobStatus) {
-        let _ = self.lease.save_status(status.clone());
+    fn publish(&self, status: JobStatus) {
+        if let Ok(mut lease) = self.lease.lock() {
+            let _ = lease.save_status(status.clone());
+        }
         update_job(&self.app, &self.state, status);
     }
 
@@ -526,6 +532,11 @@ impl LanJob {
     }
 
     fn finish(&mut self, state: JobState, phase: &str, error: Option<String>) {
+        // Keep the same running job and lease until the fallback is resolved.
+        if state == JobState::Failed {
+            self.failure = Some(error.unwrap_or_else(|| "LAN transcription failed.".into()));
+            return;
+        }
         self.publish(JobStatus {
             job_id: self.job_id.clone(),
             state,
@@ -548,7 +559,7 @@ pub(crate) fn start_lan_transcription(
     state: &Arc<AppState>,
     input: &InputFile,
     node: LanNodeConfig,
-    model_id: Option<String>,
+    local_model: Option<LocalModel>,
 ) -> Result<JobStatus, String> {
     let store = JobStore::new(app_data_dir(app)?);
     let status = JobStatus {
@@ -585,12 +596,14 @@ pub(crate) fn start_lan_transcription(
         app: app.clone(),
         state: Arc::clone(state),
         store: store.clone(),
-        lease,
+        lease: std::sync::Mutex::new(lease),
         job_id: status.job_id.clone(),
         source_path: input.path.clone(),
         file_name: input.file_name.clone(),
         node,
-        model_id,
+        model_id: local_model.as_ref().map(|model| model.id.clone()),
+        local_model,
+        failure: None,
         started_at_ms: status.started_at_ms.unwrap_or_default(),
     };
     tauri::async_runtime::spawn(async move {
@@ -600,6 +613,87 @@ pub(crate) fn start_lan_transcription(
 }
 
 async fn run_lan_job(mut job: LanJob) {
+    run_remote_job(&mut job).await;
+    if let Some(error) = job.failure.take() {
+        let cancelled = job
+            .store
+            .cancellation_requested(&job.job_id)
+            .unwrap_or(true);
+        if should_fallback(JobState::Failed, cancelled) {
+            // Inference is blocking; never run it on the async executor.
+            let _ =
+                tauri::async_runtime::spawn_blocking(move || run_local_fallback(job, error)).await;
+        } else {
+            job.finish(JobState::Cancelled, "lan.phase.cancelled", None);
+        }
+    }
+}
+
+fn should_fallback(state: JobState, cancellation_requested: bool) -> bool {
+    state == JobState::Failed && !cancellation_requested
+}
+
+fn run_local_fallback(job: LanJob, remote_error: String) {
+    let cancelled = || {
+        job.store
+            .cancellation_requested(&job.job_id)
+            .unwrap_or(true)
+    };
+    if cancelled() {
+        let mut status = job.running_status("lan.phase.cancelled", 0);
+        status.state = JobState::Cancelled;
+        job.publish(status);
+        return;
+    }
+    job.publish(job.running_status("lan.phase.fallback", 0));
+    let result = job.local_model.as_ref()
+        .ok_or_else(|| format!("LAN failed: {remote_error} Local fallback unavailable: choose and install a local model first."))
+        .and_then(|model| transcribe_file_streaming(
+            &job.source_path, model, cancelled,
+            |progress| {
+                let mut status = job.running_status("lan.phase.fallback", progress.completed_chunks);
+                status.total_chunks = Some(progress.total_chunks);
+                status.total_duration_ms = Some(progress.total_duration_ms);
+                job.publish(status);
+            },
+            |update| {
+                let _ = job.app.emit(crate::SEGMENT_EVENT, crate::SegmentEvent {
+                    job_id: job.job_id.clone(), index: update.index, total_chunks: update.total_chunks,
+                    start_ms: update.segment.start_ms, end_ms: update.segment.end_ms, text: update.segment.text,
+                });
+            },
+        ));
+    let mut status = job.running_status("lan.phase.failed", 0);
+    if cancelled() {
+        status.state = JobState::Cancelled;
+        status.phase = "lan.phase.cancelled".into();
+    } else {
+        match result {
+            Ok(mut transcript) => {
+                transcript.job_id = job.job_id.clone();
+                status.total_duration_ms = transcript.duration_ms;
+                let saved = save_transcript(&job.app, &transcript);
+                if let Ok(mut transcripts) = job.state.transcripts.lock() {
+                    transcripts.insert(job.job_id.clone(), transcript);
+                }
+                status.state = JobState::Completed;
+                status.phase = "lan.phase.completed".into();
+                status.transcript_available = true;
+                status.result_saved = saved.is_ok();
+                status.error = saved.err();
+            }
+            Err(error) => {
+                status.state = JobState::Failed;
+                status.error = Some(format!(
+                    "LAN attempt failed: {remote_error} Local fallback failed: {error}"
+                ));
+            }
+        }
+    }
+    job.publish(status);
+}
+
+async fn run_remote_job(job: &mut LanJob) {
     let client = client_for(&job.node);
     let progress_app = job.app.clone();
     let upload = submit_upload(
@@ -626,6 +720,16 @@ async fn run_lan_job(mut job: LanJob) {
         }
     };
 
+    if job
+        .store
+        .cancellation_requested(&job.job_id)
+        .unwrap_or(true)
+    {
+        let _ = timed(client.cancel(&task.id)).await;
+        job.finish(JobState::Cancelled, "lan.phase.cancelled", None);
+        return;
+    }
+
     // 上传完成后不再本地驱动进度：按节点状态机轮询直到终态。
     let mut failures = 0u32;
     let mut last_state = task.state;
@@ -636,7 +740,9 @@ async fn run_lan_job(mut job: LanJob) {
             .cancellation_requested(&job.job_id)
             .unwrap_or(false)
         {
-            let _ = client.cancel(&task.id).await;
+            let _ = timed(client.cancel(&task.id)).await;
+            job.finish(JobState::Cancelled, "lan.phase.cancelled", None);
+            return;
         }
         match timed(client.task(&task.id)).await {
             Ok(current) => {
@@ -663,6 +769,9 @@ async fn run_lan_job(mut job: LanJob) {
     }
 
     let Some(final_task) = final_task else {
+        // Best effort: a disconnected node may continue computing. Its result
+        // is never merged with the local retry or saved as a second history row.
+        let _ = timed(client.cancel(&task.id)).await;
         job.finish(
             JobState::Failed,
             "lan.phase.failed",
@@ -716,6 +825,56 @@ async fn run_lan_job(mut job: LanJob) {
 mod tests {
     use super::*;
     use voice_to_text_lan::protocol::Segment;
+
+    #[test]
+    fn legacy_prefer_local_migrates_to_local_only() {
+        let settings: LanSettings =
+            serde_json::from_str(r#"{"mode":"prefer_local","nodes":[]}"#).unwrap();
+        assert_eq!(settings.mode, LanMode::LocalOnly);
+        assert!(
+            serde_json::to_string(&settings)
+                .unwrap()
+                .contains("local_only")
+        );
+    }
+
+    #[test]
+    fn only_failures_fall_back_never_cancellations_or_success() {
+        assert!(should_fallback(JobState::Failed, false));
+        assert!(!should_fallback(JobState::Failed, true));
+        assert!(!should_fallback(JobState::Cancelled, false));
+        assert!(!should_fallback(JobState::Completed, false));
+    }
+
+    #[test]
+    fn automatic_dispatch_skips_compute_off_and_bad_pairing() {
+        use voice_to_text_lan::node::{NodeConfig, NodeServer};
+        let root = std::env::temp_dir().join(format!("lan-dispatch-{}", uuid::Uuid::new_v4()));
+        let running = NodeServer::start(NodeConfig {
+            data_dir: root,
+            listen: "127.0.0.1:0".parse().unwrap(),
+            token: "test-pairing".into(),
+            ..NodeConfig::default()
+        })
+        .unwrap();
+        let mut candidate = node("loopback", "test", true);
+        candidate.host = "127.0.0.1".into();
+        candidate.port = running.port();
+        for token in ["test-pairing", "wrong-pairing"] {
+            candidate.token = token.into();
+            let settings = LanSettings {
+                mode: LanMode::PreferLan,
+                nodes: vec![candidate.clone()],
+            };
+            assert!(
+                tauri::async_runtime::block_on(first_reachable_node(&settings))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        running.shutdown();
+        running.wait();
+    }
 
     fn node(id: &str, name: &str, enabled: bool) -> LanNodeConfig {
         LanNodeConfig {

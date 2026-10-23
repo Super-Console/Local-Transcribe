@@ -7,14 +7,14 @@
 //! logged and never appears in `Debug` output.
 
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{header, Request, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -95,6 +95,8 @@ impl std::fmt::Debug for NodeConfig {
 /// Failure raised while starting the node. Never contains the token.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeError {
+    #[error("invalid node configuration: {0}")]
+    Configuration(String),
     #[error("cannot bind {addr}: {message}")]
     Bind { addr: SocketAddr, message: String },
     #[error("cannot start node runtime: {0}")]
@@ -156,6 +158,27 @@ impl NodeServer {
     /// Validate the configuration, bind the listener, start the compute
     /// worker and (for non-loopback listeners) announce over mDNS.
     pub fn start(config: NodeConfig) -> Result<RunningNode, NodeError> {
+        Self::start_scoped(config, None)
+    }
+
+    /// Desktop sharing: bind one RFC1918 interface and reject peers outside
+    /// that interface's subnet. Never trusts forwarded/proxy headers.
+    pub fn start_on_lan(config: NodeConfig, mask: Ipv4Addr) -> Result<RunningNode, NodeError> {
+        let IpAddr::V4(address) = config.listen.ip() else {
+            return Err(NodeError::Configuration(
+                "Choose a private IPv4 interface.".into(),
+            ));
+        };
+        let scope = LanScope::new(address, mask)?;
+        Self::start_scoped(config, Some(scope))
+    }
+
+    fn start_scoped(config: NodeConfig, scope: Option<LanScope>) -> Result<RunningNode, NodeError> {
+        if config.token.trim().is_empty() {
+            return Err(NodeError::Configuration(
+                "A pairing token is required.".into(),
+            ));
+        }
         let model = match (&config.model_dir, config.compute_enabled) {
             (Some(directory), _) => Some(Arc::new(
                 inspect_model_directory(directory).map_err(NodeError::Model)?,
@@ -238,13 +261,34 @@ impl NodeServer {
                                 return;
                             }
                         };
-                        let app = build_router(state);
+                        let mut app = build_router(state);
+                        if let Some(scope) = scope {
+                            app =
+                                app.layer(middleware::from_fn_with_state(scope, require_lan_peer));
+                        }
                         let _ = ready_tx.send(Ok(()));
-                        if let Err(error) = axum::serve(listener, app)
-                            .with_graceful_shutdown(async move { shutdown.notified().await })
-                            .await
-                        {
-                            eprintln!("[lan-node] http server error: {error}");
+                        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+                        let mut server = tokio::spawn(async move {
+                            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+                                .with_graceful_shutdown(async move { let _ = stop_rx.await; })
+                                .await
+                        });
+                        tokio::select! {
+                            result = &mut server => {
+                                if let Ok(Err(error)) = result {
+                                    eprintln!("[lan-node] http server error: {error}");
+                                }
+                            }
+                            () = shutdown.notified() => {
+                                let _ = stop_tx.send(());
+                                // A peer may stop sending halfway through its body.
+                                // Allow a brief drain, then drop the runtime so an
+                                // incomplete request cannot keep the app alive.
+                                if tokio::time::timeout(Duration::from_secs(1), &mut server).await.is_err() {
+                                    server.abort();
+                                    let _ = server.await;
+                                }
+                            }
                         }
                     });
                 })
@@ -272,6 +316,46 @@ impl NodeServer {
             worker_thread: Mutex::new(Some(worker_thread)),
             mdns: Mutex::new(mdns),
         })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LanScope {
+    address: Ipv4Addr,
+    mask: Ipv4Addr,
+}
+
+impl LanScope {
+    fn new(address: Ipv4Addr, mask: Ipv4Addr) -> Result<Self, NodeError> {
+        let bits = u32::from(mask);
+        if !address.is_private() || bits == 0 || (!bits & (!bits).wrapping_add(1)) != 0 {
+            return Err(NodeError::Configuration(
+                "Choose a private LAN address with a valid subnet mask.".into(),
+            ));
+        }
+        Ok(Self { address, mask })
+    }
+
+    fn allows(self, peer: IpAddr) -> bool {
+        matches!(peer, IpAddr::V4(ip) if ip.is_private()
+            && (u32::from(ip) & u32::from(self.mask)) == (u32::from(self.address) & u32::from(self.mask)))
+    }
+}
+
+async fn require_lan_peer(
+    State(scope): State<LanScope>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if scope.allows(peer.ip()) {
+        next.run(request).await
+    } else {
+        error_response(
+            StatusCode::FORBIDDEN,
+            "lan_only",
+            "Only peers on the selected LAN subnet are allowed",
+        )
     }
 }
 
@@ -372,11 +456,28 @@ async fn create_task(
     State(state): State<AppState>,
     Json(request): Json<CreateTaskRequest>,
 ) -> Response {
+    if state.compute_enabled
+        && request
+            .model_id
+            .as_ref()
+            .is_some_and(|id| state.model_id.as_ref() != Some(id))
+    {
+        return error_response(
+            StatusCode::CONFLICT,
+            "model_unavailable",
+            "The selected model is not available on this node.",
+        );
+    }
+    let model_id = if state.compute_enabled {
+        state.model_id.as_deref()
+    } else {
+        request.model_id.as_deref()
+    };
     let task = state.store.create_task(
         &request.file_name,
         request.file_size,
         request.chunks_total,
-        request.model_id.as_deref(),
+        model_id,
     );
     match state
         .store
@@ -938,7 +1039,12 @@ fn register_mdns(
         (TXT_MODEL, model_id.unwrap_or("none")),
     ];
     let hostname = format!("{}.local.", sanitize_hostname(instance));
-    let info = match detect_primary_ipv4() {
+    let address = if config.listen.ip().is_unspecified() {
+        detect_primary_ipv4()
+    } else {
+        Some(config.listen.ip())
+    };
+    let info = match address {
         Some(address) => ServiceInfo::new(
             MDNS_SERVICE_TYPE,
             instance,
@@ -957,7 +1063,8 @@ fn register_mdns(
         ),
     };
     let info = match info {
-        Ok(info) => info.enable_addr_auto(),
+        Ok(info) if config.listen.ip().is_unspecified() => info.enable_addr_auto(),
+        Ok(info) => info,
         Err(error) => {
             eprintln!("[lan-node] cannot build mDNS record: {error}");
             let _ = daemon.shutdown();
@@ -1021,4 +1128,71 @@ fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_millis() as u64)
+}
+
+#[cfg(test)]
+mod lan_scope_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn subnet_gate_rejects_real_http_and_ignores_forwarded_headers() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let scope = LanScope::new(
+            "192.168.10.2".parse().unwrap(),
+            "255.255.255.0".parse().unwrap(),
+        )
+        .unwrap();
+        let router = Router::new()
+            .route("/health", get(health))
+            .layer(middleware::from_fn_with_state(scope, require_lan_peer));
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let response = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .header("X-Forwarded-For", "192.168.10.3")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        server.abort();
+    }
+
+    #[test]
+    fn scope_rejects_wildcard_loopback_public_vpn_and_invalid_masks() {
+        for ip in [
+            "0.0.0.0",
+            "127.0.0.1",
+            "8.8.8.8",
+            "100.64.0.1",
+            "169.254.1.1",
+        ] {
+            assert!(LanScope::new(ip.parse().unwrap(), "255.255.255.0".parse().unwrap()).is_err());
+        }
+        for mask in ["0.0.0.0", "255.0.255.0", "128.128.0.0"] {
+            assert!(LanScope::new("192.168.10.2".parse().unwrap(), mask.parse().unwrap()).is_err());
+        }
+    }
+
+    #[test]
+    fn scope_allows_only_private_peers_in_the_selected_subnet() {
+        let scope = LanScope::new(
+            "192.168.10.2".parse().unwrap(),
+            "255.255.255.0".parse().unwrap(),
+        )
+        .unwrap();
+        assert!(scope.allows("192.168.10.3".parse().unwrap()));
+        for ip in ["192.168.11.3", "10.0.0.1", "8.8.8.8", "127.0.0.1", "::1"] {
+            assert!(!scope.allows(ip.parse().unwrap()), "{ip}");
+        }
+    }
 }

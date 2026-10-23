@@ -19,6 +19,7 @@ use voice_to_text_core::{
 use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, TaskResult};
 
 mod lan;
+mod lan_host;
 mod recording;
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
@@ -432,13 +433,7 @@ async fn start_transcription(
         }
     };
     if let Some(node) = dispatch_node {
-        return lan::start_lan_transcription(
-            &app,
-            state.inner(),
-            &input,
-            node,
-            selected_model.map(|model| model.id),
-        );
+        return lan::start_lan_transcription(&app, state.inner(), &input, node, selected_model);
     }
     let model = selected_model
         .ok_or_else(|| "Choose a local Paraformer or SenseVoice model folder first.".to_owned())?;
@@ -1209,6 +1204,49 @@ fn get_lan_settings(app: AppHandle) -> Result<lan::LanSettings, String> {
 }
 
 #[tauri::command]
+fn lan_host_interfaces() -> Result<Vec<lan_host::LanInterface>, String> {
+    lan_host::interfaces()
+}
+
+#[tauri::command]
+fn lan_host_status(
+    state: State<'_, Arc<lan_host::HostState>>,
+) -> Result<lan_host::HostStatus, String> {
+    state.status()
+}
+
+#[tauri::command]
+fn lan_host_token(state: State<'_, Arc<lan_host::HostState>>) -> Result<String, String> {
+    state.token()
+}
+
+#[tauri::command]
+async fn start_lan_host(
+    name: String,
+    address: String,
+    port: u16,
+    app: AppHandle,
+    state: State<'_, Arc<lan_host::HostState>>,
+) -> Result<lan_host::HostStatus, String> {
+    let state = Arc::clone(state.inner());
+    let root = app_data_dir(&app)?;
+    let model = read_selected_model(&app)?.ok_or("Choose a local model before sharing compute.")?;
+    tauri::async_runtime::spawn_blocking(move || state.start(&root, name, address, port, model))
+        .await
+        .map_err(|_| "Could not start LAN sharing.".to_owned())?
+}
+
+#[tauri::command]
+async fn stop_lan_host(
+    state: State<'_, Arc<lan_host::HostState>>,
+) -> Result<lan_host::HostStatus, String> {
+    let state = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || state.stop())
+        .await
+        .map_err(|_| "Could not stop LAN sharing.".to_owned())?
+}
+
+#[tauri::command]
 fn set_lan_settings(
     settings: lan::LanSettings,
     app: AppHandle,
@@ -1437,6 +1475,7 @@ pub fn menu_event_for_id(id: &str) -> Option<&'static str> {
 pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(AppState::default()))
+        .manage(Arc::new(lan_host::HostState::default()))
         .manage(std::sync::Arc::new(recording::RecordingState::default()))
         .menu(|app| {
             let menu = Menu::default(app)?;
@@ -1519,6 +1558,11 @@ pub fn run() {
             search_history,
             export_transcript,
             get_lan_settings,
+            lan_host_interfaces,
+            lan_host_status,
+            lan_host_token,
+            start_lan_host,
+            stop_lan_host,
             set_lan_settings,
             set_lan_assignment,
             lan_discover,
@@ -1532,8 +1576,13 @@ pub fn run() {
             lan_collect,
             lan_storage
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                let _ = app.state::<Arc<lan_host::HostState>>().stop();
+            }
+        });
 }
 
 #[cfg(test)]

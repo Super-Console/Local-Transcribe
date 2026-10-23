@@ -41,6 +41,65 @@ fn base_url(node: &RunningNode) -> String {
     format!("http://127.0.0.1:{}", node.port())
 }
 
+#[test]
+fn node_rejects_empty_pairing_token() {
+    let dir = scratch("empty-token");
+    let result = NodeServer::start(NodeConfig {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        data_dir: dir,
+        ..NodeConfig::default()
+    });
+    if let Ok(node) = result {
+        node.shutdown();
+        node.wait();
+        panic!("an empty pairing token must not open a listener");
+    }
+}
+
+#[test]
+fn stopping_node_does_not_wait_forever_for_an_incomplete_upload() {
+    use std::io::Write;
+    let dir = scratch("stop-upload");
+    let node = std::sync::Arc::new(start_node(&dir, false, None, None, "stop-token"));
+    let mut connection = std::net::TcpStream::connect(("127.0.0.1", node.port())).unwrap();
+    connection.write_all(b"POST /api/v1/tasks HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer stop-token\r\nContent-Type: application/json\r\nContent-Length: 100000\r\n\r\n{").unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    node.shutdown();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let waiter = std::sync::Arc::clone(&node);
+    let worker = std::thread::spawn(move || {
+        waiter.wait();
+        let _ = tx.send(());
+    });
+    let stopped = rx.recv_timeout(Duration::from_secs(3)).is_ok();
+    drop(connection);
+    worker.join().unwrap();
+    assert!(
+        stopped,
+        "stopping sharing must not hang on a stalled HTTP upload"
+    );
+}
+
+#[tokio::test]
+async fn compute_node_rejects_a_different_model_before_media_upload() {
+    let dir = scratch("model-selection");
+    let model_dir = dir.join("paraformer-fixture");
+    std::fs::create_dir_all(&model_dir).unwrap();
+    std::fs::write(model_dir.join("model.onnx"), b"layout-only fixture").unwrap();
+    std::fs::write(model_dir.join("tokens.txt"), b"a 1\n").unwrap();
+    let node = start_node(&dir, true, Some(model_dir), None, "model-token");
+    let client = LanClient::new("127.0.0.1", node.port(), "model-token".into());
+    let result = client
+        .create_task("test.wav", 100, 1, Some("a-different-model"))
+        .await;
+    node.shutdown();
+    node.wait();
+    assert!(
+        result.is_err(),
+        "must not silently transcribe using a different model"
+    );
+}
+
 #[tokio::test]
 async fn full_lifecycle_upload_resume_cancel_and_result_gate() {
     let dir = scratch("lifecycle");

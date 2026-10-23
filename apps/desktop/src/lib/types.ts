@@ -124,7 +124,17 @@ export type SegmentEvent = {
 /* snake_case 载荷一一对应。                                          */
 /* ------------------------------------------------------------------ */
 
-export type LanMode = "local_only" | "prefer_local" | "prefer_lan";
+export type LanMode = "local_only" | "prefer_lan";
+
+export type LanHostInterface = { name: string; address: string; mask: string };
+export type LanHostStatus = {
+  supported: boolean;
+  running: boolean;
+  name: string;
+  address: string;
+  port: number;
+  model: string;
+};
 
 export type LanNodeConfig = {
   id: string;

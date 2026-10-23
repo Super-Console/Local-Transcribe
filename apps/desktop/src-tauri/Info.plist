@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>仅在你使用局域网功能时发现计算节点，或允许同一局域网内已配对的设备将媒体发送到本机转写。</string>
+  <key>NSBonjourServices</key>
+  <array><string>_localtranscribe._tcp</string></array>
   <key>NSMicrophoneUsageDescription</key>
   <string>Local Transcribe 需要访问麦克风，仅在本地录制并转写，不上传任何音频。</string>
   <key>NSAudioCaptureUsageDescription</key>
