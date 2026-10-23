@@ -100,6 +100,7 @@ export const zh = {
   "record.idle": "未在录音",
   "record.refresh": "刷新来源",
   "record.permission": "首次录音需要麦克风权限；录制会议应用音频需要「系统音频录制」权限（系统设置 → 隐私与安全性）。",
+  "record.permissionWindows": "麦克风权限由 Windows 管理（设置 → 隐私和安全性 → 麦克风）；应用音频捕获无需额外权限（Windows 10 2004 及以上）。",
   "record.empty": "没有录到音频，请检查权限与录音来源。",
   "model.loadedHint": "已加载到内存",
   "model.unknownSize": "大小未知",

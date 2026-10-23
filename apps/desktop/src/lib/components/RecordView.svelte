@@ -47,6 +47,11 @@
     return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
 
+  // 平台相关文案选择：WebView2 的 UA 含 "Windows"，WKWebView 含 "Mac OS X"。
+  const isWindows = $derived(
+    typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent),
+  );
+
   async function loadSources() {
     try {
       const [nextDevices, nextApps] = await Promise.all([
@@ -222,7 +227,7 @@
     {/if}
   </div>
 
-  <p class="note">{t("record.permission")}</p>
+  <p class="note">{t(isWindows ? "record.permissionWindows" : "record.permission")}</p>
 </section>
 
 <style>

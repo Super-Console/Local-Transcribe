@@ -100,6 +100,7 @@ export const fr: Record<MessageKey, Message> = {
   "record.idle": "Pas d’enregistrement",
   "record.refresh": "Actualiser les sources",
   "record.permission": "L’enregistrement nécessite l’accès au Microphone ; capturer une app nécessite l’Enregistrement audio du système (Réglages → Confidentialité).",
+  "record.permissionWindows": "L’accès au micro est géré par Windows (Paramètres → Confidentialité et sécurité → Microphone) ; capturer une application ne demande pas d’autorisation supplémentaire (Windows 10 2004 ou ultérieur).",
   "record.empty": "Aucun audio capturé. Vérifiez les autorisations et les sources.",
   "model.loadedHint": "Chargé en mémoire",
   "model.unknownSize": "Taille inconnue",
