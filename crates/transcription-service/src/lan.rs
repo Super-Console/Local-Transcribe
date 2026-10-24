@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-#[cfg(unix)]
+// Arc/Mutex 在 unix 的 stderr 捕获和 Windows 的同名 stub 里都用得到。
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -85,6 +85,10 @@ fn probe_capabilities(host: &str, port: u16, timeout: Duration) -> Result<Value,
 }
 
 /// 从设置文件读出某个节点（按 id 或名称），用于启停。
+///
+/// 错误直接就是可返回给 CLI/MCP 的 `Response`（与其他 LAN 处理函数一致），
+/// 这里不为了 clippy 的尺寸阈值再包一层 Box。
+#[allow(clippy::result_large_err)]
 fn load_node(data_dir: &Path, selector: &str) -> Result<LanNodeConfig, Response> {
     let settings = read(&settings_path(data_dir));
     find_node(&settings, selector)
@@ -689,23 +693,16 @@ pub fn start_remote(data_dir: &Path, selector: &str) -> Response {
             format!("The ssh target '{target}' contains characters that are not allowed."),
         );
     }
-    let binary = match node
+    let binary = node
         .node_binary
         .clone()
-        .unwrap_or_else(default_remote_binary)
-    {
-        binary => {
-            if !is_safe_node_binary(&binary) {
-                return Response::failure(
-                    "unsafe_binary",
-                    format!(
-                        "The node binary path '{binary}' contains characters that are not allowed."
-                    ),
-                );
-            }
-            binary
-        }
-    };
+        .unwrap_or_else(default_remote_binary);
+    if !is_safe_node_binary(&binary) {
+        return Response::failure(
+            "unsafe_binary",
+            format!("The node binary path '{binary}' contains characters that are not allowed."),
+        );
+    }
 
     let remote = format!("'{binary}' --from-settings");
     let mut command = ssh_command(&target, &remote);
@@ -724,7 +721,7 @@ pub fn start_remote(data_dir: &Path, selector: &str) -> Response {
     };
 
     // 捕获远端 ssh stderr（节点把 stdio 落到远端日志，故这里多半是 ssh 自身的错）。
-    #[cfg(unix)]
+    // 非 unix 的 capture_stderr 是空 stub，保持调用点只有一处。
     let stderr_lines = capture_stderr(&mut child);
 
     match poll_remote_ready(&node.host, node.port, &mut child) {
