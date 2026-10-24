@@ -15,7 +15,20 @@ const USAGE: &str = "Usage:
   local-transcribe status [--data-dir DIR]
   local-transcribe models list [--data-dir DIR]
   local-transcribe models info <model-id> [--data-dir DIR]
+  local-transcribe mode local|prefer-lan [--data-dir DIR]
   local-transcribe lan nodes [--data-dir DIR]
+  local-transcribe lan list [--data-dir DIR]
+      (lan list is an alias of lan nodes)
+  local-transcribe lan add <name> <host>[:port] [--port P] [--force] [--data-dir DIR]
+  local-transcribe lan remove <node> [--data-dir DIR]
+  local-transcribe lan enable <node> [--data-dir DIR]
+  local-transcribe lan disable <node> [--data-dir DIR]
+  local-transcribe lan set <node> [--host H] [--port P] [--model ID] [--name N] [--data-dir DIR]
+  local-transcribe lan scan [--timeout SECS] [--data-dir DIR]
+  local-transcribe lan start [<node>] [--data-dir DIR]
+      (with a node it starts it over SSH; without it starts the local node)
+  local-transcribe lan stop [<node>] [--data-dir DIR]
+  local-transcribe lan status [--data-dir DIR]
   local-transcribe jobs add <media> [--model ID] [--language LANG] [--root DIR] [--data-dir DIR]
       [--node NODE] [--lan-model ID] [--fallback-local]
   local-transcribe jobs list [--data-dir DIR]
@@ -26,7 +39,10 @@ const USAGE: &str = "Usage:
   local-transcribe jobs remove <job-id> [--data-dir DIR]
   local-transcribe export <job-id> --format txt|json --output PATH [--data-dir DIR]
 
-All commands print JSON. The service is started on demand and shared with the app.";
+<node> is a saved node id or its unique name. All commands print JSON. The
+service is started on demand and shared with the app. Remote start/stop runs
+fixed ssh commands (BatchMode, no password prompt); the optional 'ssh' field is
+per initiating machine, so do not assume both ends share ssh aliases.";
 
 struct Parsed {
     group: String,
@@ -42,6 +58,11 @@ struct Parsed {
     node: Option<String>,
     lan_model: Option<String>,
     fallback_local: bool,
+    host: Option<String>,
+    port: Option<u16>,
+    name: Option<String>,
+    force: bool,
+    timeout_secs: Option<u64>,
 }
 
 fn parse(args: Vec<String>) -> Result<Parsed, String> {
@@ -60,11 +81,17 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
         node: None,
         lan_model: None,
         fallback_local: false,
+        host: None,
+        port: None,
+        name: None,
+        force: false,
+        timeout_secs: None,
     };
     if let Some(first) = iter.next() {
         if first == "--help" || first == "-h" || first == "help" {
             return Err(USAGE.to_owned());
         }
+        // "mode" 也是一级命令，但它的动作是位置参数而不是二级词。
         if first == "models" || first == "jobs" || first == "lan" {
             parsed.group = first;
             parsed.action = iter.next();
@@ -91,6 +118,21 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--node" => parsed.node = Some(take("--node")?),
             "--lan-model" => parsed.lan_model = Some(take("--lan-model")?),
             "--fallback-local" => parsed.fallback_local = true,
+            "--host" => parsed.host = Some(take("--host")?),
+            "--name" => parsed.name = Some(take("--name")?),
+            "--force" => parsed.force = true,
+            "--port" => {
+                let value = take("--port")?;
+                parsed.port = Some(parse_port(&value)?);
+            }
+            "--timeout" => {
+                let value = take("--timeout")?;
+                parsed.timeout_secs = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("--timeout expects a number of seconds, got '{value}'"))?,
+                );
+            }
             other if other.starts_with('-') => {
                 return Err(format!("Unknown option: {other}\n{USAGE}"))
             }
@@ -98,6 +140,46 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
         }
     }
     Ok(parsed)
+}
+
+fn parse_port(value: &str) -> Result<u16, String> {
+    let port = value
+        .parse::<u16>()
+        .map_err(|_| format!("port must be a number between 1 and 65535, got '{value}'"))?;
+    if port == 0 {
+        return Err("port must be between 1 and 65535.".to_owned());
+    }
+    Ok(port)
+}
+
+/// 拆分 `host[:port]`：只有「单个冒号 + 后缀是合法端口」才拆，避免破坏 IPv6。
+///
+/// `[::1]:7878` 这种带方括号的写法也支持。
+fn split_host_port(value: &str) -> Result<(String, Option<u16>), String> {
+    let trimmed = value.trim();
+    if let Some(rest) = trimmed.strip_prefix('[') {
+        // 方括号形式：[::1]:7878 / [fe80::1]
+        let Some(close) = rest.find(']') else {
+            return Err(format!("'{value}' has an opening '[' without a closing ']'."));
+        };
+        let host = rest[..close].to_owned();
+        let tail = &rest[close + 1..];
+        if tail.is_empty() {
+            return Ok((host, None));
+        }
+        let Some(port) = tail.strip_prefix(':') else {
+            return Err(format!("Unexpected text after ']': '{tail}'."));
+        };
+        return Ok((host, Some(parse_port(port)?)));
+    }
+    let mut parts = trimmed.split(':');
+    let head = parts.next().unwrap_or_default();
+    match (parts.next(), parts.next()) {
+        (Some(port), None) if !port.is_empty() => Ok((head.to_owned(), Some(parse_port(port)?))),
+        (None, None) => Ok((trimmed.to_owned(), None)),
+        // 两个及以上冒号：当作 IPv6 字面量，整体当 host，不做猜测。
+        _ => Ok((trimmed.to_owned(), None)),
+    }
 }
 
 fn service_binary() -> Result<PathBuf, String> {
@@ -174,6 +256,30 @@ fn finish(result: Result<Response, String>) -> ExitCode {
     }
 }
 
+/// LAN 的启停会轮询最多 60s；客户端默认 30s 读超时会在服务返回前断开。
+const LAN_READ_TIMEOUT_SECS: u64 = 90;
+
+/// `lan start [node]` / `lan stop [node]`：给了节点名走远端，没给走本机。
+fn lan_start_stop(action: &str, parsed: &Parsed) -> Request {
+    let start = action == "start";
+    // 显式传空串视作「没传」，避免把空 selector 发给服务。
+    let remote = parsed
+        .positional
+        .first()
+        .map(|node| node.trim())
+        .filter(|node| !node.is_empty());
+    match remote {
+        Some(node) if start => Request::LanStartRemote {
+            node: node.to_owned(),
+        },
+        Some(node) => Request::LanStopRemote {
+            node: node.to_owned(),
+        },
+        None if start => Request::LanStartLocal,
+        None => Request::LanStopLocal,
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let parsed = match parse(args) {
@@ -210,10 +316,14 @@ fn main() -> ExitCode {
         }
     };
 
+    // LAN 命令可能要等轮询（启动最多 60s、远端停止 10s、扫描 60s），放宽读超时。
+    if parsed.group == "lan" {
+        client.set_read_timeout(LAN_READ_TIMEOUT_SECS);
+    }
+
     let request = match (parsed.group.as_str(), action.as_str()) {
         ("status", _) => Request::Ping,
         ("models", "list") => Request::Models,
-        ("lan", "nodes") => Request::LanNodes,
         ("models", "info") => match parsed.positional.first() {
             Some(id) => Request::SelectModel { id: id.clone() },
             None => {
@@ -221,6 +331,77 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         },
+        // `mode local|prefer-lan`：模式词是位置参数而不是二级动作。
+        ("mode", _) => {
+            let Some(mode) = parsed.positional.first().filter(|value| !value.trim().is_empty())
+            else {
+                eprintln!("mode needs 'local' or 'prefer-lan'\n{USAGE}");
+                return ExitCode::from(2);
+            };
+            Request::LanMode { mode: mode.clone() }
+        }
+        ("lan", "nodes") | ("lan", "list") => Request::LanNodes,
+        ("lan", "add") => {
+            let (Some(name), Some(host)) = (parsed.positional.first(), parsed.positional.get(1))
+            else {
+                eprintln!("lan add needs a name and a host\n{USAGE}");
+                return ExitCode::from(2);
+            };
+            let (host, embedded_port) = match split_host_port(host) {
+                Ok(split) => split,
+                Err(error) => {
+                    eprintln!("{error}\n{USAGE}");
+                    return ExitCode::from(2);
+                }
+            };
+            // --port 优先于 host 里内联的端口。
+            let port = parsed.port.or(embedded_port);
+            Request::LanAdd {
+                name: name.clone(),
+                host,
+                port,
+                force: parsed.force,
+            }
+        }
+        ("lan", "remove") => match parsed.positional.first() {
+            Some(node) => Request::LanRemove { node: node.clone() },
+            None => {
+                eprintln!("lan remove needs a node id or name\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+        ("lan", "enable") => match parsed.positional.first() {
+            Some(node) => Request::LanEnable { node: node.clone() },
+            None => {
+                eprintln!("lan enable needs a node id or name\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+        ("lan", "disable") => match parsed.positional.first() {
+            Some(node) => Request::LanDisable { node: node.clone() },
+            None => {
+                eprintln!("lan disable needs a node id or name\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+        ("lan", "set") => match parsed.positional.first() {
+            Some(node) => Request::LanSet {
+                node: node.clone(),
+                host: parsed.host.clone(),
+                port: parsed.port,
+                model: parsed.model.clone(),
+                name: parsed.name.clone(),
+            },
+            None => {
+                eprintln!("lan set needs a node id or name\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+        ("lan", "scan") => Request::LanScan {
+            timeout_secs: parsed.timeout_secs,
+        },
+        ("lan", "start") | ("lan", "stop") => lan_start_stop(&action, &parsed),
+        ("lan", "status") => Request::LanStatus,
         ("jobs", "add") => {
             let Some(media) = parsed.positional.first() else {
                 eprintln!("jobs add needs a media path\n{USAGE}");

@@ -79,6 +79,46 @@ struct ExportArgs {
     path: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct AddNodeArgs {
+    #[schemars(description = "Friendly name for the node")]
+    name: String,
+    #[schemars(
+        description = "Plain host string: IP, .local name, tailnet name or any DNS name. No URL scheme."
+    )]
+    host: String,
+    #[serde(default)]
+    #[schemars(description = "Optional port; defaults to 7878")]
+    port: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct UpdateNodeArgs {
+    #[schemars(description = "Saved node id from list_nodes")]
+    id: String,
+    #[serde(default)]
+    #[schemars(description = "Enable or disable dispatching to this node")]
+    enabled: Option<bool>,
+    #[serde(default)]
+    #[schemars(description = "New plain host string; no URL scheme")]
+    host: Option<String>,
+    #[serde(default)]
+    #[schemars(description = "New port")]
+    port: Option<u16>,
+    #[serde(default)]
+    #[schemars(description = "New remote model id; empty string clears it")]
+    model_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct NodeIdArgs {
+    #[schemars(description = "Saved node id from list_nodes")]
+    id: String,
+}
+
 // ---------------------------------------------------------------------------
 // Tool replies
 // ---------------------------------------------------------------------------
@@ -187,6 +227,41 @@ struct CancelReply {
 // ---------------------------------------------------------------------------
 // Server
 // ---------------------------------------------------------------------------
+
+/// 拒绝任何 URL scheme：host 必须是纯主机字符串（IP / `.local` / tailnet 名 /
+/// 任意 DNS 名）。任务书 §8 测试 7 用 `ssh://x` 断言这里会拒绝。
+fn validate_host_value(host: &str) -> Result<String, String> {
+    let trimmed = host.trim();
+    if trimmed.is_empty() {
+        return Err("A LAN node needs a host.".to_owned());
+    }
+    if trimmed.contains("://") {
+        return Err(format!(
+            "The host must be a plain name or address, not a URL (got '{trimmed}'); a scheme like 'ssh://' is not accepted."
+        ));
+    }
+    if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("The host must not contain whitespace or control characters.".to_owned());
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// 名称非空即可；它只作为数据显示，绝不进入任何命令行。
+fn validate_name_value(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("A LAN node needs a name.".to_owned());
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// 端口必须在 1..=65535；0 会被当成「未设置」而静默回落，因此显式拒绝。
+fn validate_port_value(port: Option<u16>) -> Result<Option<u16>, String> {
+    match port {
+        Some(0) => Err("The port must be between 1 and 65535.".to_owned()),
+        other => Ok(other),
+    }
+}
 
 impl VoiceToTextServer {
     fn new(data_dir: PathBuf, roots: Vec<PathBuf>) -> Result<Self, String> {
@@ -385,6 +460,95 @@ impl VoiceToTextServer {
     async fn list_nodes(&self) -> Result<Json<serde_json::Value>, String> {
         let mut client = self.connect()?;
         let data = Self::data_of(client.request(&Request::LanNodes)?)?;
+        Ok(Json(data))
+    }
+
+    /// Add a saved node after probing its capabilities.
+    #[tool(
+        name = "add_node",
+        description = "Add a LAN node after probing it; returns a capabilities summary. Unreachable hosts are rejected."
+    )]
+    async fn add_node(&self, Parameters(args): Parameters<AddNodeArgs>) -> Result<Json<Value>, String> {
+        // 在连接服务之前先校验：坏输入不产生任何网络或 IPC 动作。
+        let name = validate_name_value(&args.name)?;
+        let host = validate_host_value(&args.host)?;
+        let port = validate_port_value(args.port)?;
+        let mut client = self.connect()?;
+        let data = Self::data_of(client.request(&Request::LanAdd {
+            name,
+            host,
+            port,
+            // MCP 不提供 force：不可达的地址一律拒绝，避免存进一个用不了的节点。
+            force: false,
+        })?)?;
+        Ok(Json(data))
+    }
+
+    /// Change a saved node's dispatch fields.
+    #[tool(
+        name = "update_node",
+        description = "Update a saved node: enabled, host, port or remote model id."
+    )]
+    async fn update_node(
+        &self,
+        Parameters(args): Parameters<UpdateNodeArgs>,
+    ) -> Result<Json<Value>, String> {
+        if args.id.trim().is_empty() {
+            return Err("A node id is required.".to_owned());
+        }
+        let host = match args.host.as_deref() {
+            Some(host) => Some(validate_host_value(host)?),
+            None => None,
+        };
+        let port = validate_port_value(args.port)?;
+        if args.enabled.is_none() && host.is_none() && port.is_none() && args.model_id.is_none() {
+            return Err(
+                "Nothing to change: pass at least one of enabled, host, port or modelId.".to_owned(),
+            );
+        }
+        let mut client = self.connect()?;
+        let data = Self::data_of(client.request(&Request::LanSet {
+            node: args.id,
+            host,
+            port,
+            model: args.model_id,
+            name: None,
+        })?)?;
+        Ok(Json(data))
+    }
+
+    /// Remove a node from the local list only; the remote machine is untouched.
+    #[tool(
+        name = "remove_node",
+        description = "Forget a saved node locally; nothing is sent to the other machine."
+    )]
+    async fn remove_node(
+        &self,
+        Parameters(args): Parameters<NodeIdArgs>,
+    ) -> Result<Json<Value>, String> {
+        if args.id.trim().is_empty() {
+            return Err("A node id is required.".to_owned());
+        }
+        let mut client = self.connect()?;
+        let data = Self::data_of(client.request(&Request::LanRemove { node: args.id })?)?;
+        Ok(Json(data))
+    }
+
+    /// Probe one saved node for reachability, protocol version and models.
+    #[tool(
+        name = "node_status",
+        description = "Probe one saved node: reachability, protocol version and available models.",
+        annotations(read_only_hint = true)
+    )]
+    async fn node_status(
+        &self,
+        Parameters(args): Parameters<NodeIdArgs>,
+    ) -> Result<Json<Value>, String> {
+        if args.id.trim().is_empty() {
+            return Err("A node id is required.".to_owned());
+        }
+        let mut client = self.connect()?;
+        let data = Self::data_of(client.request(&Request::LanNodeProbe { node: args.id })?)?;
         Ok(Json(data))
     }
 
@@ -660,12 +824,13 @@ mod tests {
             .tool_router
             .list_all()
             .into_iter()
-            .map(|tool| tool.name)
+            .map(|tool| tool.name.into_owned())
             .collect::<Vec<_>>();
         names.sort();
         assert_eq!(
             names,
             [
+                "add_node",
                 "cancel_job",
                 "export_result",
                 "get_job_result",
@@ -673,10 +838,104 @@ mod tests {
                 "list_jobs",
                 "list_models",
                 "list_nodes",
+                "node_status",
+                "remove_node",
                 "retry_job",
                 "transcribe_file",
+                "update_node",
             ]
         );
+    }
+
+    /// 任务书 §8 测试 8：任何工具都不接受任意命令参数（schema 断言）。
+    #[test]
+    fn no_tool_accepts_an_arbitrary_command_parameter() {
+        let server = VoiceToTextServer::new(temp_root(), Vec::new()).unwrap();
+        // 这些名字一旦出现在参数里，就等于给模型开了「在本机执行任意东西」的口子。
+        let forbidden = [
+            "command", "cmd", "exec", "execute", "shell", "sh", "bash", "zsh", "powershell",
+            "eval", "script", "argv", "args", "env", "cwd", "url", "uri", "scheme",
+        ];
+        for tool in server.tool_router.list_all() {
+            let mut properties = Vec::new();
+            collect_property_names(&Value::Object((*tool.input_schema).clone()), &mut properties);
+            for property in &properties {
+                assert!(
+                    !forbidden.contains(&property.as_str()),
+                    "tool '{}' must not accept a '{}' parameter",
+                    tool.name,
+                    property
+                );
+            }
+            // 参数必须封闭在声明的字段里，不能随手塞进别的键。
+            assert_ne!(
+                tool.input_schema.get("additionalProperties"),
+                Some(&Value::Bool(true)),
+                "tool '{}' must not accept arbitrary extra parameters",
+                tool.name
+            );
+        }
+    }
+
+    /// 递归收集 JSON Schema 里所有属性名（含 `$ref` 之外的内联 object）。
+    fn collect_property_names(schema: &Value, out: &mut Vec<String>) {
+        match schema {
+            Value::Object(map) => {
+                if let Some(Value::Object(properties)) = map.get("properties") {
+                    for (name, child) in properties {
+                        out.push(name.clone());
+                        collect_property_names(child, out);
+                    }
+                }
+                for value in map.values() {
+                    collect_property_names(value, out);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_property_names(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 任务书 §8 测试 7：`add_node` 传未知 scheme（`ssh://x`）在连接服务之前就被拒绝。
+    #[test]
+    fn add_node_rejects_a_url_scheme_before_touching_the_service() {
+        let data = temp_root();
+        let server = VoiceToTextServer::new(data.clone(), Vec::new()).unwrap();
+        let args = AddNodeArgs {
+            name: "desk".to_owned(),
+            host: "ssh://x".to_owned(),
+            port: None,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let error = match runtime.block_on(server.add_node(Parameters(args))) {
+            Ok(_) => panic!("a URL scheme must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("ssh://"), "unhelpful error: {error}");
+        // 校验先于 connect()：服务不应被拉起，也不该写任何设置。
+        assert!(!data.join("service.sock").exists());
+        assert!(!data.join("service.port").exists());
+        assert!(!data.join("lan-settings.json").exists());
+
+        // 控制字符同样拒绝。
+        assert!(validate_host_value("host\tname").is_err());
+        assert!(validate_host_value("").is_err());
+        assert!(validate_host_value("   ").is_err());
+        // 纯主机字符串照常通过（IP / .local / tailnet 名 / DNS）。
+        assert!(validate_host_value("192.168.1.5").is_ok());
+        assert!(validate_host_value("mbp.local").is_ok());
+        assert!(validate_host_value("box.tail-scale.ts.net").is_ok());
+        assert!(validate_host_value("ssh://x").is_err());
+        // 端口 0 显式拒绝，避免被当成「未设置」。
+        assert!(validate_port_value(Some(0)).is_err());
+        assert!(validate_port_value(None).is_ok());
     }
 
     #[test]

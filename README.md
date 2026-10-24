@@ -88,13 +88,37 @@ local-transcribe models list
 local-transcribe jobs add <media> [--model ID] [--root DIR]
 local-transcribe jobs list | show | cancel | retry | remove <job-id>
 local-transcribe export <job-id> --format txt|json --output PATH
+
+local-transcribe lan list | nodes
+local-transcribe lan add <name> <host>[:port] [--force]
+local-transcribe lan remove <id|name>
+local-transcribe lan enable|disable <id|name>
+local-transcribe lan set <id|name> [--host H] [--port P] [--model ID] [--name N]
+local-transcribe lan scan [--timeout 8]
+local-transcribe lan start [<id|name>] | stop [<id|name>]
+local-transcribe lan status
+local-transcribe mode local|prefer-lan
 ```
 
-All commands print JSON. The shared service starts on demand.
+All commands print JSON. Exit codes: `0` success, `1` the service reported an error (for
+example `lan stop` with no running node: `not_running`), `2` bad arguments, `4` the local
+service could not be reached.
+
+`lan add` accepts any plain host string — IP, `.local`, tailnet name or DNS name — and
+connects to `http://{host}:{port}` directly; it is never parsed as an IPv4 literal. A
+node that does not answer is refused with a readable error unless `--force` is given.
+
+`lan start <node>` / `lan stop <node>` start or stop a node on another Mac over **plain
+SSH** using the system's `sshd` and your existing key login (`BatchMode=yes`, no password
+prompt). It installs no daemon, LaunchAgent, scheduled task or startup item; the only
+remote command is `<node_binary> --from-settings`. The optional `ssh` field of a node is
+filled **per initiating machine** — on the Air `ssh pro` means the Pro, on the Pro `ssh
+air` means the Air; do not assume the same aliases exist on both ends. `lan start` without
+an id starts the node on this Mac and shares the same settings as the GUI switch.
 
 ### MCP
 
-`voice-to-text-mcp` speaks the MCP protocol over local stdio and exposes exactly eight tools: `transcribe_file`, `get_job_status`, `get_job_result`, `cancel_job`, `retry_job`, `list_jobs`, `list_models`, `export_result`. File access requires explicit `--allow-root DIR` arguments; without any root, all file reads are denied. See [`docs/mcp.md`](docs/mcp.md).
+`voice-to-text-mcp` speaks the MCP protocol over local stdio and exposes exactly thirteen tools: `transcribe_file`, `get_job_status`, `get_job_result`, `cancel_job`, `retry_job`, `list_jobs`, `list_models`, `export_result`, `list_nodes`, `add_node`, `update_node`, `remove_node`, `node_status`. File access requires explicit `--allow-root DIR` arguments; without any root, all file reads are denied. `add_node` is the only tool that can introduce a new address; every other node tool works only on a node already in `lan-settings.json`, and no tool accepts a command, path or URL scheme. See [`docs/mcp.md`](docs/mcp.md).
 
 ## Build from source (macOS, Apple Silicon)
 
@@ -129,4 +153,10 @@ See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the full milestone log with ver
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Third-party components keep their own licenses.
+Code is licensed under the MIT License — see [LICENSE](LICENSE).
+
+The name "Local Transcribe" and the application icon are not covered by this
+license; they remain the property of the author.
+
+Third-party components keep their own licenses; see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

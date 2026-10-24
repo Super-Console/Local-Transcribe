@@ -38,6 +38,8 @@ use voice_to_text_core::{
 use voice_to_text_lan::client::LanClient;
 use voice_to_text_lan::protocol::{TaskResult, TaskState};
 
+mod lan;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SOCKET_FILE: &str = "service.sock";
 pub const PORT_FILE: &str = "service.port";
@@ -125,6 +127,68 @@ pub enum Request {
         job_id: String,
         #[serde(default)]
         full: bool,
+    },
+    // ------------------------------------------------------------------
+    // LAN settings mutations (CLI / MCP thin clients over the same
+    // `lan-settings.json` the GUI owns; every write goes through the shared
+    // fs2-locked module in voice-to-text-lan::settings).
+    // ------------------------------------------------------------------
+    /// 添加节点并探测 `/api/v1/capabilities`（`force` 时不可达也保存）。
+    LanAdd {
+        name: String,
+        host: String,
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default)]
+        force: bool,
+    },
+    LanRemove {
+        node: String,
+    },
+    LanEnable {
+        node: String,
+    },
+    LanDisable {
+        node: String,
+    },
+    LanSet {
+        node: String,
+        #[serde(default)]
+        host: Option<String>,
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// 局域网发现（mDNS + 子网 TCP 扫描）；只返回结果，绝不写设置。
+    LanScan {
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+    },
+    /// 本机作为节点开始/停止监听（host 侧）。
+    LanStartLocal,
+    LanStopLocal,
+    /// 通过 SSH 在远端拉起/停止节点（固定命令模板，见 §7.1）。
+    LanStartRemote {
+        node: String,
+    },
+    LanStopRemote {
+        node: String,
+    },
+    /// 本机节点状态 + 各已保存节点可达性。
+    LanStatus,
+    /// 探测单个已保存节点：可达性、协议版本、模型列表。
+    ///
+    /// 只能用于 `lan-settings.json` 里已存在的节点（MCP `node_status` 用），
+    /// 不接受任意地址。
+    LanNodeProbe {
+        node: String,
+    },
+    /// 设置计算方式（`local` / `prefer-lan`）。
+    LanMode {
+        mode: String,
     },
 }
 
@@ -592,6 +656,37 @@ fn dispatch(request: Request, shared: &Shared) -> Response {
         Request::Cancel { job_id } => cancel(&job_id, shared),
         Request::Models => models(shared),
         Request::LanNodes => lan_nodes(shared),
+        Request::LanAdd {
+            name,
+            host,
+            port,
+            force,
+        } => lan::add(shared.store.data_dir(), &name, &host, port, force),
+        Request::LanRemove { node } => lan::remove(shared.store.data_dir(), &node),
+        Request::LanEnable { node } => lan::enable(shared.store.data_dir(), &node),
+        Request::LanDisable { node } => lan::disable(shared.store.data_dir(), &node),
+        Request::LanSet {
+            node,
+            host,
+            port,
+            model,
+            name,
+        } => lan::set(
+            shared.store.data_dir(),
+            &node,
+            host.as_deref(),
+            port,
+            model.as_deref(),
+            name.as_deref(),
+        ),
+        Request::LanScan { timeout_secs } => lan::scan(shared.store.data_dir(), timeout_secs),
+        Request::LanStartLocal => lan::start_local(shared.store.data_dir()),
+        Request::LanStopLocal => lan::stop_local(shared.store.data_dir()),
+        Request::LanStartRemote { node } => lan::start_remote(shared.store.data_dir(), &node),
+        Request::LanStopRemote { node } => lan::stop_remote(shared.store.data_dir(), &node),
+        Request::LanStatus => lan::status(shared.store.data_dir()),
+        Request::LanNodeProbe { node } => lan::node_probe(shared.store.data_dir(), &node),
+        Request::LanMode { mode } => lan::mode(shared.store.data_dir(), &mode),
         Request::SelectModel { id } => select_model(&id, shared),
         Request::Jobs => jobs(shared),
         Request::Retry { job_id } => retry(&job_id, shared),
@@ -1817,6 +1912,13 @@ impl ServiceClient {
         Ok(ServiceClient { stream })
     }
 
+    /// 调整读超时（LAN 启停会轮询最多 60s，客户端默认 30s 会提前断开）。
+    pub fn set_read_timeout(&mut self, seconds: u64) {
+        let _ = self
+            .stream
+            .set_read_timeout(Some(Duration::from_secs(seconds)));
+    }
+
     pub fn request(&mut self, request: &Request) -> Result<Response, String> {
         let mut payload = serde_json::to_string(request).map_err(|error| error.to_string())?;
         payload.push('\n');
@@ -1939,6 +2041,31 @@ mod jobs_list_tests {
         let response = export("job-export", path.to_str().unwrap(), "txt", &shared);
         assert!(response.ok, "{:?}", response.error);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), full);
+    }
+
+    #[test]
+    fn export_json_uses_the_recording_model_not_a_current_selection() {
+        let shared = shared("export-model");
+        let model_id = "transducer-sherpa-onnx-x-asr-zipformer-transducer-zh-en-int8-2026-06-03";
+        let transcript = Transcript {
+            schema_version: "1".to_owned(),
+            job_id: "job-export-model".to_owned(),
+            source_file_name: "voice.wav".to_owned(),
+            model_id: model_id.to_owned(),
+            model_version: None,
+            engine: "lan/desk".to_owned(),
+            language: None,
+            duration_ms: Some(1_000),
+            text: "你好".to_owned(),
+            segments: None,
+        };
+        shared.store.save_transcript(&transcript).unwrap();
+        let path = shared.store.data_dir().join("export-model.json");
+        let response = export("job-export-model", path.to_str().unwrap(), "json", &shared);
+        assert!(response.ok, "{:?}", response.error);
+        let exported: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(exported["modelId"], model_id);
     }
 
     #[test]

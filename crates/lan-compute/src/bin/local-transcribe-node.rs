@@ -6,7 +6,14 @@
 //!     [--models-dir <应用数据目录>] [--model-dir <模型目录>]
 //!     [--selected-model <selected-model.json>] [--media-root <目录>]
 //!     [--parent-pid <pid>]
+//!
+//! local-transcribe-node --from-settings
 //! ```
+//!
+//! `--from-settings` 是 `lan start`（CLI/MCP 远程与本机拉起）的固定入口：从
+//! 应用数据目录的 `lan-settings.json` 读 `host_name`/`host_address`/
+//! `host_port`、空闲卸载与模型目录，自己解析网卡掩码，不要求其余参数；显式
+//! 传入的参数优先。
 //!
 //! User-enabled trusted-LAN node; no pairing credentials. The listen address
 //! may be any non-loopback IPv4 of this machine (Wi-Fi, Ethernet, VPN,
@@ -29,6 +36,7 @@ const USAGE: &str = "local-transcribe-node - Local Transcribe LAN compute node
 
 USAGE:
     local-transcribe-node --name <显示名> --data-dir <目录> --listen <IPv4:端口> [OPTIONS]
+    local-transcribe-node --from-settings
 
 OPTIONS:
     --name <显示名>               Display name announced over mDNS (required)
@@ -48,6 +56,9 @@ OPTIONS:
     --parent-pid <pid>            Exit when the parent process disappears
     --idle-unload <秒>            Free the loaded model after this idle time;
                                   one of 20 / 120 / 600 / 1800 / 7200 (default 120)
+    --from-settings               Read name, listen address, models dir and idle
+                                  unload from the app's lan-settings.json;
+                                  explicit flags above still win
     -h, --help                    Show this help";
 
 const STATE_FILE: &str = "lan-node.json";
@@ -68,6 +79,9 @@ struct Args {
     parent_pid: Option<u32>,
     idle_unload: u64,
     retention_file: Option<PathBuf>,
+    /// `--from-settings` 模式：节点需在 SSH 断开后继续存活，因此忽略 SIGHUP
+    /// 并把 stdio 重定向到日志（等价 nohup），见 [`detach_from_terminal`]。
+    from_settings: bool,
 }
 
 /// Written to `<data-dir>/lan-node.json` so a second launch can detect a live
@@ -86,6 +100,9 @@ struct NodeState {
 }
 
 fn main() {
+    // 并发写设置的测试会重新执行本二进制，在这里分叉出去；正常运行不受影响。
+    voice_to_text_lan::settings::settings_test_helper();
+
     let args = match parse_args(std::env::args().skip(1)) {
         Ok(args) => args,
         Err(ParseOutcome::Help) => {
@@ -104,6 +121,12 @@ fn main() {
             args.data_dir.display()
         );
         std::process::exit(1);
+    }
+
+    // `--from-settings` 常经 SSH 拉起：断开连接后必须继续存活，因此先忽略
+    // SIGHUP 并把 stdio 落到日志，避免远端 shell 退出时管道写入失败带崩节点。
+    if args.from_settings {
+        detach_from_terminal(&args.data_dir);
     }
 
     if let Err(error) = voice_to_text_core::set_idle_unload(args.idle_unload) {
@@ -249,15 +272,16 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
     let mut data_dir = None;
     let mut listen = None;
     let mut netmask = None;
-    let mut compute = false;
-    let mut role = "auto".to_owned();
+    let mut compute: Option<bool> = None;
+    let mut role: Option<String> = None;
     let mut model_dir = None;
     let mut models_dir = None;
     let mut selected_model = None;
     let mut media_root = None;
     let mut parent_pid = None;
-    let mut idle_unload = voice_to_text_core::DEFAULT_IDLE_UNLOAD_SECONDS;
+    let mut idle_unload: Option<u64> = None;
     let mut retention_file = None;
+    let mut from_settings = false;
 
     while let Some(argument) = arguments.next() {
         let mut take_value = |flag: &str| {
@@ -277,7 +301,7 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
                 })?);
             }
             "--compute" => {
-                compute = match take_value("--compute")?.as_str() {
+                compute = Some(match take_value("--compute")?.as_str() {
                     "on" => true,
                     "off" => false,
                     other => {
@@ -285,15 +309,16 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
                             "--compute must be 'on' or 'off', got '{other}'"
                         )))
                     }
-                }
+                })
             }
             "--role" => {
-                role = take_value("--role")?;
-                if !matches!(role.as_str(), "gpu" | "cpu" | "auto") {
+                let value = take_value("--role")?;
+                if !matches!(value.as_str(), "gpu" | "cpu" | "auto") {
                     return Err(ParseOutcome::Error(format!(
-                        "--role must be 'gpu', 'cpu' or 'auto', got '{role}'"
+                        "--role must be 'gpu', 'cpu' or 'auto', got '{value}'"
                     )));
                 }
+                role = Some(value);
             }
             "--model-dir" => model_dir = Some(PathBuf::from(take_value("--model-dir")?)),
             "--models-dir" => models_dir = Some(PathBuf::from(take_value("--models-dir")?)),
@@ -306,15 +331,16 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
             }
             "--idle-unload" => {
                 let value = take_value("--idle-unload")?;
-                idle_unload = value.parse::<u64>().map_err(|error| {
+                let seconds = value.parse::<u64>().map_err(|error| {
                     ParseOutcome::Error(format!("invalid --idle-unload '{value}': {error}"))
                 })?;
-                if !voice_to_text_core::IDLE_UNLOAD_CHOICES.contains(&idle_unload) {
+                if !voice_to_text_core::IDLE_UNLOAD_CHOICES.contains(&seconds) {
                     return Err(ParseOutcome::Error(format!(
                         "--idle-unload must be one of {:?} seconds; 'never unload' is not supported",
                         voice_to_text_core::IDLE_UNLOAD_CHOICES
                     )));
                 }
+                idle_unload = Some(seconds);
             }
             "--parent-pid" => {
                 let value = take_value("--parent-pid")?;
@@ -322,8 +348,76 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
                     ParseOutcome::Error(format!("invalid --parent-pid '{value}': {error}"))
                 })?);
             }
+            "--from-settings" => from_settings = true,
             other => {
                 return Err(ParseOutcome::Error(format!("unknown argument '{other}'")));
+            }
+        }
+    }
+
+    if from_settings {
+        // `--from-settings`: read the same `lan-settings.json` the app writes,
+        // so `lan start` (locally or over SSH) starts an identical node with
+        // one fixed command. Explicit flags still win.
+        let root =
+            voice_to_text_lan::settings::default_data_dir().map_err(ParseOutcome::Error)?;
+        let settings = voice_to_text_lan::settings::read(
+            &root.join(voice_to_text_lan::settings::SETTINGS_FILE),
+        );
+        if name.is_none() {
+            name = Some(settings.host_name.clone());
+        }
+        if data_dir.is_none() {
+            data_dir = Some(root.join("lan-host"));
+        }
+        if listen.is_none() {
+            if settings.host_address.trim().is_empty() {
+                return Err(ParseOutcome::Error(
+                    "The node has no sharing interface yet; choose one in the app first."
+                        .to_owned(),
+                ));
+            }
+            listen = Some(format!("{}:{}", settings.host_address, settings.host_port));
+        }
+        if models_dir.is_none() {
+            models_dir = Some(root.clone());
+        }
+        if selected_model.is_none() {
+            selected_model = Some(root.join("selected-model.json"));
+        }
+        if retention_file.is_none() {
+            retention_file = Some(root.join("lan-host-retention.json"));
+        }
+        if compute.is_none() {
+            compute = Some(true);
+        }
+        if role.is_none() {
+            role = Some("cpu".to_owned());
+        }
+        if idle_unload.is_none() {
+            idle_unload = Some(settings.idle_unload_node);
+        }
+        // The subnet mask comes from the connected interfaces, mirroring the
+        // app's own start path; wildcard and loopback binds need none.
+        if netmask.is_none() {
+            let address = listen
+                .as_deref()
+                .and_then(|raw| raw.parse::<SocketAddr>().ok())
+                .and_then(|socket| match socket.ip() {
+                    IpAddr::V4(ip) => Some(ip),
+                    IpAddr::V6(_) => None,
+                })
+                .filter(|ip| !ip.is_unspecified() && !ip.is_loopback());
+            if let Some(address) = address {
+                match interface_mask(address) {
+                    Some(mask) => netmask = Some(mask),
+                    None if is_tailscale_cgnat(address) => {}
+                    None => {
+                        return Err(ParseOutcome::Error(format!(
+                            "No connected interface has the address {address}; connect it or pick another address in the app."
+                        )))
+                    }
+                }
             }
         }
     }
@@ -347,16 +441,96 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
         data_dir,
         listen,
         netmask,
-        compute,
-        role,
+        compute: compute.unwrap_or(false),
+        role: role.unwrap_or_else(|| "auto".to_owned()),
         model_dir,
         models_dir,
         selected_model,
         media_root,
         parent_pid,
-        idle_unload,
+        idle_unload: idle_unload.unwrap_or(voice_to_text_core::DEFAULT_IDLE_UNLOAD_SECONDS),
         retention_file,
+        from_settings,
     })
+}
+
+/// `--from-settings` 模式下把节点与启动它的终端（通常是 SSH 会话）解绑：
+/// 忽略 SIGHUP，stdin 指向 /dev/null，stdout/stderr 追加到
+/// `<data_dir>/lan-node.log`。这样远端 shell 退出后节点继续监听，
+/// 且 `lan stop` 之前的真实失败原因仍留在日志里可查。
+#[cfg(unix)]
+fn detach_from_terminal(data_dir: &std::path::Path) {
+    use std::os::unix::io::AsRawFd as _;
+    // SAFETY: 三个调用都只操作本进程的信号表、会话与描述符，参数均为有效常量/文件描述符。
+    unsafe {
+        // setsid 脱离 sshd 会话：此后 sshd 对旧会话进程组的 SIGHUP→SIGKILL 升级
+        // 清理不再波及本节点，节点可独立存活到 `lan stop`。
+        libc::setsid();
+        libc::signal(libc::SIGHUP, libc::SIG_IGN);
+    }
+    let log_path = data_dir.join("lan-node.log");
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path);
+    let devnull = std::fs::OpenOptions::new().read(true).open("/dev/null");
+    if let (Ok(log), Ok(devnull)) = (log, devnull) {
+        // SAFETY: 文件描述符来自刚打开的有效文件，dup2 失败仅表示重定向未生效，
+        // 不影响后续运行（最坏情况是日志仍写到原来的 stderr）。
+        unsafe {
+            libc::dup2(devnull.as_raw_fd(), 0);
+            libc::dup2(log.as_raw_fd(), 1);
+            libc::dup2(log.as_raw_fd(), 2);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn detach_from_terminal(_data_dir: &std::path::Path) {}
+
+/// Subnet mask of the connected interface holding `address`, from getifaddrs.
+#[cfg(unix)]
+fn interface_mask(address: Ipv4Addr) -> Option<Ipv4Addr> {
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs owns the list until freeifaddrs.
+    unsafe {
+        if libc::getifaddrs(&mut head) != 0 {
+            return None;
+        }
+        let mut found = None;
+        let mut cursor = head;
+        while !cursor.is_null() {
+            let entry = &*cursor;
+            if !entry.ifa_addr.is_null()
+                && (*entry.ifa_addr).sa_family as i32 == libc::AF_INET
+                && entry.ifa_flags & libc::IFF_UP as u32 != 0
+            {
+                let candidate = Ipv4Addr::from(
+                    (*(entry.ifa_addr as *const libc::sockaddr_in))
+                        .sin_addr
+                        .s_addr
+                        .to_ne_bytes(),
+                );
+                if candidate == address && !entry.ifa_netmask.is_null() {
+                    found = Some(Ipv4Addr::from(
+                        (*(entry.ifa_netmask as *const libc::sockaddr_in))
+                            .sin_addr
+                            .s_addr
+                            .to_ne_bytes(),
+                    ));
+                    break;
+                }
+            }
+            cursor = entry.ifa_next;
+        }
+        libc::freeifaddrs(head);
+        found
+    }
+}
+
+#[cfg(not(unix))]
+fn interface_mask(_address: Ipv4Addr) -> Option<Ipv4Addr> {
+    None
 }
 
 /// The listen address is the substitute for authentication: it must be a

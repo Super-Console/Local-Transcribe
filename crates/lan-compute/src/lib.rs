@@ -5,4 +5,5 @@ pub mod client;
 pub mod node;
 pub mod protocol;
 pub mod retention;
+pub mod settings;
 pub mod store;

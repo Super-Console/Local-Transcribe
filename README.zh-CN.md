@@ -88,13 +88,33 @@ local-transcribe models list
 local-transcribe jobs add <媒体文件> [--model ID] [--root 目录]
 local-transcribe jobs list | show | cancel | retry | remove <job-id>
 local-transcribe export <job-id> --format txt|json --output 输出路径
+
+local-transcribe lan list | nodes
+local-transcribe lan add <名称> <主机>[:端口] [--force]
+local-transcribe lan remove <id|名称>
+local-transcribe lan enable|disable <id|名称>
+local-transcribe lan set <id|名称> [--host H] [--port P] [--model ID] [--name N]
+local-transcribe lan scan [--timeout 8]
+local-transcribe lan start [<id|名称>] | stop [<id|名称>]
+local-transcribe lan status
+local-transcribe mode local|prefer-lan
 ```
 
-所有命令输出 JSON。共享服务按需自动启动。
+所有命令输出 JSON。退出码：`0` 成功；`1` 服务返回错误（例如 `lan stop` 时本机没有
+运行中的节点：`not_running`）；`2` 参数错误；`4` 连不上本地服务。
+
+`lan add` 的 host 是任意字符串——IP、`.local`、tailnet 名或 DNS 名——直接拼成
+`http://{host}:{port}`，不做 IP 解析。节点暂时不可达时报可读错误；加 `--force` 仍可保存。
+
+`lan start <节点>` / `lan stop <节点>` 走**系统自带 SSH**（`BatchMode=yes`，不会停在密码
+提示）在另一台 Mac 上启停节点，使用你已有的免密登录；不安装任何守护进程、LaunchAgent、
+计划任务或开机自启，远端命令固定为 `<node_binary> --from-settings`。节点的可选 `ssh`
+字段按**发起端**填写：在 Air 上 `ssh pro` 指 Pro，在 Pro 上 `ssh air` 指 Air，不要假设
+两端存在同一组别名。不带 id 的 `lan start` 在本机拉起节点，与 GUI 的共享开关共用设置。
 
 ### MCP
 
-`voice-to-text-mcp` 通过本地 stdio 说话 MCP 协议，恰好暴露八个工具：`transcribe_file`、`get_job_status`、`get_job_result`、`cancel_job`、`retry_job`、`list_jobs`、`list_models`、`export_result`。文件访问必须显式传 `--allow-root 目录`；不传任何 root 时全部文件读取被拒绝。详见 [`docs/mcp.md`](docs/mcp.md)。
+`voice-to-text-mcp` 通过本地 stdio 说话 MCP 协议，恰好暴露十三个工具：`transcribe_file`、`get_job_status`、`get_job_result`、`cancel_job`、`retry_job`、`list_jobs`、`list_models`、`export_result`、`list_nodes`、`add_node`、`update_node`、`remove_node`、`node_status`。文件访问必须显式传 `--allow-root 目录`；不传任何 root 时全部文件读取被拒绝。`add_node` 是唯一能引入新地址的入口，其余节点工具只作用于 `lan-settings.json` 里已有的节点；任何工具都不接受命令、路径或 URL scheme。详见 [`docs/mcp.md`](docs/mcp.md)。
 
 ## 从源码构建（macOS，Apple Silicon）
 
@@ -129,4 +149,8 @@ Windows：workspace 可编译 `x86_64-pc-windows-msvc`（由 CI 在 `windows-202
 
 ## 许可证
 
-MIT —— 见 [LICENSE](LICENSE)。第三方组件保留各自许可证。
+代码采用 MIT 许可证 —— 见 [LICENSE](LICENSE)。
+
+"Local Transcribe" 名称与应用图标不在该许可证范围内，仍归作者所有。
+
+第三方组件保留各自许可证，见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。

@@ -1,7 +1,7 @@
 # Local MCP server
 
 `voice-to-text-mcp` is a Rust MCP server over **stdio only**. It is a client of the shared
-local service: the nine tools below submit, observe, cancel, retry and export tasks, and no
+local service: the thirteen tools below submit, observe, cancel, retry, export tasks and manage saved LAN nodes, and no
 model ever loads inside the MCP process. See the 2026-10-22 update at the end of this file
 for the current contract and the verified end-to-end run.
 
@@ -43,7 +43,7 @@ Task statuses and results are JSON files guarded by `fs2` cross-process file loc
 
 ## Tools
 
-There are nine tools. All calls go to the same local service, and none of them opens a
+There are thirteen tools. All calls go to the same local service, and none of them opens a
 network listener.
 
 - `list_models` — list the selected model and structurally valid model folders under `models/`; this does not prove runtime compatibility.
@@ -55,6 +55,10 @@ network listener.
 - `cancel_job` — request cooperative cancellation; a task may finish just before the request is observed.
 - `retry_job` — retry a failed or cancelled task under the same job id.
 - `export_result` — export a finished transcript to a path under an allow-root.
+- `add_node` — add a LAN node (`name`, `host`, optional `port`), probe its `/api/v1/capabilities` and save the snapshot. This is the only tool that can introduce a new address; `host` must be a plain host string (no `://`, no whitespace or shell metacharacters).
+- `update_node` — change `enabled`, `host`, `port` or `modelId` of a saved node.
+- `remove_node` — remove a saved node from the local list only; nothing is sent to the other machine.
+- `node_status` — reachability, protocol version and model list for a saved node.
 
 Supported model-folder layouts in the current code are Paraformer and SenseVoice. The user must select an installed model in the desktop app or place a supported model folder under the app-data `models/` directory. No model weights are bundled or downloaded here.
 
@@ -68,9 +72,9 @@ The earlier five-tool, in-process MCP design is superseded. Both entry points no
 the local service over the same Unix socket as everything else; no MCP or CLI process
 loads a model by itself.
 
-- MCP tools (9): `list_models`, `list_nodes`, `transcribe_file`,
-  `get_job_status`, `list_jobs`, `get_job_result`, `cancel_job`, `retry_job`,
-  `export_result`. `list_nodes` lists saved LAN nodes with a 3-second
+- MCP tools (13): `list_models`, `list_nodes`, `add_node`, `update_node`,
+  `remove_node`, `node_status`, `transcribe_file`, `get_job_status`, `list_jobs`,
+  `get_job_result`, `cancel_job`, `retry_job`, `export_result`. `list_nodes` lists saved LAN nodes with a 3-second
   reachability probe. `transcribe_file` accepts an optional `nodeId`; it must
   be a saved, enabled node id (no host/port/url parameters exist), and unknown
   or disabled ids are rejected before any request leaves the machine.
@@ -83,7 +87,8 @@ loads a model by itself.
   to poll and `get_job_result` with `includeText` only when the full text is needed.
 - If no service is running, MCP/CLI start one (single-instance lock prevents a second
   engine) and pass their `--allow-root` directories to it.
-- CLI: `local-transcribe status | models list|info | lan nodes | jobs add|list|show|cancel|retry|reorder|remove | export`.
+- CLI: `local-transcribe status | models list|info | jobs add|list|show|cancel|retry|reorder|remove | export`,
+  `lan list|nodes|add|remove|enable|disable|set|scan|start|stop|status`, and `mode local|prefer-lan`.
   `jobs add` accepts `--node <id|name> [--lan-model ID] [--fallback-local]`;
   without `--node` every job runs locally and the GUI's `prefer_lan` mode is
   never inherited. Remote failures stay `failed` unless `--fallback-local` is
@@ -92,7 +97,7 @@ loads a model by itself.
 
 Verified on this Mac with the real Qwen3-ASR 0.6B model: CLI submit → 3 chunks →
 `completed` → `export --format txt` wrote real Chinese text; MCP handshake negotiated
-`2025-03-26`, listed all nine tools, returned the same result and exported JSON.
+`2025-03-26`, listed all tools available at that time (nine), returned the same result and exported JSON.
 
 Not yet: GUI talking to the service instead of running inference in-process, and
 approval-gated recovery. Two restart behaviours are different: queued (not yet
