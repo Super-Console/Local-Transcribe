@@ -421,8 +421,7 @@ fn delete_history_entry_at(
         data_dir.join("jobs").join(format!("{job_id}.json")),
         data_dir.join("jobs").join(format!("{job_id}.cancel")),
     ];
-    fs::create_dir_all(trash_dir)
-        .map_err(|_| "Could not prepare the Trash folder.".to_owned())?;
+    fs::create_dir_all(trash_dir).map_err(|_| "Could not prepare the Trash folder.".to_owned())?;
     let mut outcome = DeleteOutcome {
         removed: Vec::new(),
         skipped: Vec::new(),
@@ -443,9 +442,8 @@ fn delete_history_entry_at(
             .unwrap_or("entry");
         // transcripts/ 与 jobs/ 下都有 `<id>.json`，目标名加上来源目录避免互相覆盖。
         let target = trash_dir.join(format!("{parent}-{name}.{}", unix_now_ms()));
-        fs::rename(&path, &target).map_err(|error| {
-            format!("Could not move {} to the Trash: {error}", path.display())
-        })?;
+        fs::rename(&path, &target)
+            .map_err(|error| format!("Could not move {} to the Trash: {error}", path.display()))?;
         outcome.removed.push(path.to_string_lossy().into_owned());
     }
     Ok(outcome)
@@ -464,10 +462,9 @@ fn delete_history_entry(
         .lock()
         .map_err(|_| "The local task state is unavailable.".to_owned())?
         .clone();
-    let trash_dir = PathBuf::from(
-        std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?,
-    )
-    .join(".Trash");
+    let trash_dir =
+        PathBuf::from(std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?)
+            .join(".Trash");
     let outcome = delete_history_entry_at(&data_dir, &jobs, &job_id, &trash_dir)?;
     if let Ok(mut transcripts) = state.transcripts.lock() {
         transcripts.remove(&job_id);
@@ -1292,9 +1289,8 @@ fn third_party_notices_path(app: AppHandle) -> Result<String, String> {
     if let Ok(dir) = app.path().resource_dir() {
         candidates.push(dir.join("THIRD-PARTY-NOTICES.md"));
     }
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../THIRD-PARTY-NOTICES.md"),
-    );
+    candidates
+        .push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../THIRD-PARTY-NOTICES.md"));
     for path in candidates {
         if path.is_file() {
             let resolved = path.canonicalize().unwrap_or(path);
@@ -2415,10 +2411,8 @@ mod delete_history_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "lt-delete-{name}-{}-{now}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("lt-delete-{name}-{}-{now}", std::process::id()));
         let data = root.join("data");
         let trash = root.join("trash");
         fs::create_dir_all(data.join("transcripts")).unwrap();
@@ -2492,7 +2486,8 @@ mod delete_history_tests {
     fn an_unsafe_job_id_is_refused_before_touching_anything() {
         let (data, trash) = scratch("unsafe");
         for job_id in ["../outside", "", "Job-1", "job-1/../../x"] {
-            let error = delete_history_entry_at(&data, &HashMap::new(), job_id, &trash).unwrap_err();
+            let error =
+                delete_history_entry_at(&data, &HashMap::new(), job_id, &trash).unwrap_err();
             assert!(error.contains("cannot be used"), "{job_id}: {error}");
         }
         assert!(data.join("transcripts/job-1.json").exists());

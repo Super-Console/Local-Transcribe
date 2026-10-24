@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use voice_to_text_lan::client::{LanClient, DEFAULT_NODE_PORT, discover_with_scan};
+use voice_to_text_lan::client::{discover_with_scan, LanClient, DEFAULT_NODE_PORT};
 use voice_to_text_lan::settings::{
-    LanMode, LanNodeConfig, SETTINGS_FILE, assign_missing_ids, find_node, is_safe_node_binary,
-    is_safe_ssh_target, read, update,
+    assign_missing_ids, find_node, is_safe_node_binary, is_safe_ssh_target, read, update, LanMode,
+    LanNodeConfig, SETTINGS_FILE,
 };
 
 use crate::Response;
@@ -58,7 +58,11 @@ fn node_log_path(data_dir: &Path) -> std::path::PathBuf {
 /// 节点的 `host_address` 可能是 `0.0.0.0`（对本机探测时 reqwest 连不上它），
 /// 因此 add / set / start 轮询都走这一处映射，行为一致。
 fn probe_host(host: &str) -> &str {
-    if host.trim() == "0.0.0.0" { "127.0.0.1" } else { host }
+    if host.trim() == "0.0.0.0" {
+        "127.0.0.1"
+    } else {
+        host
+    }
 }
 
 fn probe_capabilities(host: &str, port: u16, timeout: Duration) -> Result<Value, String> {
@@ -69,26 +73,23 @@ fn probe_capabilities(host: &str, port: u16, timeout: Duration) -> Result<Value,
         .map_err(|error| format!("Cannot start the network probe: {error}"))?;
     // 探测本身要在 async 里做超时，但错误要落回 String（LanError 不实现
     // From<String>），所以超时/失败都在 async 里折叠成 String。
-    runtime
-        .block_on(async {
-            match tokio::time::timeout(timeout, client.capabilities()).await {
-                Ok(Ok(capabilities)) => {
-                    Ok(serde_json::to_value(&capabilities).unwrap_or(Value::Null))
-                }
-                Ok(Err(error)) => {
-                    Err(format!("The node at {host}:{port} is unreachable: {error}."))
-                }
-                Err(_) => Err(format!("The node at {host}:{port} did not answer in time.")),
-            }
-        })
+    runtime.block_on(async {
+        match tokio::time::timeout(timeout, client.capabilities()).await {
+            Ok(Ok(capabilities)) => Ok(serde_json::to_value(&capabilities).unwrap_or(Value::Null)),
+            Ok(Err(error)) => Err(format!(
+                "The node at {host}:{port} is unreachable: {error}."
+            )),
+            Err(_) => Err(format!("The node at {host}:{port} did not answer in time.")),
+        }
+    })
 }
 
 /// 从设置文件读出某个节点（按 id 或名称），用于启停。
 fn load_node(data_dir: &Path, selector: &str) -> Result<LanNodeConfig, Response> {
     let settings = read(&settings_path(data_dir));
-    find_node(&settings, selector).cloned().map_err(|error| {
-        Response::failure("node_not_found", error)
-    })
+    find_node(&settings, selector)
+        .cloned()
+        .map_err(|error| Response::failure("node_not_found", error))
 }
 
 /// 校验 `add` / `set` 的 host：非空、无 scheme、可安全进入 SSH 模板。
@@ -116,7 +117,10 @@ fn validate_add_host(host: &str) -> Result<(), String> {
 fn read_local_pid(data_dir: &Path) -> Option<u32> {
     let bytes = fs::read(node_state_path(data_dir)).ok()?;
     let value: Value = serde_json::from_slice(&bytes).ok()?;
-    value.get("pid").and_then(Value::as_u64).map(|pid| pid as u32)
+    value
+        .get("pid")
+        .and_then(Value::as_u64)
+        .map(|pid| pid as u32)
 }
 
 /// 本机节点是否仍在运行（pid 存活）。
@@ -179,8 +183,7 @@ fn retire_to_trash(path: &Path) -> Result<(), String> {
     if !cfg!(target_os = "macos") {
         return Err("Moving entries to the Trash is only supported on macOS.".to_owned());
     }
-    let home =
-        std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?;
+    let home = std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -234,13 +237,7 @@ const REMOTE_LOG: &str =
 // ---------------------------------------------------------------------------
 
 /// `lan add <name> <host>[:port]`：探测能力后保存，附能力快照。
-pub fn add(
-    data_dir: &Path,
-    name: &str,
-    host: &str,
-    port: Option<u16>,
-    force: bool,
-) -> Response {
+pub fn add(data_dir: &Path, name: &str, host: &str, port: Option<u16>, force: bool) -> Response {
     let name = name.trim();
     if name.is_empty() {
         return Response::failure("invalid_name", "A LAN node needs a name.");
@@ -541,11 +538,15 @@ pub fn start_local(data_dir: &Path) -> Response {
         .open(node_log_path(data_dir))
     {
         Ok(log) => log,
-        Err(error) => return Response::failure("log", format!("Cannot open the node log: {error}")),
+        Err(error) => {
+            return Response::failure("log", format!("Cannot open the node log: {error}"))
+        }
     };
     let log_err = match log.try_clone() {
         Ok(log_err) => log_err,
-        Err(error) => return Response::failure("log", format!("Cannot open the node log: {error}")),
+        Err(error) => {
+            return Response::failure("log", format!("Cannot open the node log: {error}"))
+        }
     };
 
     let mut child = match Command::new(&binary)
@@ -688,12 +689,18 @@ pub fn start_remote(data_dir: &Path, selector: &str) -> Response {
             format!("The ssh target '{target}' contains characters that are not allowed."),
         );
     }
-    let binary = match node.node_binary.clone().unwrap_or_else(default_remote_binary) {
+    let binary = match node
+        .node_binary
+        .clone()
+        .unwrap_or_else(default_remote_binary)
+    {
         binary => {
             if !is_safe_node_binary(&binary) {
                 return Response::failure(
                     "unsafe_binary",
-                    format!("The node binary path '{binary}' contains characters that are not allowed."),
+                    format!(
+                        "The node binary path '{binary}' contains characters that are not allowed."
+                    ),
                 );
             }
             binary
@@ -774,7 +781,10 @@ pub fn stop_remote(data_dir: &Path, selector: &str) -> Response {
         return Response::failure("not_running", "节点未在运行");
     }
     let kill = format!("kill -INT {pid}");
-    let _ = ssh_command(&target, &kill).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let _ = ssh_command(&target, &kill)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
     let deadline = Instant::now() + STOP_WAIT_TIMEOUT;
     while Instant::now() < deadline {
         if !remote_still_running(&target, pid) {
@@ -850,21 +860,21 @@ pub fn node_probe(data_dir: &Path, selector: &str) -> Response {
         Err(error) => return Response::failure("node_not_found", error),
     };
 
-    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(error) => return Response::failure("service_error", error.to_string()),
     };
     let client = LanClient::new(probe_host(&node.host).to_owned(), node.port);
-    let capabilities = runtime.block_on(async {
-        tokio::time::timeout(PROBE_TIMEOUT, client.capabilities()).await
-    });
+    let capabilities = runtime
+        .block_on(async { tokio::time::timeout(PROBE_TIMEOUT, client.capabilities()).await });
     match capabilities {
         Ok(Ok(capabilities)) => {
             // 可达时顺带取模型列表；取不到不致命（能力信息已经在手）。
             let models = runtime
-                .block_on(async {
-                    tokio::time::timeout(PROBE_TIMEOUT, client.models()).await
-                })
+                .block_on(async { tokio::time::timeout(PROBE_TIMEOUT, client.models()).await })
                 .ok()
                 .and_then(Result::ok)
                 .map(|models| {
@@ -915,12 +925,18 @@ pub fn node_probe(data_dir: &Path, selector: &str) -> Response {
 /// 从远端 `lan-node.json` 读 pid（固定路径模板，无用户输入）。
 fn remote_pid(target: &str) -> Option<u32> {
     let command = format!("cat {REMOTE_STATE}");
-    let output = ssh_command(target, &command).stderr(Stdio::null()).output().ok()?;
+    let output = ssh_command(target, &command)
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
     let value: Value = serde_json::from_slice(&output.stdout).ok()?;
-    value.get("pid").and_then(Value::as_u64).map(|pid| pid as u32)
+    value
+        .get("pid")
+        .and_then(Value::as_u64)
+        .map(|pid| pid as u32)
 }
 
 /// 远端某 pid 是否仍在运行（`kill -0`；pid 来自远端状态文件的 JSON 数字，非用户字符串）。
@@ -970,8 +986,7 @@ fn node_binary() -> Result<std::path::PathBuf, String> {
             path.display()
         ));
     }
-    let exe =
-        std::env::current_exe().map_err(|error| format!("Cannot locate the app: {error}"))?;
+    let exe = std::env::current_exe().map_err(|error| format!("Cannot locate the app: {error}"))?;
     let directory = exe
         .parent()
         .ok_or_else(|| "Cannot locate the app directory.".to_owned())?;
@@ -1071,7 +1086,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use serde_json::{json, Value};
-    use voice_to_text_lan::settings::{LanSettings, SETTINGS_FILE, read};
+    use voice_to_text_lan::settings::{read, LanSettings, SETTINGS_FILE};
 
     use super::{add, scan, start_remote, stop_local, stop_remote};
 
@@ -1081,10 +1096,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "lt-lan-svc-{name}-{}-{now}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("lt-lan-svc-{name}-{}-{now}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(SETTINGS_FILE);
         (dir, path)
@@ -1131,7 +1144,10 @@ mod tests {
                 if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
                     break;
                 }
-                assert!(Instant::now() < deadline, "the mock node never started listening");
+                assert!(
+                    Instant::now() < deadline,
+                    "the mock node never started listening"
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
             Self {
@@ -1222,7 +1238,10 @@ mod tests {
             "the error must mention --force: {}",
             error.message
         );
-        assert!(read(&path).nodes.is_empty(), "nothing is saved without --force");
+        assert!(
+            read(&path).nodes.is_empty(),
+            "nothing is saved without --force"
+        );
 
         let forced = add(&dir, "desk", "127.0.0.1", Some(port), true);
         assert!(forced.ok, "{:?}", forced.error);
@@ -1280,7 +1299,8 @@ mod tests {
             .spawn()
             .expect("dns-sd is available on macOS");
 
-        let resolves = || std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), node.port)).is_ok();
+        let resolves =
+            || std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), node.port)).is_ok();
         let mut ready = false;
         for _ in 0..30 {
             if resolves() {
@@ -1343,7 +1363,13 @@ mod tests {
     fn test10_remote_start_fails_fast_without_passwordless_ssh() {
         let (dir, path) = scratch("ssh");
         // RFC 2606 保留域名，保证无法解析；BatchMode 使 ssh 不会停在密码提示。
-        write_node(&path, "n1", "desk", "invalid.invalid", Some("invalid.invalid"));
+        write_node(
+            &path,
+            "n1",
+            "desk",
+            "invalid.invalid",
+            Some("invalid.invalid"),
+        );
 
         let started = Instant::now();
         let response = start_remote(&dir, "n1");
@@ -1352,7 +1378,10 @@ mod tests {
         assert!(!response.ok, "an unresolvable ssh target must fail");
         let error = response.error.unwrap();
         assert_eq!(error.code, "start_failed");
-        assert!(!error.message.trim().is_empty(), "the failure needs a readable reason");
+        assert!(
+            !error.message.trim().is_empty(),
+            "the failure needs a readable reason"
+        );
         assert!(
             elapsed < Duration::from_secs(30),
             "ssh must fail fast instead of hanging on a password prompt ({elapsed:?})"

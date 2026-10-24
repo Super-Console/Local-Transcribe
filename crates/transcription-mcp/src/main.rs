@@ -468,7 +468,10 @@ impl VoiceToTextServer {
         name = "add_node",
         description = "Add a LAN node after probing it; returns a capabilities summary. Unreachable hosts are rejected."
     )]
-    async fn add_node(&self, Parameters(args): Parameters<AddNodeArgs>) -> Result<Json<Value>, String> {
+    async fn add_node(
+        &self,
+        Parameters(args): Parameters<AddNodeArgs>,
+    ) -> Result<Json<Value>, String> {
         // 在连接服务之前先校验：坏输入不产生任何网络或 IPC 动作。
         let name = validate_name_value(&args.name)?;
         let host = validate_host_value(&args.host)?;
@@ -503,7 +506,8 @@ impl VoiceToTextServer {
         let port = validate_port_value(args.port)?;
         if args.enabled.is_none() && host.is_none() && port.is_none() && args.model_id.is_none() {
             return Err(
-                "Nothing to change: pass at least one of enabled, host, port or modelId.".to_owned(),
+                "Nothing to change: pass at least one of enabled, host, port or modelId."
+                    .to_owned(),
             );
         }
         let mut client = self.connect()?;
@@ -853,12 +857,31 @@ mod tests {
         let server = VoiceToTextServer::new(temp_root(), Vec::new()).unwrap();
         // 这些名字一旦出现在参数里，就等于给模型开了「在本机执行任意东西」的口子。
         let forbidden = [
-            "command", "cmd", "exec", "execute", "shell", "sh", "bash", "zsh", "powershell",
-            "eval", "script", "argv", "args", "env", "cwd", "url", "uri", "scheme",
+            "command",
+            "cmd",
+            "exec",
+            "execute",
+            "shell",
+            "sh",
+            "bash",
+            "zsh",
+            "powershell",
+            "eval",
+            "script",
+            "argv",
+            "args",
+            "env",
+            "cwd",
+            "url",
+            "uri",
+            "scheme",
         ];
         for tool in server.tool_router.list_all() {
             let mut properties = Vec::new();
-            collect_property_names(&Value::Object((*tool.input_schema).clone()), &mut properties);
+            collect_property_names(
+                &Value::Object((*tool.input_schema).clone()),
+                &mut properties,
+            );
             for property in &properties {
                 assert!(
                     !forbidden.contains(&property.as_str()),

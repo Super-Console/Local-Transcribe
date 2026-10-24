@@ -150,7 +150,10 @@ fn is_safe_remote_field(value: &str, allow_spaces: bool) -> bool {
     }
     !value.chars().any(|c| {
         c.is_control()
-            || matches!(c, '\'' | '"' | ';' | '|' | '&' | '$' | '`' | '<' | '>' | '(' | ')')
+            || matches!(
+                c,
+                '\'' | '"' | ';' | '|' | '&' | '$' | '`' | '<' | '>' | '(' | ')'
+            )
             || (!allow_spaces && c.is_whitespace())
     })
 }
@@ -294,8 +297,8 @@ fn write_unlocked(path: &Path, settings: &LanSettings) -> Result<(), String> {
         .ok_or_else(|| "The app's local data folder is unavailable.".to_owned())?;
     fs::create_dir_all(parent).map_err(|_| "Could not prepare the LAN settings.".to_owned())?;
     let temporary = parent.join(format!("{SETTINGS_FILE}.tmp"));
-    let contents =
-        serde_json::to_vec_pretty(settings).map_err(|_| "Could not encode the LAN settings.".to_owned())?;
+    let contents = serde_json::to_vec_pretty(settings)
+        .map_err(|_| "Could not encode the LAN settings.".to_owned())?;
     {
         let mut file = fs::File::create(&temporary)
             .map_err(|_| "Could not save the LAN settings.".to_owned())?;
@@ -402,7 +405,9 @@ pub fn settings_test_helper() {
         if let Some(me) = settings.nodes.iter_mut().find(|node| node.name == name) {
             me.port = 10_000 + index.parse::<u16>().unwrap_or(0);
         }
-        settings.nodes.push(node_for_test(&name, &format!("{name}.local")));
+        settings
+            .nodes
+            .push(node_for_test(&name, &format!("{name}.local")));
         assign_missing_ids(settings);
         Ok(())
     })
@@ -438,7 +443,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("lt-lan-settings-{now}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("lt-lan-settings-{now}-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(SETTINGS_FILE);
         (dir, path)
@@ -485,12 +491,7 @@ mod tests {
         let backups: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .contains(".corrupt-")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"))
             .collect();
         assert_eq!(backups.len(), 1, "exactly one corrupt backup");
         let bytes = fs::read(backups[0].path()).unwrap();
@@ -626,7 +627,8 @@ mod tests {
     #[test]
     fn an_invalid_idle_unload_falls_back_on_its_own() {
         // 3600 不在合法档位里；600 是合法的，必须原样保留。
-        let json = r#"{"mode":"local_only","nodes":[],"idle_unload_gui":3600,"idle_unload_node":600}"#;
+        let json =
+            r#"{"mode":"local_only","nodes":[],"idle_unload_gui":3600,"idle_unload_node":600}"#;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

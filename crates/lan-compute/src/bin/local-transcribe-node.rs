@@ -359,8 +359,7 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
         // `--from-settings`: read the same `lan-settings.json` the app writes,
         // so `lan start` (locally or over SSH) starts an identical node with
         // one fixed command. Explicit flags still win.
-        let root =
-            voice_to_text_lan::settings::default_data_dir().map_err(ParseOutcome::Error)?;
+        let root = voice_to_text_lan::settings::default_data_dir().map_err(ParseOutcome::Error)?;
         let settings = voice_to_text_lan::settings::read(
             &root.join(voice_to_text_lan::settings::SETTINGS_FILE),
         );

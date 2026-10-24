@@ -127,11 +127,9 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
             }
             "--timeout" => {
                 let value = take("--timeout")?;
-                parsed.timeout_secs = Some(
-                    value
-                        .parse::<u64>()
-                        .map_err(|_| format!("--timeout expects a number of seconds, got '{value}'"))?,
-                );
+                parsed.timeout_secs = Some(value.parse::<u64>().map_err(|_| {
+                    format!("--timeout expects a number of seconds, got '{value}'")
+                })?);
             }
             other if other.starts_with('-') => {
                 return Err(format!("Unknown option: {other}\n{USAGE}"))
@@ -160,7 +158,9 @@ fn split_host_port(value: &str) -> Result<(String, Option<u16>), String> {
     if let Some(rest) = trimmed.strip_prefix('[') {
         // 方括号形式：[::1]:7878 / [fe80::1]
         let Some(close) = rest.find(']') else {
-            return Err(format!("'{value}' has an opening '[' without a closing ']'."));
+            return Err(format!(
+                "'{value}' has an opening '[' without a closing ']'."
+            ));
         };
         let host = rest[..close].to_owned();
         let tail = &rest[close + 1..];
@@ -333,7 +333,10 @@ fn main() -> ExitCode {
         },
         // `mode local|prefer-lan`：模式词是位置参数而不是二级动作。
         ("mode", _) => {
-            let Some(mode) = parsed.positional.first().filter(|value| !value.trim().is_empty())
+            let Some(mode) = parsed
+                .positional
+                .first()
+                .filter(|value| !value.trim().is_empty())
             else {
                 eprintln!("mode needs 'local' or 'prefer-lan'\n{USAGE}");
                 return ExitCode::from(2);
