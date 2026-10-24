@@ -109,8 +109,8 @@ pub struct LanProgressEvent {
     pub total: u64,
 }
 
-/// 校验设置：节点必须有 id/名称/主机/端口，且 id 不重复。
-/// （已收敛到共享的 `voice_to_text_lan::settings::validate`，见文件顶部 re-export。）
+// 校验设置：节点必须有 id/名称/主机/端口，且 id 不重复。
+// 校验已收敛到共享的 `voice_to_text_lan::settings::validate`（见文件顶部 re-export）。
 
 /// 任务九态 → 前端 i18n key（`lan.phase.*`），由界面按语言渲染。
 fn task_phase(state: TaskState) -> &'static str {
