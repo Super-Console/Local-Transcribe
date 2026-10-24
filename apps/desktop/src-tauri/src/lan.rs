@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use voice_to_text_core::{
     InputFile, JobLease, JobState, JobStatus, JobStore, LocalModel, Transcript, TranscriptSegment,
@@ -40,101 +40,12 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// 轮询连续失败多少次判定与节点失联。
 const MAX_POLL_FAILURES: u32 = 5;
 
-/// 派发模式。`prefer_lan` 时新任务自动发往已启用且在线的节点。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LanMode {
-    #[serde(alias = "prefer_local")]
-    LocalOnly,
-    PreferLan,
-}
-
-/// 一个已保存的节点配置；`id` 为空时由 `set_lan_settings` 派发 UUID。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LanNodeConfig {
-    pub id: String,
-    pub name: String,
-    pub host: String,
-    pub port: u16,
-    /// Remote model ID, independent of the client's installed models.
-    #[serde(default)]
-    pub model_id: Option<String>,
-    pub enabled: bool,
-}
-
-fn default_idle_unload() -> u64 {
-    voice_to_text_core::DEFAULT_IDLE_UNLOAD_SECONDS
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_host_name() -> String {
-    "Local Transcribe".to_owned()
-}
-
-fn default_host_port() -> u16 {
-    7878
-}
-
-/// 局域网计算设置：模式、节点列表、后台形态与两个空闲卸载档位。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LanSettings {
-    pub mode: LanMode,
-    pub nodes: Vec<LanNodeConfig>,
-    /// 界面进程的模型空闲卸载（秒）；闭集合，非法值读入时回落 120。
-    #[serde(default = "default_idle_unload")]
-    pub idle_unload_gui: u64,
-    /// 节点子进程的空闲卸载（秒），与界面各存各的。
-    #[serde(default = "default_idle_unload")]
-    pub idle_unload_node: u64,
-    /// 上次退出时共享是否开启；启动时据此恢复（网卡失效则不强启）。
-    #[serde(default)]
-    pub share_on_launch: bool,
-    /// 首次开启共享的知情同意只弹一次。
-    #[serde(default)]
-    pub lan_consent_acknowledged: bool,
-    /// 关闭窗口后继续在后台共享；共享未开启时不生效。
-    #[serde(default = "default_true")]
-    pub keep_running_in_background: bool,
-    /// 上次共享使用的名称/网卡/端口；启动恢复时据此重开，缺一不可。
-    #[serde(default = "default_host_name")]
-    pub host_name: String,
-    #[serde(default)]
-    pub host_address: String,
-    #[serde(default = "default_host_port")]
-    pub host_port: u16,
-}
-
-impl Default for LanSettings {
-    fn default() -> Self {
-        Self {
-            mode: LanMode::LocalOnly,
-            nodes: Vec::new(),
-            idle_unload_gui: default_idle_unload(),
-            idle_unload_node: default_idle_unload(),
-            share_on_launch: false,
-            lan_consent_acknowledged: false,
-            keep_running_in_background: true,
-            host_name: default_host_name(),
-            host_address: String::new(),
-            host_port: default_host_port(),
-        }
-    }
-}
-
-impl LanSettings {
-    /// 非法或历史遗留的档位只回落自己那一项，互不影响。
-    fn normalize_idle(&mut self) {
-        if !voice_to_text_core::IDLE_UNLOAD_CHOICES.contains(&self.idle_unload_gui) {
-            self.idle_unload_gui = default_idle_unload();
-        }
-        if !voice_to_text_core::IDLE_UNLOAD_CHOICES.contains(&self.idle_unload_node) {
-            self.idle_unload_node = default_idle_unload();
-        }
-    }
-}
+/// 派发模式、节点与设置的类型/读写全部收敛到共享的
+/// `voice_to_text_lan::settings`，GUI/CLI/MCP/service 行为由同一份实现保证。
+pub use voice_to_text_lan::settings::{
+    LanMode, LanNodeConfig, LanSettings, assign_missing_ids, enabled_nodes,
+    validate as validate_lan_settings,
+};
 
 /// 单节点探测结果。
 #[derive(Debug, Clone, Serialize)]
@@ -199,54 +110,7 @@ pub struct LanProgressEvent {
 }
 
 /// 校验设置：节点必须有 id/名称/主机/端口，且 id 不重复。
-fn validate_lan_settings(settings: &LanSettings) -> Result<(), String> {
-    let mut ids = std::collections::HashSet::new();
-    for node in &settings.nodes {
-        if node.id.trim().is_empty() {
-            return Err("A LAN node is missing its identifier.".to_owned());
-        }
-        if !ids.insert(node.id.clone()) {
-            return Err("Two LAN nodes share the same identifier.".to_owned());
-        }
-        if node.name.trim().is_empty() {
-            return Err("A LAN node needs a name.".to_owned());
-        }
-        if node.host.trim().is_empty() {
-            return Err("A LAN node needs a host name or address.".to_owned());
-        }
-        if node.port == 0 {
-            return Err("A LAN node needs a port between 1 and 65535.".to_owned());
-        }
-    }
-    for seconds in [settings.idle_unload_gui, settings.idle_unload_node] {
-        if !voice_to_text_core::IDLE_UNLOAD_CHOICES.contains(&seconds) {
-            return Err(format!(
-                "Model unload must be one of {:?} seconds.",
-                voice_to_text_core::IDLE_UNLOAD_CHOICES
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// 给空 id 的节点派发 UUID v4（前端新建节点时填空 id 即可）。
-fn assign_missing_ids(settings: &mut LanSettings) {
-    for node in &mut settings.nodes {
-        if node.id.trim().is_empty() {
-            node.id = uuid::Uuid::new_v4().to_string();
-        }
-    }
-}
-
-/// 按保存顺序返回启用中的节点（派发与探测只看这些）。
-fn enabled_nodes(settings: &LanSettings) -> Vec<LanNodeConfig> {
-    settings
-        .nodes
-        .iter()
-        .filter(|node| node.enabled)
-        .cloned()
-        .collect()
-}
+/// （已收敛到共享的 `voice_to_text_lan::settings::validate`，见文件顶部 re-export。）
 
 /// 任务九态 → 前端 i18n key（`lan.phase.*`），由界面按语言渲染。
 fn task_phase(state: TaskState) -> &'static str {
@@ -303,39 +167,14 @@ fn lan_config_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub(crate) fn read_lan_settings(app: &AppHandle) -> Result<LanSettings, String> {
     let path = lan_config_path(app)?;
-    if !path.exists() {
-        return Ok(LanSettings::default());
-    }
-    let bytes =
-        fs::read(&path).map_err(|_| "Could not read the LAN compute settings.".to_owned())?;
-    let mut settings: LanSettings = serde_json::from_slice(&bytes)
-        .map_err(|_| "The saved LAN compute settings are invalid.".to_owned())?;
-    settings.normalize_idle();
-    Ok(settings)
+    // 共享读取：不存在 → 默认值；损坏 → 备份 `.corrupt-<时间戳>` 后默认值。
+    Ok(voice_to_text_lan::settings::read(&path))
 }
 
-/// 原子写（同 selected-model.json / retention.json 的做法），写后回读校验。
+/// 原子写 + fs2 文件锁（与 CLI/MCP/service 同一份共享实现），写后回读校验。
 fn write_lan_settings(app: &AppHandle, settings: &LanSettings) -> Result<(), String> {
-    validate_lan_settings(settings)?;
     let path = lan_config_path(app)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| "The app's local data folder is unavailable.".to_owned())?;
-    fs::create_dir_all(parent)
-        .map_err(|_| "Could not prepare the LAN compute settings.".to_owned())?;
-    let temporary = parent.join(format!("{LAN_SETTINGS_FILE}.tmp"));
-    let contents = serde_json::to_vec_pretty(settings)
-        .map_err(|_| "Could not encode the LAN compute settings.".to_owned())?;
-    fs::write(&temporary, &contents)
-        .map_err(|_| "Could not save the LAN compute settings.".to_owned())?;
-    fs::rename(&temporary, &path)
-        .map_err(|_| "Could not save the LAN compute settings.".to_owned())?;
-    let saved =
-        fs::read(&path).map_err(|_| "Could not verify the LAN compute settings.".to_owned())?;
-    if saved != contents {
-        return Err("The saved LAN compute settings did not match the chosen settings.".to_owned());
-    }
-    Ok(())
+    voice_to_text_lan::settings::write(&path, settings)
 }
 
 fn find_node(app: &AppHandle, node_id: &str) -> Result<LanNodeConfig, String> {
@@ -1084,6 +923,9 @@ mod tests {
             port: 7878,
             model_id: None,
             enabled,
+            ssh: None,
+            node_binary: None,
+            capabilities: None,
         }
     }
 

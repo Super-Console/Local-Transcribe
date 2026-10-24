@@ -4,10 +4,10 @@
   import { t } from "$lib/i18n.svelte";
   import { prettyName } from "$lib/model-names.svelte";
   import type { MessageKey } from "$lib/i18n/messages/zh";
-  import type { JobStatus, ModelSummary, Segment, Transcript } from "$lib/types";
+  import type { JobStatus, Segment, Transcript } from "$lib/types";
 
   let {
-    model,
+    modelId,
     fileName,
     job,
     segments,
@@ -23,7 +23,8 @@
     onCopy,
     onBack,
   }: {
-    model: ModelSummary | null;
+    /** 本条结果实际使用的模型 id（记录里的），不是顶栏"当前选中"的模型。 */
+    modelId: string | null;
     fileName: string | null;
     job: JobStatus | null;
     segments: Segment[];
@@ -171,7 +172,7 @@
             <div class="file" title={displayName}>{displayName}</div>
           </div>
           <div class="meta">
-            <span>{t("transcribe.model")} <b>{prettyName(model?.displayName) || t("common.notSelected")}</b></span>
+            <span>{t("transcribe.model")} <b>{prettyName(modelId) || t("common.unknownModel")}</b></span>
             <span class="sep">·</span>
             <span>{stateLabel}</span>
             {#if job?.totalChunks}

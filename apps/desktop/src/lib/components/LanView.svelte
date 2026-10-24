@@ -261,13 +261,16 @@ import LanDiagnosticsPanel from "./LanDiagnosticsPanel.svelte";
       return;
     }
     try {
+      const existing = nodes.find((item) => item.id === draft.id);
+      // 展开既有记录，保留 ssh / node_binary / capabilities 等后端新增字段。
       const node: LanNodeConfig = {
+        ...existing,
         id: draft.id,
         name: draft.name.trim(),
         host: draft.host.trim(),
         port,
-        model_id: nodes.find((item) => item.id === draft.id)?.model_id ?? null,
-        enabled: draft.id === "" ? true : nodes.find((item) => item.id === draft.id)?.enabled ?? true,
+        model_id: existing?.model_id ?? null,
+        enabled: draft.id === "" ? true : existing?.enabled ?? true,
       };
       const nextNodes = draft.id === ""
         ? [...nodes, node]
@@ -518,16 +521,23 @@ import LanDiagnosticsPanel from "./LanDiagnosticsPanel.svelte";
   {#if host?.supported}
     <div class="group host-sharing" aria-busy={hostBusy}>
       <div class="group-head">
-        <div class="group-title" id="host-sharing-label">{t("lan.hostTitle")}</div>
-        <button type="button" class="btn-secondary" role="switch"
-          aria-labelledby="host-sharing-label" aria-describedby="host-sharing-description"
-          aria-checked={host.running} disabled={hostBusy || (!host.running && !hostAddress)}
+        <div class="host-heading">
+          <span class="status-dot" class:on={host.running} aria-hidden="true"></span>
+          <div class="group-title" id="host-sharing-label">{t("lan.hostTitle")}</div>
+        </div>
+        <button type="button" class="btn-secondary"
+          aria-describedby="host-sharing-description"
+          aria-label={`${t("lan.hostTitle")}, ${host.running ? t("lan.hostStateOn") : t("lan.hostStateOff")}`}
+          title={host.running ? t("lan.hostStateOn") : t("lan.hostStateOff")}
+          aria-busy={hostBusy ? "true" : undefined}
+          disabled={hostBusy || (!host.running && !hostAddress)}
           onclick={() => void toggleHost()}>
-          {hostBusy ? t("lan.hostChanging") : host.running ? t("lan.hostOn") : t("lan.hostOff")}
+          {hostBusy
+            ? host.running ? t("lan.hostChangingOff") : t("lan.hostChangingOn")
+            : host.running ? t("lan.hostActionOff") : t("lan.hostActionOn")}
         </button>
       </div>
       <p class="note" id="host-sharing-description">{t("lan.hostDesc")}</p>
-      <p class="note subtle">{t("lan.memoryHint")}</p>
       {#if host.notice}
         <p class="note scope warn" role="status">{host.notice}</p>
       {/if}
@@ -905,6 +915,13 @@ import LanDiagnosticsPanel from "./LanDiagnosticsPanel.svelte";
     justify-content: space-between;
     gap: 12px;
     margin-bottom: 8px;
+  }
+
+  .host-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
   }
 
   .group-title {

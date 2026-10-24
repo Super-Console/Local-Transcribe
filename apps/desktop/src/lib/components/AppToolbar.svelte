@@ -131,7 +131,7 @@
       onclick={() => (open = !open)}
     >
       <span
-        class="dot"
+        class="status-dot"
         class:on={remoteDotOn || (!!model && model.id === loadedModelId)}
         title={remoteDotOn || (model && model.id === loadedModelId) ? t("model.loadedHint") : undefined}
         aria-hidden="true"
@@ -163,7 +163,7 @@
             }}
           >
             <span
-              class="item-dot"
+              class="status-dot"
               class:on={entry.id === loadedModelId}
               title={entry.id === loadedModelId ? t("model.loadedHint") : undefined}
             ></span>
@@ -194,7 +194,7 @@
                 open = false;
               }}
             >
-              <span class="item-dot on"></span>
+              <span class="status-dot on"></span>
               <span class="item-body">
                 <span class="item-name">{prettyName(remote.displayName)}</span>
                 <span class="item-meta">{t("toolbar.remoteTag", { node: group.name })}</span>
@@ -428,30 +428,6 @@
   .select:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
-  }
-
-  .dot,
-  .item-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: #cbc5b7;
-    flex: none;
-  }
-
-  .dot.on,
-  .item-dot.on {
-    background: var(--green);
-  }
-
-  :global(:root[data-theme="dark"]) .dot,
-  :global(:root[data-theme="dark"]) .item-dot {
-    background: #5a5a60;
-  }
-
-  :global(:root[data-theme="dark"]) .dot.on,
-  :global(:root[data-theme="dark"]) .item-dot.on {
-    background: var(--green);
   }
 
   .name {

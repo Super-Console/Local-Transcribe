@@ -182,18 +182,18 @@ export async function buttons() {
     downloads:{},busy:false,onSelect:noop,onDelete:noop,onDeleteCatalog:noop,onDownload:noop,onCancelDownload:noop}});
   await settle();inspect('model');await unmount(instance);
   instance=mount(SettingsView,{target,props:{model:null,storage:null,service:null,appVersion:'test',retention:null,lanMode:null,lanSettings:null,
-    onLanSettingsChange:async()=>{},onOpenLibrary:noop,onOpenHistory:noop,onOpenPath:noop,onGoModels:noop,onGoLan:noop,onRefreshService:noop,onRetentionChange:noop}});
+    onLanSettingsChange:async()=>{},onOpenLibrary:noop,onOpenHistory:noop,onOpenPath:noop,onOpenNotices:noop,onGoModels:noop,onGoLan:noop,onRefreshService:noop,onRetentionChange:noop}});
   await settle();inspect('settings');await unmount(instance);
   instance=mount(History,{target,props:{entries:[],loading:false,onSelect:noop,onExport:noop}});
   await settle();inspect('history');await unmount(instance);
   instance=mount(History,{target,props:{entries:[],loading:false,onSelect:noop,onExport:noop,detailJobId:'button-spec',
     detail:{schemaVersion:'1',jobId:'button-spec',sourceFileName:'Synthetic',modelId:'test',engine:'test',text:'Synthetic'}}});
   await settle();inspect('history-detail');await unmount(instance);
-  const transcribeProps={model:null,fileName:null,job:null,segments:[],transcript:null,error:'',busy:false,dropping:false,
+  const transcribeProps={modelId:null,fileName:null,job:null,segments:[],transcript:null,error:'',busy:false,dropping:false,
     onPickFile:noop,onChooseModel:noop,onCancel:noop,onExport:noop,onCopy:noop,onBack:noop};
   instance=mount(TranscribeView,{target,props:transcribeProps});
   await settle();inspect('transcribe-idle');await unmount(instance);
-  instance=mount(TranscribeView,{target,props:{...transcribeProps,segments:props.segments,
+  instance=mount(TranscribeView,{target,props:{...transcribeProps,modelId:'test',segments:props.segments,
     transcript:{schemaVersion:'1',jobId:'button-spec-result',sourceFileName:'Synthetic',modelId:'test',engine:'test',text:'Synthetic'}}});
   await settle();inspect('transcribe-result');
   return pages;

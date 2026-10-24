@@ -202,6 +202,12 @@ export type LanNodeConfig = {
   port: number;
   model_id?: string | null;
   enabled: boolean;
+  /** 远程启停的 SSH 目标；缺省用 host。 */
+  ssh?: string | null;
+  /** 远程节点二进制路径；缺省按 sidecar 路径推断。 */
+  node_binary?: string | null;
+  /** 添加时抓取到的能力快照。 */
+  capabilities?: unknown | null;
 };
 
 export type LanSettings = {

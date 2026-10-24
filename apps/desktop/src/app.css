@@ -450,3 +450,24 @@ html[data-glass="off"] .reader-bar :is(.back, .find-toggle) {
   border: 2px solid transparent;
   background-clip: content-box;
 }
+
+/* 状态点（顶栏模型 + 局域网页共享开关共用）：7×7，绿=运行中、灰=已关闭。 */
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #cbc5b7;
+  flex: none;
+}
+
+.status-dot.on {
+  background: var(--green);
+}
+
+:root[data-theme="dark"] .status-dot {
+  background: #5a5a60;
+}
+
+:root[data-theme="dark"] .status-dot.on {
+  background: var(--green);
+}

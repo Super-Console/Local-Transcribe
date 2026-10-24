@@ -36,6 +36,8 @@ export const zh = {
   "common.open": "打开",
   "common.noModel": "未选择模型",
   "common.notSelected": "未选择",
+  // 只在描述"这条结果"时使用：记录里没有模型 id，不能拿"当前选中"顶替。
+  "common.unknownModel": "未知模型",
 
   // 任务状态
   "state.running": "正在转写",
@@ -74,6 +76,8 @@ export const zh = {
   "history.loading": "正在读取历史…",
   "history.emptyTitle": "还没有历史记录",
   "history.emptyBody": "完成一次转写后，结果会出现在这里。",
+  "history.cancelFirst": "请先取消该任务",
+  "history.deletedNotice": "已删除 {count} 项记录",
   "time.today": "今天",
   "time.yesterday": "昨天",
 
@@ -113,6 +117,7 @@ export const zh = {
   "model.tierQuality": "准确优先",
   "model.tierSpeed": "速度优先",
   "model.tierPunctuation": "辅助模型",
+  "model.otherInstalled": "其它已安装",
   "model.downloadTitle": "可下载的模型",
   "model.download": "下载",
   "model.downloadCancel": "取消下载",
@@ -201,6 +206,9 @@ export const zh = {
   "settings.troubleOutro": " 授权；日志在终端输出，不记录音频内容。",
   "settings.aboutDesc": "本地音视频转写 · 预览版本 {version}",
   "settings.aboutBuild": "未签名开发构建",
+  "settings.thirdParty": "第三方声明",
+  "settings.thirdPartyDesc": "MIT 许可与随安装包附带的组件清单",
+  "settings.openNotices": "打开声明",
   "settings.mcpCommandPlaceholder": "<voice-to-text-mcp 可执行文件路径>",
   "settings.mcpPathPlaceholder": "/路径/到/你的/媒体目录",
   "settings.cliMediaPlaceholder": "<媒体文件>",
@@ -209,6 +217,8 @@ export const zh = {
   // 对话框与错误
   "dialog.mediaFilter": "音频或视频",
   "dialog.deleteModelTitle": "删除模型",
+  "dialog.deleteHistoryTitle": "删除这条记录？",
+  "dialog.deleteHistoryMessage": "将删除「{name}」的转写记录与任务状态。只删除本应用的记录与任务状态，不会动原始音视频文件。",
   "dialog.deleteModelMessage":
     "删除「{name}」在应用内的副本？原始下载文件不会被删除，副本会移入废纸篓。",
   "error.copyFailed": "复制失败：{error}",
@@ -260,7 +270,6 @@ export const zh = {
   "lan.diagUnavailable": "无法读取诊断信息",
   "settings.troubleshoot": "故障排查",
   "settings.troubleshootDesc": "检查本地网络权限探测结果，必要时重启应用以刷新系统缓存。",
-  "lan.memoryHint": "大模型同时驻留会各占一份内存：节点与本机同时跑大模型时，实测合计约 4 GB。",
   "permissions.title": "权限",
   "permissions.localNetwork": "本地网络",
   "permissions.microphone": "麦克风",
@@ -275,9 +284,12 @@ export const zh = {
   "permissions.refresh": "重新检查",
   "permissions.note": "麦克风用于录音，系统音频录制用于录制其他应用的声音；导入文件转写不需要这两项。",
   "lan.hostDesc": "开启后，同一局域网子网内的设备可上传媒体并使用本机转写。",
-  "lan.hostOn": "已开启 · 点击关闭",
-  "lan.hostOff": "已关闭 · 点击开启",
-  "lan.hostChanging": "正在切换…",
+  "lan.hostActionOn": "开启共享",
+  "lan.hostActionOff": "关闭共享",
+  "lan.hostStateOn": "已开启",
+  "lan.hostStateOff": "已关闭",
+  "lan.hostChangingOn": "正在开启…",
+  "lan.hostChangingOff": "正在关闭…",
   "lan.hostRunning": "{name} · {address}:{port} · 正在共享",
   "lan.hostInterface": "局域网接口",
   "lan.hostRefresh": "刷新网络接口",

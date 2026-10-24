@@ -327,7 +327,7 @@ pub(crate) fn clear_selected_model(app: &AppHandle) -> Result<(), String> {
     fs::write(&path, b"").map_err(|_| "Could not clear the saved model selection.".to_owned())
 }
 
-#[cfg(test)]
+/// 任务 id 只允许小写字母、数字与连字符：它直接参与本地文件名。
 fn is_safe_job_id(job_id: &str) -> bool {
     !job_id.is_empty()
         && job_id.len() <= 64
@@ -380,6 +380,105 @@ fn load_transcript(app: &AppHandle, state: &AppState, job_id: &str) -> Result<Tr
         .map_err(|_| "The saved transcription result could not be found.".to_owned())?;
     serde_json::from_slice(&bytes)
         .map_err(|_| "The saved transcription result is invalid.".to_owned())
+}
+
+/// 删除一条历史记录的结果：实际移入废纸篓的路径与本来就不存在的路径。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteOutcome {
+    removed: Vec<String>,
+    skipped: Vec<String>,
+}
+
+/// 删除一条记录对应的本地文件（结果、任务状态、取消标记）。
+///
+/// 只碰这三类文件；`jobs/.dispatch.lock`、原始媒体与 `lan-host/` 都不在候选里。
+/// 文件层面单独成函数，好在测试里用临时废纸篓目录验证，不污染真实 `~/.Trash`。
+fn delete_history_entry_at(
+    data_dir: &Path,
+    jobs: &HashMap<String, JobStatus>,
+    job_id: &str,
+    trash_dir: &Path,
+) -> Result<DeleteOutcome, String> {
+    if !is_safe_job_id(job_id) {
+        return Err("That task id cannot be used to delete a record.".to_owned());
+    }
+    let running = jobs
+        .get(job_id)
+        .is_some_and(|status| status.state == JobState::Running);
+    let store = JobStore::new(data_dir);
+    let stored_running = store
+        .job_status(job_id)
+        .ok()
+        .flatten()
+        .is_some_and(|status| status.state == JobState::Running);
+    if running || stored_running {
+        return Err("请先取消该任务".to_owned());
+    }
+
+    let candidates = [
+        data_dir.join("transcripts").join(format!("{job_id}.json")),
+        data_dir.join("jobs").join(format!("{job_id}.json")),
+        data_dir.join("jobs").join(format!("{job_id}.cancel")),
+    ];
+    fs::create_dir_all(trash_dir)
+        .map_err(|_| "Could not prepare the Trash folder.".to_owned())?;
+    let mut outcome = DeleteOutcome {
+        removed: Vec::new(),
+        skipped: Vec::new(),
+    };
+    for path in candidates {
+        if !path.exists() {
+            outcome.skipped.push(path.to_string_lossy().into_owned());
+            continue;
+        }
+        let parent = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("entry");
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("entry");
+        // transcripts/ 与 jobs/ 下都有 `<id>.json`，目标名加上来源目录避免互相覆盖。
+        let target = trash_dir.join(format!("{parent}-{name}.{}", unix_now_ms()));
+        fs::rename(&path, &target).map_err(|error| {
+            format!("Could not move {} to the Trash: {error}", path.display())
+        })?;
+        outcome.removed.push(path.to_string_lossy().into_owned());
+    }
+    Ok(outcome)
+}
+
+/// 首页卡片的删除入口：只删本应用的记录与任务状态，原始媒体不动。
+#[tauri::command]
+fn delete_history_entry(
+    job_id: String,
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<DeleteOutcome, String> {
+    let data_dir = app_data_dir(&app)?;
+    let jobs = state
+        .jobs
+        .lock()
+        .map_err(|_| "The local task state is unavailable.".to_owned())?
+        .clone();
+    let trash_dir = PathBuf::from(
+        std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?,
+    )
+    .join(".Trash");
+    let outcome = delete_history_entry_at(&data_dir, &jobs, &job_id, &trash_dir)?;
+    if let Ok(mut transcripts) = state.transcripts.lock() {
+        transcripts.remove(&job_id);
+    }
+    if let Ok(mut jobs) = state.jobs.lock() {
+        jobs.remove(&job_id);
+    }
+    if let Ok(mut sources) = state.source_paths.lock() {
+        sources.remove(&job_id);
+    }
+    Ok(outcome)
 }
 
 fn update_job(app: &AppHandle, state: &AppState, status: JobStatus) {
@@ -1183,6 +1282,26 @@ fn clear_app_data(app: AppHandle) -> Result<usize, String> {
         }
     }
     Ok(moved)
+}
+
+/// 第三方声明文件的位置：优先安装包内的 `Contents/Resources/THIRD-PARTY-NOTICES.md`，
+/// 开发运行回落到仓库根目录的同一文件。
+#[tauri::command]
+fn third_party_notices_path(app: AppHandle) -> Result<String, String> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.join("THIRD-PARTY-NOTICES.md"));
+    }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../THIRD-PARTY-NOTICES.md"),
+    );
+    for path in candidates {
+        if path.is_file() {
+            let resolved = path.canonicalize().unwrap_or(path);
+            return Ok(resolved.to_string_lossy().into_owned());
+        }
+    }
+    Err("This build does not include the third-party notices.".to_owned())
 }
 
 #[tauri::command]
@@ -2039,6 +2158,7 @@ pub fn run() {
             set_selected_model,
             start_transcription,
             cancel_transcription,
+            delete_history_entry,
             get_active_job_status,
             library_directory,
             library_models,
@@ -2051,6 +2171,7 @@ pub fn run() {
             storage_summary,
             open_directory,
             open_path,
+            third_party_notices_path,
             clear_app_data,
             list_audio_devices,
             list_audio_apps,
@@ -2274,5 +2395,107 @@ mod close_behavior_tests {
         assert!(!should_hide_on_close(true, false));
         assert!(!should_hide_on_close(false, true));
         assert!(!should_hide_on_close(false, false));
+    }
+}
+
+#[cfg(test)]
+mod delete_history_tests {
+    //! 任务书 16 §3 的后端部分：只动三类文件、走废纸篓、锁与源媒体不动。
+
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+
+    use voice_to_text_core::{JobState, JobStatus};
+
+    use super::delete_history_entry_at;
+
+    fn scratch(name: &str) -> (PathBuf, PathBuf) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "lt-delete-{name}-{}-{now}",
+            std::process::id()
+        ));
+        let data = root.join("data");
+        let trash = root.join("trash");
+        fs::create_dir_all(data.join("transcripts")).unwrap();
+        fs::create_dir_all(data.join("jobs")).unwrap();
+        fs::create_dir_all(&trash).unwrap();
+        fs::write(data.join("transcripts/job-1.json"), b"{\"text\":\"hi\"}").unwrap();
+        fs::write(data.join("jobs/job-1.json"), b"{\"state\":\"completed\"}").unwrap();
+        fs::write(data.join("jobs/job-1.cancel"), b"").unwrap();
+        fs::write(data.join("jobs/.dispatch.lock"), b"").unwrap();
+        fs::write(data.join("source.wav"), b"RIFF-original").unwrap();
+        (data, trash)
+    }
+
+    fn running(job_id: &str) -> JobStatus {
+        JobStatus {
+            job_id: job_id.to_owned(),
+            state: JobState::Running,
+            phase: "Transcribing".to_owned(),
+            completed_chunks: 0,
+            total_chunks: None,
+            started_at_ms: None,
+            total_duration_ms: None,
+            transcript_available: false,
+            result_saved: false,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn only_the_three_record_files_move_to_the_trash() {
+        let (data, trash) = scratch("all");
+        let outcome = delete_history_entry_at(&data, &HashMap::new(), "job-1", &trash).unwrap();
+
+        assert_eq!(outcome.removed.len(), 3, "{outcome:?}");
+        assert!(outcome.skipped.is_empty());
+        assert!(!data.join("transcripts/job-1.json").exists());
+        assert!(!data.join("jobs/job-1.json").exists());
+        assert!(!data.join("jobs/job-1.cancel").exists());
+        assert_eq!(fs::read_dir(&trash).unwrap().count(), 3);
+
+        // 调度锁与原始媒体必须原样还在。
+        assert!(data.join("jobs/.dispatch.lock").exists());
+        assert_eq!(fs::read(data.join("source.wav")).unwrap(), b"RIFF-original");
+        let _ = fs::remove_dir_all(data.parent().unwrap());
+    }
+
+    #[test]
+    fn a_missing_file_is_reported_as_skipped_not_as_an_error() {
+        let (data, trash) = scratch("partial");
+        fs::remove_file(data.join("jobs/job-1.json")).unwrap();
+        let outcome = delete_history_entry_at(&data, &HashMap::new(), "job-1", &trash).unwrap();
+        assert_eq!(outcome.removed.len(), 2);
+        assert_eq!(outcome.skipped.len(), 1);
+        let _ = fs::remove_dir_all(data.parent().unwrap());
+    }
+
+    #[test]
+    fn a_running_task_cannot_be_deleted() {
+        let (data, trash) = scratch("running");
+        let mut jobs = HashMap::new();
+        jobs.insert("job-1".to_owned(), running("job-1"));
+
+        let error = delete_history_entry_at(&data, &jobs, "job-1", &trash).unwrap_err();
+        assert_eq!(error, "请先取消该任务");
+        assert!(data.join("transcripts/job-1.json").exists());
+        assert!(data.join("jobs/job-1.json").exists());
+        let _ = fs::remove_dir_all(data.parent().unwrap());
+    }
+
+    #[test]
+    fn an_unsafe_job_id_is_refused_before_touching_anything() {
+        let (data, trash) = scratch("unsafe");
+        for job_id in ["../outside", "", "Job-1", "job-1/../../x"] {
+            let error = delete_history_entry_at(&data, &HashMap::new(), job_id, &trash).unwrap_err();
+            assert!(error.contains("cannot be used"), "{job_id}: {error}");
+        }
+        assert!(data.join("transcripts/job-1.json").exists());
+        let _ = fs::remove_dir_all(data.parent().unwrap());
     }
 }

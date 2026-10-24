@@ -1,6 +1,7 @@
 <script lang="ts">
   import { t } from "$lib/i18n.svelte";
   import { prettyName } from "$lib/model-names.svelte";
+  import { catalogEntryFor } from "$lib/model-names.js";
   import type { CatalogModel, LibraryModelSummary, ModelDownloadEvent } from "$lib/types";
 
   let {
@@ -33,6 +34,10 @@
   }
 
   const total = $derived(models.reduce((sum, model) => sum + model.bytes, 0));
+  /** 已安装但不在清单里的模型（旧版本留下的）；在清单里的只在上面的分组出现一次。 */
+  const extraModels = $derived(
+    models.filter((model) => !catalogEntryFor(model.id, catalog)),
+  );
 </script>
 
 <section class="content">
@@ -125,9 +130,11 @@
         {t("model.emptyBody")}
       </div>
     </div>
-  {:else}
+  {:else if extraModels.length > 0}
+    <!-- 只有清单之外的已安装模型才需要单独露面；没有就完全不渲染这一节。 -->
     <div class="list">
-      {#each models as model (model.id)}
+      <div class="section-label">{t("model.otherInstalled")}</div>
+      {#each extraModels as model (model.id)}
         <div class="row">
           <div class="body">
             <div class="name">

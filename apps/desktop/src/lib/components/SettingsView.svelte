@@ -34,6 +34,7 @@
     onOpenLibrary,
     onOpenHistory,
     onOpenPath,
+    onOpenNotices,
     onGoModels,
     onGoLan,
     onRefreshService,
@@ -50,6 +51,7 @@
     onOpenLibrary: () => void;
     onOpenHistory: () => void;
     onOpenPath: (path: string) => void;
+    onOpenNotices: () => void;
     onGoModels: () => void;
     onGoLan: () => void;
     onRefreshService: () => void;
@@ -612,6 +614,15 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           <div class="desc">{t("settings.aboutDesc", { version: appVersion })}</div>
         </div>
         <div class="value">{t("settings.aboutBuild")}</div>
+      </div>
+      <div class="row">
+        <div>
+          <div class="name">{t("settings.thirdParty")}</div>
+          <div class="desc">{t("settings.thirdPartyDesc")}</div>
+        </div>
+        <button type="button" class="link-action" onclick={onOpenNotices}>
+          {t("settings.openNotices")}
+        </button>
       </div>
     </div>
   </div>

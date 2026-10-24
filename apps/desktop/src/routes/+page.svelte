@@ -71,6 +71,9 @@
   let job = $state<JobStatus | null>(null);
   let segments = $state<Segment[]>([]);
   let transcript = $state<Transcript | null>(null);
+  // 本次任务实际使用的模型：由启动那一刻确定（远程任务用节点上的模型），
+  // 不是渲染时的"当前选中"，避免结果页显示一条与本次转写无关的模型。
+  let startedModelId = $state<string | null>(null);
   let error = $state("");
   let busy = $state(false);
   let dropping = $state(false);
@@ -85,6 +88,9 @@
   let detail = $state<Transcript | null>(null);
   let detailJobId = $state<string | null>(null);
   let historyLoading = $state(false);
+  /** 删除成功后的短暂提示；null 表示不显示。 */
+  let historyNotice = $state<string | null>(null);
+  let historyNoticeTimer: number | undefined;
 
   let sidebarCollapsed = $state(false);
   let appVersion = $state("0.2.0");
@@ -127,6 +133,12 @@
   const fullText = $derived(
     transcript?.text ?? segments.map((segment) => segment.text).join("\n"),
   );
+
+  /** 描述"这条结果"的模型：以记录里的 model_id 为准，取不到才是未知。 */
+  const taskModelId = $derived(transcript?.modelId?.trim() || startedModelId);
+
+  /** 正在运行的任务 id（首页卡片的删除入口据此置灰）。 */
+  const runningJobId = $derived(job?.state === "running" ? job.jobId : null);
 
   // 局域网派发提示：prefer_lan 模式下在转写页说明任务会去哪里。
   const lanHint = $derived(
@@ -199,6 +211,8 @@
         if (status && status.state === "running") {
           job = status;
           fileName = null;
+          // 外部（CLI / MCP）启动的任务：本界面不知道它用的模型。
+          startedModelId = null;
         }
       } catch {
         /* 后端未就绪 */
@@ -327,6 +341,7 @@
         job = null;
         transcript = null;
         detail = null;
+        startedModelId = null;
       }
       void loadHistory();
     }
@@ -389,6 +404,7 @@
     try {
       const input = await invoke<{ fileName: string }>("inspect_input", { path });
       fileName = input.fileName;
+      startedModelId = remoteSelection?.modelId ?? model?.id ?? null;
       segments = [];
       transcript = null;
       const status = await invoke<JobStatus>("start_transcription", { path });
@@ -433,12 +449,13 @@
   }
 
   async function exportResult(format: "txt" | "json") {
-    if (!job && !transcript) return;
-    const jobId = transcript?.jobId ?? job?.jobId;
+    // 导出按 jobId 读回已保存的转写记录：结果页、运行中任务与历史详情同一来源，
+    // 因此 JSON 里的模型字段永远是这条记录的 model_id。
+    const jobId = transcript?.jobId ?? job?.jobId ?? detailJobId;
     if (!jobId) return;
     busy = true;
     try {
-      const base = (fileName ?? "transcript").replace(/\.[^.]+$/, "");
+      const base = (fileName ?? detail?.sourceFileName ?? "transcript").replace(/\.[^.]+$/, "");
       const target = await save({
         defaultPath: `${base}.${format}`,
         filters: [{ name: format.toUpperCase(), extensions: [format] }],
@@ -525,6 +542,15 @@
     }
   }
 
+  async function openThirdPartyNotices() {
+    try {
+      const path = await invoke<string>("third_party_notices_path");
+      await invoke("open_path", { path });
+    } catch (issue) {
+      error = String(issue);
+    }
+  }
+
   async function openStorage(path: string | undefined) {
     if (!path) return;
     try {
@@ -604,8 +630,45 @@
     }
   }
 
-  async function selectHistory(jobId: string) {
-    detailJobId = jobId;
+  /** 首页卡片删除：只删本应用的记录与任务状态，原始媒体不动（后端负责移废纸篓）。 */
+  async function deleteHistoryEntry(entry: { jobId: string; sourceFileName: string }) {
+    const approved = await confirm(
+      t("dialog.deleteHistoryMessage", { name: entry.sourceFileName }),
+      {
+        title: t("dialog.deleteHistoryTitle"),
+        kind: "warning",
+        okLabel: t("common.delete"),
+        cancelLabel: t("common.cancel"),
+      },
+    );
+    if (!approved) return;
+    error = "";
+    try {
+      const outcome = await invoke<{ removed: string[]; skipped: string[] }>(
+        "delete_history_entry",
+        { jobId: entry.jobId },
+      );
+      if (detailJobId === entry.jobId) {
+        detail = null;
+        detailJobId = null;
+      }
+      if (transcript?.jobId === entry.jobId) {
+        transcript = null;
+        job = null;
+        segments = [];
+        fileName = null;
+        startedModelId = null;
+      }
+      await loadHistory();
+      historyNotice = t("history.deletedNotice", { count: outcome.removed.length });
+      if (historyNoticeTimer) window.clearTimeout(historyNoticeTimer);
+      historyNoticeTimer = window.setTimeout(() => (historyNotice = null), 4000);
+    } catch (issue) {
+      error = String(issue);
+    }
+  }
+
+  async function selectHistory(jobId: string) {    detailJobId = jobId;
     detail = null;
     try {
       detail = await invoke<Transcript>("get_job_result", { jobId });
@@ -701,6 +764,8 @@
         .then(async (status) => {
           if (!status) return;
           job = status;
+          // 启动时已被外部任务占用的界面不知道模型；完成态改由记录补齐。
+          startedModelId = null;
           if (status.state === "completed") await loadResult(status.jobId);
         })
         .catch(() => {
@@ -781,6 +846,9 @@
           loading={historyLoading}
           onSelect={selectHistory}
           onExport={exportResult}
+          onDelete={deleteHistoryEntry}
+          {runningJobId}
+          notice={historyNotice}
           onBack={() => {
             detail = null;
             detailJobId = null;
@@ -788,7 +856,7 @@
         />
       {:else if job || transcript}
         <TranscribeView
-          {model}
+          modelId={taskModelId}
           {fileName}
           {job}
           {segments}
@@ -808,6 +876,7 @@
             segments = [];
             fileName = null;
             error = "";
+            startedModelId = null;
             void loadHistory();
           }}
         />
@@ -819,6 +888,9 @@
           {searchBusy}
           onSelect={selectHistory}
           onExport={exportResult}
+          onDelete={deleteHistoryEntry}
+          {runningJobId}
+          notice={historyNotice}
           onPickFile={pickFile}
           {dropping}
         />
@@ -856,6 +928,7 @@
         onOpenLibrary={() => openStorage(storage?.libraryPath)}
         onOpenHistory={() => openStorage(storage?.historyPath)}
         onOpenPath={openStorage}
+        onOpenNotices={openThirdPartyNotices}
         onRetentionChange={changeRetention}
         onGoModels={() => (view = "model")}
         onGoLan={() => (view = "lan")}

@@ -13,6 +13,9 @@
     onSelect,
     onBack = () => {},
     onExport,
+    onDelete = undefined,
+    runningJobId = null,
+    notice = null,
     onPickFile,
     dropping = false,
     hits = null,
@@ -25,6 +28,11 @@
     onSelect: (jobId: string) => void;
     onBack?: () => void;
     onExport: (format: "txt" | "json") => void;
+    onDelete?: (entry: { jobId: string; sourceFileName: string }) => void;
+    /** 正在运行的任务不能删：菜单项置灰并提示先取消。 */
+    runningJobId?: string | null;
+    /** 删除成功后的短暂提示（null 表示不显示）。 */
+    notice?: string | null;
     onPickFile?: () => void;
     dropping?: boolean;
     /** 非 null 表示正在按查询显示搜索结果。 */
@@ -69,6 +77,58 @@
     }
   }
 
+  /** 右键菜单：卡片右键，或键盘 Shift+F10 / ContextMenu 键。 */
+  let menu = $state<{ jobId: string; name: string; x: number; y: number } | null>(null);
+
+  function openMenuAt(x: number, y: number, entry: { jobId: string; sourceFileName: string }) {
+    menu = {
+      jobId: entry.jobId,
+      name: entry.sourceFileName,
+      x: Math.max(8, Math.min(x, window.innerWidth - 196)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 76)),
+    };
+  }
+
+  function openMenu(event: MouseEvent, entry: { jobId: string; sourceFileName: string }) {
+    event.preventDefault();
+    openMenuAt(event.clientX, event.clientY, entry);
+  }
+
+  function menuKeydown(
+    event: KeyboardEvent,
+    entry: { jobId: string; sourceFileName: string },
+  ) {
+    if (!(event.key === "F10" && event.shiftKey) && event.key !== "ContextMenu") return;
+    event.preventDefault();
+    const card = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    openMenuAt(card.left + 12, card.bottom - 6, entry);
+  }
+
+  function requestDelete() {
+    if (!menu) return;
+    const target = { jobId: menu.jobId, sourceFileName: menu.name };
+    const blocked = menu.jobId === runningJobId;
+    menu = null;
+    if (!blocked) onDelete?.(target);
+  }
+
+  // 点击外部或 Esc 关闭菜单；滚动/缩放也关，避免菜单和卡片错位。
+  $effect(() => {
+    if (!menu) return;
+    const close = () => (menu = null);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+    };
+  });
+
   const groups = $derived.by(() => {
     const result: Array<{ label: string; items: HistoryEntry[] }> = [];
     for (const entry of entries) {
@@ -97,7 +157,7 @@
         <div class="detail-head">
           <div class="file">{detail.sourceFileName}</div>
           <div class="meta">
-            <span><b>{prettyName(detail.modelId)}</b></span>
+            <span><b>{prettyName(detail.modelId) || t("common.unknownModel")}</b></span>
             <span class="sep">·</span>
             <span>{durationLabel(detail.durationMs)}</span>
             <span class="sep">·</span>
@@ -118,6 +178,9 @@
     <div class="list">
       <h1 class="page-title">{t("nav.home")}</h1>
       <p class="subtitle">{t("home.subtitle")}</p>
+      {#if notice}
+        <p class="notice" role="status">{notice}</p>
+      {/if}
       {#if onPickFile}
         <button
           type="button"
@@ -143,7 +206,11 @@
                 role="button"
                 tabindex="0"
                 onclick={(event) => activateRow(event, hit.jobId)}
-                onkeydown={(event) => rowKeydown(event, hit.jobId)}
+                onkeydown={(event) => {
+                  rowKeydown(event, hit.jobId);
+                  menuKeydown(event, hit);
+                }}
+                oncontextmenu={(event) => openMenu(event, hit)}
               >
                 <div class="card-top">
                   <span class="ficon"><Icon name="file" size={15} stroke={1.5} /></span>
@@ -151,7 +218,7 @@
                 </div>
                 <div class="hit-snippet">{hit.snippet}</div>
                 <div class="card-meta">
-                  <span class="model">{prettyName(hit.modelId)}</span>
+                  <span class="model">{prettyName(hit.modelId) || t("common.unknownModel")}</span>
                   <span class="dur">{durationLabel(hit.durationMs)}</span>
                 </div>
                 <div class="card-foot">
@@ -180,14 +247,18 @@
                 tabindex="0"
                 class:selected={detailJobId === entry.jobId}
                 onclick={(event) => activateRow(event, entry.jobId)}
-                onkeydown={(event) => rowKeydown(event, entry.jobId)}
+                onkeydown={(event) => {
+                  rowKeydown(event, entry.jobId);
+                  menuKeydown(event, entry);
+                }}
+                oncontextmenu={(event) => openMenu(event, entry)}
               >
                 <div class="card-top">
                   <span class="ficon"><Icon name="file" size={15} stroke={1.5} /></span>
                   <span class="name">{entry.sourceFileName}</span>
                 </div>
                 <div class="card-meta">
-                  <span class="model">{prettyName(entry.modelId)}</span>
+                  <span class="model">{prettyName(entry.modelId) || t("common.unknownModel")}</span>
                   <span class="dur">{durationLabel(entry.durationMs)}</span>
                 </div>
                 <div class="card-foot">
@@ -201,9 +272,85 @@
       {/if}
     </div>
   {/if}
+
+  {#if menu}
+    <div
+      class="ctx-menu"
+      role="menu"
+      aria-label={t("common.delete")}
+      style:left={`${menu.x}px`}
+      style:top={`${menu.y}px`}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        class="ctx-item danger"
+        disabled={menu.jobId === runningJobId}
+        onclick={requestDelete}
+      >
+        {t("common.delete")}
+      </button>
+      {#if menu.jobId === runningJobId}
+        <div class="ctx-hint" role="note">{t("history.cancelFirst")}</div>
+      {/if}
+    </div>
+  {/if}
 </section>
 
 <style>
+  .notice {
+    margin: 0 0 10px;
+    font-size: 12.5px;
+    color: var(--green);
+  }
+
+  .ctx-menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 168px;
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--hairline);
+    background: var(--panel);
+    box-shadow: var(--shadow-panel, 0 10px 30px rgba(0, 0, 0, 0.16));
+  }
+
+  .ctx-item {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    color: var(--text);
+    cursor: default;
+  }
+
+  .ctx-item.danger {
+    color: var(--red);
+  }
+
+  .ctx-item:hover:not(:disabled) {
+    background: var(--hover);
+  }
+
+  .ctx-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .ctx-item:disabled {
+    color: var(--text-3);
+  }
+
+  .ctx-hint {
+    padding: 2px 10px 6px;
+    font-size: 11.5px;
+    color: var(--text-3);
+  }
   .content {
     border-radius: var(--radius);
     overflow: hidden;
