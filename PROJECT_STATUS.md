@@ -455,3 +455,9 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - CI：格式、Windows 编译（Arc/Mutex、stderr 绑定）、平台测试（dns-sd/ssh）三次修复后 run `40066611735` 全绿。
 - 清理：Pro 的 `target/` 等 54 GB 与旧包/备份/临时文件、Air 的旧应用与 DMG、Windows 的安装器与日志均移入废纸篓（未用 rm、未清空废纸篓）；Windows 两个源码/构建目录保留（0.49 GB + 25.97 GB）。
 - 边界：macOS ad-hoc 未公证、Windows 未签名；Windows 7878 入站防火墙仍未开放；模型许可证 6/7 未标注（见 docs/model-licenses.md）。
+
+## 菜单栏图标重做（2026-10-24）
+
+- 托盘模板从"两个粗逗号"改回三条竖波：22pt 画布、条宽 1.5pt、间距 3pt、高 6.5/11/8.5、圆头 0.75、整组 10.5pt 居中；三份 22/44/32 由同一参数缩放，Windows 为白色同形状。
+- `gen-tray-icon.py` 重写并成为托盘资源的唯一生成器；`gen-quote-icon.py` 不再写托盘；测试 7/7（含 @2x y=22 三段扫描与 ≤12% 面积上限）。
+- 本机 Pro 已重装含新模板的构建（pid 87150，1.3.0-beta.1）；因当前 Xcode/ld 的 strip 缺陷需以 `CARGO_PROFILE_RELEASE_STRIP=none` 构建，故该安装与 release 资产不同。未重新发布。
