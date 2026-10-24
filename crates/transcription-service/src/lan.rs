@@ -1076,6 +1076,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::path::{Path, PathBuf};
+    #[cfg(target_os = "macos")]
     use std::process::Stdio;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -1273,6 +1274,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn test3_a_mdns_local_name_is_used_as_a_plain_host() {
         // 用 dns-sd 注册一个指向 127.0.0.1 的 `.local` 名字，模拟真实 mDNS 主机名。
@@ -1356,6 +1358,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// 依赖系统 `ssh`；Windows CI 不保证有 OpenSSH 客户端，故只在 unix 跑。
+    #[cfg(unix)]
     #[test]
     fn test10_remote_start_fails_fast_without_passwordless_ssh() {
         let (dir, path) = scratch("ssh");
