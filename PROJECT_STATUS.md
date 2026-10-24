@@ -467,3 +467,10 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - 作废上一轮"三条竖波"方向：引号形状恢复（与应用图标同一套语言），只把笔画改细。22pt 整组 8.5×10.5、单枚 3.5、间距 1.5、竖笔 ≤2pt、尾部收细；22/44/32 同参数缩放，Windows 白色。
 - `gen-tray-icon.py` 重写为引号几何单一参数表；测试 9/9（@2x：连通块 2、外接框 18×22、25% 处每段 3px、alpha=255 面积 3.51%）。
 - 本机 Pro 已重装（pid 27825，1.3.0-beta.1）；未单独发版，GitHub release 资产待下一批。本机构建 strip 绕行写入 docs/local-build.md，未改 release 配置。
+
+## 菜单栏引号图标（取中）重做（2026-10-24）
+
+- 作废"三条竖波"（方向错）与"细体"（过细）两版，按可测量中间值定稿：@2x 竖笔 3.5px、整组 17×22、间距 3.5px、面积 3.2%。
+- `gen-tray-icon.py` 增加 A/B/C 三档参数（3.0/3.5/4.0px），正式资源按 B 档生成（22/44/32，macOS 黑/Windows 白）；实测 16×22、竖笔 3px、间距 3px、面积 3.7%。
+- 对照图 `design/tray-weight-compare.png`（深/浅两行 × A/B/C 真实尺寸 + 4 倍放大）；`gen-tray-compare.py` 生成，仅作证据。
+- 测试 11/11。本机 Pro 已按 B 档重装（pid 45524，1.3.0-beta.1）；未单独发版，GitHub release 资产待下一批。本机构建 strip 绕行沿用 docs/local-build.md，未改 release 配置。

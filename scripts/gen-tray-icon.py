@@ -1,10 +1,13 @@
-"""Generate the thin quote-mark tray icons using only the Python standard library.
+"""Generate the quote-mark tray icons using only the Python standard library.
 
-Geometry is defined once in 22pt design units (taskbook "菜单栏引号图标（细体）"):
-canvas 22x22, a quote group 8.5x10.5pt centred in it; each mark occupies a
-3.5pt-wide box, the two boxes are separated by 1.5pt. A mark is a solid comma:
-a disc-swept Bezier centreline whose radius tapers from 0.95pt (vertical stroke
-at most 2pt wide) at the round head to 0.35pt at the round tail.
+Geometry is defined once in 22pt design units (taskbook "菜单栏引号图标（取中）"):
+canvas 22x22, a centred quote group; each mark occupies a box, the two boxes are
+separated by MARK_GAP. A mark is a solid comma: a disc-swept Bezier centreline
+whose radius tapers from head to tail.
+
+The stroke weight comes in three grades measured at the @2x mid-canvas:
+A=3.0px, B=3.5px (the shipped grade), C=4.0px. All three share one parameter
+table; the grade only scales the radius profile.
 
 Each output size is drawn at 4x as the union of many discs along that curve,
 then box-averaged. RGB is constant black for the macOS template images and
@@ -19,19 +22,23 @@ ICONS = Path(__file__).resolve().parents[1] / "apps/desktop/src-tauri/icons"
 SUPERSAMPLE = 4
 CANVAS = 22.0
 MARK_BOX_WIDTH = 3.5
-MARK_GAP = 1.5
-GROUP_WIDTH = 2 * MARK_BOX_WIDTH + MARK_GAP  # 8.5
+MARK_GAP = 0.5
+GROUP_WIDTH = 2 * MARK_BOX_WIDTH + MARK_GAP
 GROUP_TOP = (CANVAS - 10.5) / 2  # 5.75
-GROUP_LEFT = (CANVAS - GROUP_WIDTH) / 2  # 6.75
+GROUP_LEFT = (CANVAS - GROUP_WIDTH) / 2
 # Cubic centreline (box-local pt) and radius profile for one comma mark.
 HEAD = (2.55, 1.05)
 CTRL_1 = (2.6, 4.6)
 CTRL_2 = (1.9, 8.2)
 TAIL = (0.4, 10.0)
-RADIUS_START = 0.95
-RADIUS_END = 0.35
-RADIUS_TAPER = 0.6  # r(t) = RADIUS_START - RADIUS_TAPER * t ** 0.7
+RADIUS_START = 1.05
+RADIUS_TAPER = 0.72  # r(t) = RADIUS_START - RADIUS_TAPER * t ** 0.7
+RADIUS_END = 0.33
 SWEEP_SAMPLES = 600
+# Stroke grades in @2x px (taskbook §3); the shipped files use GRADE_B.
+GRADES = {"A": 3.0, "B": 3.5, "C": 4.0}
+GRADE_B = "B"
+_GRADE_SCALE = {name: px / GRADES[GRADE_B] for name, px in GRADES.items()}
 
 
 def chunk(kind, data):
@@ -78,8 +85,9 @@ def decode_rgba(data):
     return width, height, pixels
 
 
-def _radius(t):
-    return RADIUS_START - RADIUS_TAPER * t ** 0.7
+def _radius(t, grade):
+    scale = _GRADE_SCALE[grade]
+    return (RADIUS_START - RADIUS_TAPER * t ** 0.7) * scale
 
 
 def _centre(t):
@@ -91,14 +99,14 @@ def _centre(t):
     return x, y
 
 
-def _paint_mark(coverage, size, box_left, unit):
+def _paint_mark(coverage, size, box_left, unit, grade):
     """Union of discs along one comma centreline, in the supersampled buffer."""
     for index in range(SWEEP_SAMPLES + 1):
         t = index / SWEEP_SAMPLES
         cx, cy = _centre(t)
         cx = (box_left + cx) * unit
         cy = (GROUP_TOP + cy) * unit
-        radius = _radius(t) * unit
+        radius = _radius(t, grade) * unit
         reach = int(radius) + 1
         x0, x1 = int(cx) - reach, int(cx) + reach
         y0, y1 = int(cy) - reach, int(cy) + reach
@@ -111,14 +119,14 @@ def _paint_mark(coverage, size, box_left, unit):
                     coverage[row + x] = 1
 
 
-def render(size, color):
+def render(size, color, grade=GRADE_B):
     """Draw the same 22pt quote geometry at any square pixel size."""
     scale = size / CANVAS
     high = size * SUPERSAMPLE
     unit = SUPERSAMPLE * scale  # high-res pixels per design point
     coverage = bytearray(high * high)
     for box_index in range(2):
-        _paint_mark(coverage, high, GROUP_LEFT + box_index * (MARK_BOX_WIDTH + MARK_GAP), unit)
+        _paint_mark(coverage, high, GROUP_LEFT + box_index * (MARK_BOX_WIDTH + MARK_GAP), unit, grade)
     pixels = bytearray()
     samples = SUPERSAMPLE * SUPERSAMPLE
     for y in range(size):
@@ -140,13 +148,13 @@ def verify(data, size, name):
     corners = (0, size - 1, (size - 1) * size, size * size - 1)
     if any(pixels[i * 4 + 3] != 0 for i in corners):
         raise ValueError(f"{name}: nontransparent corner")
-    if not any(pixels[i * 4 + 3] == 255 for i in range(0, len(pixels), 4)):
+    if not any(pixels[i + 3] == 255 for i in range(0, len(pixels), 4)):
         raise ValueError(f"{name}: no opaque pixel")
     opaque = sum(1 for i in range(3, len(pixels), 4) if pixels[i] == 255)
-    if size == 44 and not 0.03 <= opaque / (size * size) <= 0.06:
-        # Taskbook §5's 3-6% ink cap is defined on the @2x template; 1x has
-        # too few pixels to contain a fully opaque 1.5pt stroke.
-        raise ValueError(f"{name}: ink {opaque / (size * size):.1%} outside 3-6%")
+    if size == 44 and not 0.026 <= opaque / (size * size) <= 0.040:
+        # Taskbook §4's 2.6-4.0% ink band is defined on the @2x template; 1x
+        # has too few pixels to contain a fully opaque 1.75pt stroke.
+        raise ValueError(f"{name}: ink {opaque / (size * size):.1%} outside 2.6-4.0%")
     if size in (22, 44):
         if any(tuple(pixels[i:(i + 3)]) != (0, 0, 0) for i in range(0, len(pixels), 4) if pixels[i + 3]):
             raise ValueError(f"{name}: macOS template must be pure black")
