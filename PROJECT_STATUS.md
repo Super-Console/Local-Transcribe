@@ -446,3 +446,12 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - 菜单栏模板改为引号剪影并随系统着色；Windows 任务栏/快捷方式由 `icon.ico` 决定，需下一次 Windows 构建嵌入（本轮资产已更新，无法本机交叉构建）。旧波形生成器加了防误覆盖保护。
 - Pro 已完成备份、覆盖安装与 ad-hoc 签名（`codesign --verify --deep --strict` 通过），新 PID 37167、版本 1.2.0-beta.1；bundle 内 icon.icns 哈希 `e66c5177…f46763`，二进制内已嵌入新菜单栏模板。Air 不可达未换装；未重新发布。
 - 新测试：`scripts/test-quote-icon.py` 5/5、`scripts/test-tray-icon.py` 4/4。
+
+## 1.3.0-beta.1 发布与三端同步（2026-10-24）
+
+- 版本 1.3.0-beta.1（MSI 1.3.0.1）；发布 GitHub Pre-release，资产 DMG `2a18be12…914e`、MSI `c64b1dfb…6b34`（与 CI 一致）、SHA256SUMS。仓库在 GitHub 上已改名为 Local-Transcribe，原地址重定向。
+- 内容：CLI/MCP 能力对等、首页记录删除、模型页去重、共享开关改造、结果模型修正、奶油珊瑚引号图标（含菜单栏/Windows 托盘）、MIT 许可与第三方声明。
+- 三端：MBP（pid 87717）与 Air（pid 87494）均从同一 DMG 安装并运行，exe `d452ed4f…`、node `f77904a4…`；Windows MSI 安装成功，版本 1.3.0-beta.1，node `880f9528…`（= CI 产物），GUI 未在 SSH session 0 启动。
+- CI：格式、Windows 编译（Arc/Mutex、stderr 绑定）、平台测试（dns-sd/ssh）三次修复后 run `40066611735` 全绿。
+- 清理：Pro 的 `target/` 等 54 GB 与旧包/备份/临时文件、Air 的旧应用与 DMG、Windows 的安装器与日志均移入废纸篓（未用 rm、未清空废纸篓）；Windows 两个源码/构建目录保留（0.49 GB + 25.97 GB）。
+- 边界：macOS ad-hoc 未公证、Windows 未签名；Windows 7878 入站防火墙仍未开放；模型许可证 6/7 未标注（见 docs/model-licenses.md）。
