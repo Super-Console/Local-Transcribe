@@ -2,7 +2,7 @@
 
 ## Current milestone
 
-**Current build — 1.1.0-beta.5 desktop with real model inference, verified model catalog, headless LAN node and menu-bar supervision.** GUI, CLI and MCP are service clients over the shared core; the LAN node now runs as a supervised `local-transcribe-node` child process. Model downloads, deletion and local transcription are verified on Apple Silicon; Windows packaging of this milestone is not built.
+**Current build — 1.2.0-beta.1 (GitHub Pre-release, tag `1.2.0-beta.1` = commit `f60f21d`, CI run `40011702239` all green).** GUI, CLI and MCP are service clients over the shared core; the LAN node runs as a supervised `local-transcribe-node` child process. Verified facts: model downloads, deletion and local transcription on Apple Silicon; Windows x64 MSI built by CI, installed on real hardware (Tims-Gaming-PC, SAC off), where runtime window enumeration confirmed no native menu bar, the app-spawned sidecar owned port 7878 with sharing enabled, and `cargo fmt/test/clippy` passed without Code Integrity interception; both Macs replaced with the release asset (identical SHA-256, each `mdfind` shows only the install path); two-Mac LAN end-to-end (Air → MBP node) passed with the release build. Remaining for Timmy: visual checks on Windows (tray white icon, glass, fonts, first-screen clipping); Windows inbound firewall for port 7878 not opened, so other machines cannot reach the Windows node yet. Signing unchanged: macOS ad-hoc/notarization none; Windows unsigned — machines with Smart App Control forced ON can install but not run it.
 
 ## Provisional UI refresh (2026-10-22)
 
@@ -423,3 +423,26 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - 已集中四档样式及行内危险变体，迁移组件并移除重复定义；模型页仅下载使用胶囊，设置页仅清除使用危险胶囊，表单控件保持。
 - check 0/0、测试41/41（无跳过）、前端build通过；自动断言覆盖每页主操作上限、模型每行胶囊上限、设置文字动作透明背景/非胶囊圆角和主操作disabled。
 - 未截图或评价观感；未原生打包/安装/发布，已安装版本不含本轮修改。详见logs/2026-10/2026-10-24-button-system.md。
+
+## 移动端 P1 · 假数据可点击界面（2026-10-24）
+
+- 按移动端任务书 V1.0 顺序只完成 P1：`apps/ios/`（SwiftUI，xcodebuild 可构建）与 `apps/android/`（Kotlin/Compose，gradlew assembleDebug 可构建）各一套全量假数据、可点击界面，结构学「语音备忘录」，视觉用项目自己的 token；已停下等 Timmy 审阅，P2 未开始。
+- 实测：iOS build SUCCEEDED、test 9/9（Format 7 + Font 2）；Android assembleDebug BUILD SUCCESSFUL、testDebugUnitTest 7/7；截图证据 `docs/screenshots/mobile-p1/`。
+- 字体（已核实）：iOS 18.4 模拟器无 Songti SC，标题衬线落点 New York，中文标题在模拟器截图不衬线；真机中文衬线待验证。详见 logs/2026-10/2026-10-24-mobile-p1-fake-data-ui.md 与 docs/mobile.md 第 9 节。
+- 本阶段全部为假数据，未做任何真实录音/上传/转写/推理；所有留接口入口显式标注「未完成」；未引入云服务/账号/遥测，未 git commit。
+
+## CLI/MCP 对等、首页删除、共享开关、许可证合规（2026-10-24 下午）
+
+- **CLI/MCP 对等**：共享 `lan-settings.json`（fs2 锁、损坏备份、原子写）；CLI 增加 `lan list/nodes/add/remove/enable/disable/set/scan/start/stop/status` 与 `mode`；MCP 增加 `add_node/update_node/remove_node/node_status`（共 13 个）；远程启停只走 SSH（BatchMode，固定 `<node_binary> --from-settings`，不装守护进程）。任务书 §8 的 12 条测试全部落地（服务 8 条、设置 2 条、MCP 2 条，其中第 12 条另有 CLI 端到端退出码测试）；第 11 条注入用 canary 文件验证未执行。
+- **首页删除 + 模型页去重**：历史卡片右键 / Shift+F10 / ContextMenu 打开只有「删除」的菜单；确认文案含文件名与「只删本应用记录、不动原始音视频」；后端 `delete_history_entry` 只把 `transcripts/<id>.json`、`jobs/<id>.json`、`jobs/<id>.cancel` 移入废纸篓，拒绝运行中任务与不安全 id，`jobs/.dispatch.lock` 与源媒体不动；模型页移除重复的已安装列表，只有清单外模型才出现「其它已安装」。
+- **共享开关**：状态点抽成 `app.css` 的共享 `.status-dot`（7×7，绿/灰）；按钮去掉 `role="switch"`/`aria-checked`，只写动作并带状态 `aria-label`，切换中 `disabled + aria-busy`；删除内存提示与五语言 `lan.memoryHint`。
+- **许可证**：5 个 crate 与 workspace 改为 MIT；两只 README 补名称/图标排除；新增 `THIRD-PARTY-NOTICES.md`（605 个包，点名 sherpa-onnx Apache-2.0 与 symphonia MPL-2.0）与 `docs/model-licenses.md`（7 个模型：Paraformer Apache-2.0，其余 6 个模型卡未标注）。`bundle.resources` 把 LICENSE 与声明打进 `.app/Contents/Resources/`，设置页「关于」新增打开入口；本地 release 构建实测两份文件存在，ad-hoc 签名后 `codesign --verify --deep --strict` 通过。
+- **验证**：`npm run check` 0 errors / 0 warnings；`npm test` 64/64；`cargo test --workspace` 通过。服务 mock 在并行负载下出现过一次连接抖动，已给测试 mock 增加启动就绪探测，随后连续 4 次全量通过。
+- **未做/边界**：以上改动未提交、未推送，也不在已发布的 1.2.0-beta.1 安装包内；发布页仍缺 `THIRD-PARTY-NOTICES.md`。远程启停未在第二台真实 Mac 上跑通（需要对方开机 + 免密 SSH）；Air 当前不可达，未复核安装。
+
+## 应用图标替换为奶油珊瑚引号（2026-10-24）
+
+- 以 Timmy 提供的奶油方块 + 珊瑚引号图为源（`design/app-icon-quote-source.png`），新增 `scripts/gen-quote-icon.py` 生成：`.icns`、`.ico`（6 档）、32/64/128/128@2x、Windows Square/Store 标志、macOS 菜单栏模板（22/44）、Windows 托盘（32）、favicon。
+- 菜单栏模板改为引号剪影并随系统着色；Windows 任务栏/快捷方式由 `icon.ico` 决定，需下一次 Windows 构建嵌入（本轮资产已更新，无法本机交叉构建）。旧波形生成器加了防误覆盖保护。
+- Pro 已完成备份、覆盖安装与 ad-hoc 签名（`codesign --verify --deep --strict` 通过），新 PID 37167、版本 1.2.0-beta.1；bundle 内 icon.icns 哈希 `e66c5177…f46763`，二进制内已嵌入新菜单栏模板。Air 不可达未换装；未重新发布。
+- 新测试：`scripts/test-quote-icon.py` 5/5、`scripts/test-tray-icon.py` 4/4。
