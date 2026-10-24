@@ -145,11 +145,6 @@ Windows: the workspace compiles `x86_64-pc-windows-msvc` (verified via CI on `wi
 
 See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the full milestone log with verified facts separated from proposals and blockers, and [`docs/technical-validation.md`](docs/technical-validation.md) for reproducible checks.
 
-## Repository notes
-
-- `GPT聊天记录/` (the original conversation archive) is private, read-only reference material; it is Git-ignored and must never be staged, moved or edited.
-- Model weights, media files and generated transcripts are Git-ignored.
-- Development logs live under `logs/` (one event per document, append-only).
 
 ## License
 
