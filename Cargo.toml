@@ -9,3 +9,6 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[workspace.package]
+license = "MIT"

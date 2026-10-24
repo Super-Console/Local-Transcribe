@@ -2,7 +2,7 @@
 name = "voice-to-text-service"
 version = "0.1.0"
 edition = "2021"
-license = "UNLICENSED"
+license = "MIT"
 
 [[bin]]
 name = "voice-to-text-service"
@@ -15,4 +15,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 fs2 = "=0.4.3"
 # 局域网派发：调用 lan-compute 的异步客户端（与 GUI 共用同一份实现）。
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "time", "net"] }
+
+# 仅本机启停节点需要 `kill()`（存活探测与发 SIGINT）；Windows 无对应 API，
+# lan.rs 里对应函数用 cfg 关掉。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
