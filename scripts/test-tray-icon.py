@@ -1,38 +1,66 @@
-"""Automatic resource/loading contracts; no GUI or appearance judgement."""
+"""Tray resource contracts for the quote-mark icon; no appearance judgement.
+
+The canonical generator is scripts/gen-quote-icon.py (it also produces the app
+icon, .icns/.ico and Windows logos). Running the old waveform generator would
+overwrite these files, so this test only re-runs the quote generator.
+"""
+import hashlib
 import importlib.util
 from pathlib import Path
 import subprocess
 import sys
 import unittest
 
+sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 ICONS = ROOT / "apps/desktop/src-tauri/icons"
 
 
+def load(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class TrayIconTests(unittest.TestCase):
-    def test_resources_and_repeatable_generation(self):
-        script = ROOT / "scripts/gen-tray-icon.py"
-        self.assertTrue(script.is_file(), "generator must exist")
-        spec = importlib.util.spec_from_file_location("tray_generator", script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        names = {"tray-template.png": (22, 0), "tray-template@2x.png": (44, 0),
-                 "tray-windows.png": (32, 255)}
+    def test_generation_is_repeatable(self):
+        names = ["tray-template.png", "tray-template@2x.png", "tray-windows.png", "icon.png"]
         before = {name: (ICONS / name).read_bytes() for name in names}
-        subprocess.run([sys.executable, str(script)], check=True)
-        for name, (size, color) in names.items():
-            data = (ICONS / name).read_bytes()
-            self.assertEqual(data, before[name], "generation must be byte-identical")
-            width, height, pixels = module.decode_rgba(data)
-            self.assertEqual((width, height), (size, size))
+        subprocess.run(
+            [sys.executable, str(ROOT / "scripts/gen-quote-icon.py")],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        for name in names:
+            after = (ICONS / name).read_bytes()
+            self.assertEqual(
+                hashlib.sha256(after).hexdigest(),
+                hashlib.sha256(before[name]).hexdigest(),
+                f"{name} must regenerate byte-identically",
+            )
+
+    def test_macos_template_is_black_with_alpha(self):
+        module = load("gen-tray-icon")
+        for name, size in [("tray-template.png", 22), ("tray-template@2x.png", 44)]:
+            width, height, pixels = module.decode_rgba((ICONS / name).read_bytes())
+            self.assertEqual((width, height), (size, size), name)
             for x, y in [(0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)]:
                 self.assertEqual(pixels[(y * size + x) * 4 + 3], 0)
             self.assertTrue(any(pixels[i] == 255 for i in range(3, len(pixels), 4)))
-            self.assertTrue(any(pixels[(y * size + size // 2) * 4 + 3] == 255 for y in range(size)))
             for i in range(0, len(pixels), 4):
                 if pixels[i + 3]:
-                    self.assertEqual(tuple(pixels[i:i + 3]), (color,) * 3)
-            self.assertTrue(any(0 < pixels[i] < 255 for i in range(3, len(pixels), 4)), "antialiased edge")
+                    self.assertEqual(tuple(pixels[i : i + 3]), (0, 0, 0), name)
+            self.assertTrue(
+                any(0 < pixels[i] < 255 for i in range(3, len(pixels), 4)),
+                f"{name} keeps antialiased edges",
+            )
+
+    def test_windows_tray_uses_the_colour_app_icon(self):
+        self.assertEqual(
+            (ICONS / "tray-windows.png").read_bytes(),
+            (ICONS / "32x32.png").read_bytes(),
+        )
 
     def test_platform_loading_contract(self):
         source = (ROOT / "apps/desktop/src-tauri/src/tray.rs").read_text()

@@ -1,4 +1,10 @@
-"""Generate approved A application icons only, using standard-library 4x rasterization.
+"""LEGACY waveform icon generator (superseded by gen-quote-icon.py).
+
+Running this file rewrites icons/icon.* with the old waveform design. The
+current icon is the quote-mark design; use scripts/gen-quote-icon.py unless you
+are deliberately restoring the A waveform. Requires --legacy-waveform.
+
+Original purpose: generate approved A application icons only, using standard-library 4x rasterization.
 
 Base geometry is from the taskbook, with the user's taller-wave amendment:
 168/384/240px heights; 229px canvas radius,
@@ -101,4 +107,9 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--legacy-waveform" not in sys.argv:
+        raise SystemExit(
+            "This is the legacy waveform generator; run scripts/gen-quote-icon.py instead. "
+            "Pass --legacy-waveform to overwrite icons with the old design."
+        )
     main()
