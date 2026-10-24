@@ -4,7 +4,7 @@ This diagram captures a testable direction, not a final approval of every compon
 
 ## Desktop implementation decision (2026-10-21)
 
-Timmy explicitly accepts Tauri 2 + Svelte for VoiceToTextApp desktop development, starting with macOS. Continue in `apps/desktop`; do not replace this project with a SwiftUI frontend. This records the implementation route, not a final brand/visual-design approval or evidence that Windows packaging, WebView behavior, performance, or the ASR engine has passed acceptance. Do not transfer native-UI choices from separate projects into this repository.
+Timmy explicitly accepts Tauri 2 + Svelte for Local Transcribe (the product name, decided 2026-10-24), starting with macOS. Continue in `apps/desktop`; do not replace this project with a SwiftUI frontend. This records the implementation route; the visual design is still evolving, and it is not evidence that Windows packaging, WebView behavior, performance, or the ASR engine has passed acceptance. Do not transfer native-UI choices from separate projects into this repository.
 
 ## Current implementation snapshot (2026-10-22)
 

@@ -1,10 +1,10 @@
-# VoiceToTextApp
-
-> Provisional workspace name. The product name (current candidate in the UI: **Local Transcribe**) and the final visual design are intentionally left undecided.
+# Local Transcribe
 
 **中文说明见 [README.zh-CN.md](README.zh-CN.md)。**
 
-A local-first desktop tool that transcribes user-selected audio/video files into text — entirely on your own machine. One Rust core serves three equal interfaces: a desktop GUI, a command-line tool, and a local MCP server.
+Local Transcribe is a local-first desktop app that transcribes user-selected audio/video files into text — entirely on your own machine. One Rust core serves three equal interfaces: a desktop GUI, a command-line tool, and a local MCP server.
+
+macOS and Windows builds are published under [Releases](https://github.com/TimmySheep/Local-Transcribe/releases). The visual design continues to evolve; the product name is settled.
 
 ## Product boundary (V1, frozen)
 
@@ -24,14 +24,14 @@ crates/transcription-core/    audio decoding, model layout inspection, sherpa-on
 crates/transcription-service/ single local service (Unix socket on macOS/Linux,
                        loopback-only TCP on Windows) shared by GUI / CLI / MCP
 crates/transcription-cli/     `local-transcribe` command-line client
-crates/transcription-mcp/     MCP server over local stdio (9 tools)
+crates/transcription-mcp/     MCP server over local stdio (13 tools)
 crates/lan-compute/           LAN Compute V1.1: task store, node server, client, mDNS
                        (`local-transcribe-node` binary)
 ```
 
 All three interfaces talk to the same file-backed service instance, so a job started in the GUI is visible to the CLI and MCP, and vice versa.
 
-## Desktop GUI (1.0.0)
+## Desktop app
 
 - **Recording** (1.0): record inside the app with the microphone and/or a chosen application (Core Audio process tap) as two separate tracks; each track is transcribed separately and becomes its own record. No virtual audio driver is installed.
 - **Home** merges transcription and history: an import tile plus date-grouped transcript cards; opening a record shows the transcript in the reader.
@@ -40,7 +40,7 @@ All three interfaces talk to the same file-backed service instance, so a job sta
 - **Storage** settings show every app directory (models, history results, job records, app data) and offer automatic cleanup by age (1/3/5/7/30 days) or size (1/5/10 GB), off by default; deletions go to the Trash.
 - **Interface languages**: 简体中文, English, Español, Français, Deutsch (follows macOS by default).
 
-## LAN Compute V1.1 (Early Beta)
+## LAN compute (protocol V1.1)
 
 Optional, off by default: transcribe on another computer on your LAN.
 
@@ -55,7 +55,7 @@ Optional, off by default: transcribe on another computer on your LAN.
 - **Headless node**: `local-transcribe-node --name NAME --data-dir DIR --listen ADDRESS:PORT [--netmask MASK] [--compute on --models-dir APP_DATA]` runs the same node without the GUI. `--listen` is required; a normal LAN address needs `--netmask`, while `0.0.0.0`, loopback and Tailscale `100.64/10` may omit it. `--parent-pid` makes the node exit with its parent; `--idle-unload` accepts 20/120/600/1800/7200 seconds.
 - **Data and logs**: app data lives in `~/Library/Application Support/com.timmy.voicetotextapp` (models, history, jobs, `lan-host` received media, settings); node logs live in `~/Library/Logs/com.timmy.voicetotextapp/lan-node.log` (5 MB rotation, one generation).
 - **Uninstall residue**: dragging the app to the Trash leaves those two directories behind. Remove them manually after you no longer need the data.
-- See `design/windows-early-beta.html` for the frozen Windows Early Beta design and `docs/architecture/windows-lan-review.md` for the design review.
+- Windows packaging is built by CI on `windows-2022`; see `docs/architecture/windows-lan-review.md` for the design review.
 
 ## Supported models
 
@@ -78,7 +78,7 @@ Inference runs on sherpa-onnx 1.13.8 (CPU).
 
 ### Desktop
 
-Tauri 2 + Svelte. Drag-and-drop or file picker, incremental transcription display, job queue, history, model library, light/dark theme. The current UI is a functional provisional design, not final approval. The two glass bars (reader tool row and app toolbar) are CSS-only; set `<html data-glass="off">` to disable them (Reduced Transparency does the same automatically).
+Tauri 2 + Svelte. Drag-and-drop or file picker, incremental transcription display, job queue, history, model library, light/dark theme. The visual design may still change; this document only commits to behavior. The two glass bars (reader tool row and app toolbar) are CSS-only; set `<html data-glass="off">` to disable them (Reduced Transparency does the same automatically).
 
 ### CLI
 
@@ -140,8 +140,8 @@ Windows: the workspace compiles `x86_64-pc-windows-msvc` (verified via CI on `wi
 - End-to-end transcription verified on macOS with real models (see the table above) through both the CLI and the GUI.
 - MCP protocol, tool surface and the `--allow-root` file-access guard were exercised against the live service.
 - Windows: the full pipeline (fmt, tests, strict clippy, release build, npm check, MSI) is green on real `windows-2022` CI runners, and the workspace is cross-checked locally against `x86_64-pc-windows-msvc`. Real-machine install/launch acceptance is recorded in `docs/testing/`; runtime claims are limited to what that record actually verified. (Earlier blockers: Smart App Control rejected *compiling* on the test host; CI compilation and MSI install are separate paths.)
-- LAN Compute V1.1: 61 automated tests cover the task state machine, persistence/crash recovery, no-authentication private-network access, resumable upload, collect path-traversal refusal and ZIP export with sha256 manifest. Cross-device runtime verification is recorded in `docs/testing/`.
-- Release signing/notarization is unresolved (unsigned Early Beta; Windows SmartScreen first-run warning applies). The product name and final macOS visual design remain open decisions.
+- LAN compute: the automated suite covers the task state machine, persistence/crash recovery, no-authentication private-network access, resumable upload, collect path-traversal refusal, ZIP export with a sha256 manifest, CLI/MCP node management and the shared settings lock. Cross-device runtime verification is recorded in `docs/testing/`.
+- Release signing/notarization is unresolved (macOS ad-hoc, Windows unsigned; SmartScreen first-run warning applies). UI visuals may still change.
 
 See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the full milestone log with verified facts separated from proposals and blockers, and [`docs/technical-validation.md`](docs/technical-validation.md) for reproducible checks.
 
