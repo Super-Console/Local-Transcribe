@@ -1,13 +1,15 @@
-"""Generate the three-bar tray icons using only the Python standard library.
+"""Generate the thin quote-mark tray icons using only the Python standard library.
 
-Geometry is defined once in 22pt design units (taskbook "菜单栏图标重做"):
-canvas 22x22, content vertically centred on y=11, three rounded vertical bars
-1.5pt wide with 3pt gaps, heights 6.5 / 11 / 8.5, cap radius 0.75; the whole
-group is 10.5pt wide and horizontally centred.
+Geometry is defined once in 22pt design units (taskbook "菜单栏引号图标（细体）"):
+canvas 22x22, a quote group 8.5x10.5pt centred in it; each mark occupies a
+3.5pt-wide box, the two boxes are separated by 1.5pt. A mark is a solid comma:
+a disc-swept Bezier centreline whose radius tapers from 0.95pt (vertical stroke
+at most 2pt wide) at the round head to 0.35pt at the round tail.
 
-Each output size is drawn at 4x and box-averaged. RGB is constant black for the
-macOS template images and white for Windows; the background stays transparent.
-Run from any directory; output is deterministic and validated after writing.
+Each output size is drawn at 4x as the union of many discs along that curve,
+then box-averaged. RGB is constant black for the macOS template images and
+white for Windows; the background stays transparent. Run from any directory;
+output is deterministic and validated after writing.
 """
 from pathlib import Path
 import struct
@@ -16,13 +18,20 @@ import zlib
 ICONS = Path(__file__).resolve().parents[1] / "apps/desktop/src-tauri/icons"
 SUPERSAMPLE = 4
 CANVAS = 22.0
-BAR_WIDTH = 1.5
-GAP = 3.0
-HEIGHTS = (6.5, 11.0, 8.5)
-CAP_RADIUS = 0.75
-CENTER_Y = 11.0
-GROUP_WIDTH = 3 * BAR_WIDTH + 2 * GAP  # 10.5
-LEFT = (CANVAS - GROUP_WIDTH) / 2  # 5.75
+MARK_BOX_WIDTH = 3.5
+MARK_GAP = 1.5
+GROUP_WIDTH = 2 * MARK_BOX_WIDTH + MARK_GAP  # 8.5
+GROUP_TOP = (CANVAS - 10.5) / 2  # 5.75
+GROUP_LEFT = (CANVAS - GROUP_WIDTH) / 2  # 6.75
+# Cubic centreline (box-local pt) and radius profile for one comma mark.
+HEAD = (2.55, 1.05)
+CTRL_1 = (2.6, 4.6)
+CTRL_2 = (1.9, 8.2)
+TAIL = (0.4, 10.0)
+RADIUS_START = 0.95
+RADIUS_END = 0.35
+RADIUS_TAPER = 0.6  # r(t) = RADIUS_START - RADIUS_TAPER * t ** 0.7
+SWEEP_SAMPLES = 600
 
 
 def chunk(kind, data):
@@ -69,30 +78,58 @@ def decode_rgba(data):
     return width, height, pixels
 
 
+def _radius(t):
+    return RADIUS_START - RADIUS_TAPER * t ** 0.7
+
+
+def _centre(t):
+    u = 1.0 - t
+    x = (u ** 3 * HEAD[0] + 3 * u * u * t * CTRL_1[0]
+         + 3 * u * t * t * CTRL_2[0] + t ** 3 * TAIL[0])
+    y = (u ** 3 * HEAD[1] + 3 * u * u * t * CTRL_1[1]
+         + 3 * u * t * t * CTRL_2[1] + t ** 3 * TAIL[1])
+    return x, y
+
+
+def _paint_mark(coverage, size, box_left, unit):
+    """Union of discs along one comma centreline, in the supersampled buffer."""
+    for index in range(SWEEP_SAMPLES + 1):
+        t = index / SWEEP_SAMPLES
+        cx, cy = _centre(t)
+        cx = (box_left + cx) * unit
+        cy = (GROUP_TOP + cy) * unit
+        radius = _radius(t) * unit
+        reach = int(radius) + 1
+        x0, x1 = int(cx) - reach, int(cx) + reach
+        y0, y1 = int(cy) - reach, int(cy) + reach
+        for y in range(max(0, y0), min(size, y1 + 1)):
+            dy = y + 0.5 - cy
+            row = y * size
+            for x in range(max(0, x0), min(size, x1 + 1)):
+                dx = x + 0.5 - cx
+                if dx * dx + dy * dy <= radius * radius:
+                    coverage[row + x] = 1
+
+
 def render(size, color):
-    """Draw the same 22pt geometry at any square pixel size."""
+    """Draw the same 22pt quote geometry at any square pixel size."""
     scale = size / CANVAS
     high = size * SUPERSAMPLE
-    points_per_sample = 1.0 / (SUPERSAMPLE * scale)
+    unit = SUPERSAMPLE * scale  # high-res pixels per design point
     coverage = bytearray(high * high)
-    for y in range(high):
-        py = (y + 0.5) * points_per_sample
-        for x in range(high):
-            px = (x + 0.5) * points_per_sample
-            for index, height in enumerate(HEIGHTS):
-                left = LEFT + index * (BAR_WIDTH + GAP)
-                cx = left + BAR_WIDTH / 2
-                top = CENTER_Y - height / 2
-                nearest_y = min(max(py, top + CAP_RADIUS), top + height - CAP_RADIUS)
-                if (px - cx) ** 2 + (py - nearest_y) ** 2 <= CAP_RADIUS ** 2:
-                    coverage[y * high + x] = 255
-                    break
+    for box_index in range(2):
+        _paint_mark(coverage, high, GROUP_LEFT + box_index * (MARK_BOX_WIDTH + MARK_GAP), unit)
     pixels = bytearray()
+    samples = SUPERSAMPLE * SUPERSAMPLE
     for y in range(size):
         for x in range(size):
-            total = sum(coverage[(y * SUPERSAMPLE + dy) * high + x * SUPERSAMPLE + dx]
-                        for dy in range(SUPERSAMPLE) for dx in range(SUPERSAMPLE))
-            pixels.extend((color, color, color, (total + 8) // 16))
+            total = 0
+            base_y = y * SUPERSAMPLE * high
+            for dy in range(SUPERSAMPLE):
+                row = base_y + dy * high + x * SUPERSAMPLE
+                for dx in range(SUPERSAMPLE):
+                    total += coverage[row + dx]
+            pixels.extend((color, color, color, (total * 255 + samples // 2) // samples))
     return encode_rgba(size, pixels)
 
 
@@ -106,8 +143,10 @@ def verify(data, size, name):
     if not any(pixels[i * 4 + 3] == 255 for i in range(0, len(pixels), 4)):
         raise ValueError(f"{name}: no opaque pixel")
     opaque = sum(1 for i in range(3, len(pixels), 4) if pixels[i] == 255)
-    if opaque / (size * size) > 0.12:
-        raise ValueError(f"{name}: too much ink ({opaque / (size * size):.1%})")
+    if size == 44 and not 0.03 <= opaque / (size * size) <= 0.06:
+        # Taskbook §5's 3-6% ink cap is defined on the @2x template; 1x has
+        # too few pixels to contain a fully opaque 1.5pt stroke.
+        raise ValueError(f"{name}: ink {opaque / (size * size):.1%} outside 3-6%")
     if size in (22, 44):
         if any(tuple(pixels[i:(i + 3)]) != (0, 0, 0) for i in range(0, len(pixels), 4) if pixels[i + 3]):
             raise ValueError(f"{name}: macOS template must be pure black")
