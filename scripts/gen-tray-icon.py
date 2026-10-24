@@ -1,7 +1,12 @@
-"""Generate transparent waveform tray PNGs using only the Python standard library.
+"""Generate the three-bar tray icons using only the Python standard library.
 
-Draw at 4x the output resolution, then box-average alpha. RGB is constant
-black (macOS template) or white (Windows); no opaque background is drawn.
+Geometry is defined once in 22pt design units (taskbook "菜单栏图标重做"):
+canvas 22x22, content vertically centred on y=11, three rounded vertical bars
+1.5pt wide with 3pt gaps, heights 6.5 / 11 / 8.5, cap radius 0.75; the whole
+group is 10.5pt wide and horizontally centred.
+
+Each output size is drawn at 4x and box-averaged. RGB is constant black for the
+macOS template images and white for Windows; the background stays transparent.
 Run from any directory; output is deterministic and validated after writing.
 """
 from pathlib import Path
@@ -10,6 +15,14 @@ import zlib
 
 ICONS = Path(__file__).resolve().parents[1] / "apps/desktop/src-tauri/icons"
 SUPERSAMPLE = 4
+CANVAS = 22.0
+BAR_WIDTH = 1.5
+GAP = 3.0
+HEIGHTS = (6.5, 11.0, 8.5)
+CAP_RADIUS = 0.75
+CENTER_Y = 11.0
+GROUP_WIDTH = 3 * BAR_WIDTH + 2 * GAP  # 10.5
+LEFT = (CANVAS - GROUP_WIDTH) / 2  # 5.75
 
 
 def chunk(kind, data):
@@ -57,49 +70,59 @@ def decode_rgba(data):
 
 
 def render(size, color):
-    # The requested x starts are 3, 9, 15 in 22px coordinates; scale the
-    # entire 22px design proportionally for Retina and Windows resources.
-    scale = size / 22
+    """Draw the same 22pt geometry at any square pixel size."""
+    scale = size / CANVAS
     high = size * SUPERSAMPLE
+    points_per_sample = 1.0 / (SUPERSAMPLE * scale)
     coverage = bytearray(high * high)
-    # Only macOS black templates receive the taller-wave amendment.
-    # Preserve Windows geometry and bytes exactly.
-    heights = (8, 17, 11) if color == 0 else (7, 13, 9)
     for y in range(high):
-        py = (y + 0.5) / (SUPERSAMPLE * scale)
+        py = (y + 0.5) * points_per_sample
         for x in range(high):
-            px = (x + 0.5) / (SUPERSAMPLE * scale)
-            for left, height in zip((3, 9, 15), heights):
-                cx = left + 1.5
-                top = 11 - height / 2
-                nearest_y = min(max(py, top + 1.5), top + height - 1.5)
-                if (px - cx) ** 2 + (py - nearest_y) ** 2 <= 1.5 ** 2:
+            px = (x + 0.5) * points_per_sample
+            for index, height in enumerate(HEIGHTS):
+                left = LEFT + index * (BAR_WIDTH + GAP)
+                cx = left + BAR_WIDTH / 2
+                top = CENTER_Y - height / 2
+                nearest_y = min(max(py, top + CAP_RADIUS), top + height - CAP_RADIUS)
+                if (px - cx) ** 2 + (py - nearest_y) ** 2 <= CAP_RADIUS ** 2:
                     coverage[y * high + x] = 255
                     break
     pixels = bytearray()
     for y in range(size):
         for x in range(size):
-            total = sum(coverage[(y * 4 + dy) * high + x * 4 + dx]
-                        for dy in range(4) for dx in range(4))
+            total = sum(coverage[(y * SUPERSAMPLE + dy) * high + x * SUPERSAMPLE + dx]
+                        for dy in range(SUPERSAMPLE) for dx in range(SUPERSAMPLE))
             pixels.extend((color, color, color, (total + 8) // 16))
     return encode_rgba(size, pixels)
+
+
+def verify(data, size, name):
+    width, height, pixels = decode_rgba(data)
+    if (width, height) != (size, size):
+        raise ValueError(f"{name}: wrong dimensions")
+    corners = (0, size - 1, (size - 1) * size, size * size - 1)
+    if any(pixels[i * 4 + 3] != 0 for i in corners):
+        raise ValueError(f"{name}: nontransparent corner")
+    if not any(pixels[i * 4 + 3] == 255 for i in range(0, len(pixels), 4)):
+        raise ValueError(f"{name}: no opaque pixel")
+    opaque = sum(1 for i in range(3, len(pixels), 4) if pixels[i] == 255)
+    if opaque / (size * size) > 0.12:
+        raise ValueError(f"{name}: too much ink ({opaque / (size * size):.1%})")
+    if size in (22, 44):
+        if any(tuple(pixels[i:(i + 3)]) != (0, 0, 0) for i in range(0, len(pixels), 4) if pixels[i + 3]):
+            raise ValueError(f"{name}: macOS template must be pure black")
+    print(f"{name}: {width}x{height} RGBA; corners transparent; opaque {opaque / (size * size):.1%}")
 
 
 def main():
     for name, size, color in [("tray-template.png", 22, 0),
                               ("tray-template@2x.png", 44, 0),
                               ("tray-windows.png", 32, 255)]:
+        data = render(size, color)
+        verify(data, size, name)
         path = ICONS / name
-        path.write_bytes(render(size, color))
-        width, height, pixels = decode_rgba(path.read_bytes())
-        if (width, height) != (size, size):
-            raise ValueError(f"{name}: wrong dimensions")
-        corners = (0, size - 1, (size - 1) * size, size * size - 1)
-        if any(pixels[i * 4 + 3] != 0 for i in corners):
-            raise ValueError(f"{name}: nontransparent corner")
-        if not any(pixels[(y * size + size // 2) * 4 + 3] == 255 for y in range(size)):
-            raise ValueError(f"{name}: no opaque center-column pixel")
-        print(f"{name}: {width}x{height} RGBA; corners alpha=0; center alpha=255")
+        path.write_bytes(data)
+        verify(path.read_bytes(), size, name)
 
 
 if __name__ == "__main__":

@@ -10,8 +10,10 @@ difference and un-premultiplied, then composited at the measured position.
 
 Outputs (all deterministic; no third-party Python packages):
   icons/icon.png 1024, 32/64/128/256, icon.icns, icon.ico,
-  Windows Square*/Store logos, tray-template(+@2x), tray-windows.png,
-  static/favicon.png.
+  Windows Square*/Store logos, static/favicon.png.
+
+Tray/menu-bar icons are generated separately by scripts/gen-tray-icon.py
+(three-bar template, taskbook "菜单栏图标重做").
 
 Frames are produced at 4x and box-averaged; downscales use ffmpeg's lanczos.
 """
@@ -251,32 +253,6 @@ def write_ico(master_path: Path) -> None:
     (ICONS / "icon.ico").write_bytes(header + entries + b"".join(payloads))
 
 
-def write_tray_template(glyph) -> None:
-    pixels, gw, gh, gx0, gy0, gwidth, gheight = glyph
-    for size, glyph_height in ((22, 16), (44, 32)):
-        scale = glyph_height / gheight
-        width = gwidth * scale
-        left = (size - width) / 2
-        top = (size - glyph_height) / 2
-        out = bytearray()
-        for y in range(size):
-            for x in range(size):
-                # 4x4 supersampling keeps the small glyph legible.
-                total = 0.0
-                for sy in range(4):
-                    for sx in range(4):
-                        px = x + (sx + 0.5) / 4
-                        py = y + (sy + 0.5) / 4
-                        if left <= px < left + width and top <= py < top + glyph_height:
-                            gx = gx0 + (px - left) / scale
-                            gy = gy0 + (py - top) / scale
-                            total += sample_bilinear(pixels, gw, gh, gx, gy)[3]
-                alpha = round(min(255.0, total / 16))
-                out.extend((0, 0, 0, alpha))
-        name = "tray-template.png" if size == 22 else "tray-template@2x.png"
-        (ICONS / name).write_bytes(png.encode_rgba(size, out))
-
-
 def main() -> None:
     if not SOURCE.is_file():
         raise SystemExit(f"missing source: {SOURCE}")
@@ -317,14 +293,6 @@ def main() -> None:
             )
         write_icns(master_path)
         write_ico(master_path)
-        write_tray_template(glyph)
-        ffmpeg(
-            "-i",
-            str(master_path),
-            "-vf",
-            "scale=32:32:flags=lanczos",
-            str(ICONS / "tray-windows.png"),
-        )
         shutil.copy(master_path, ROOT / "apps/desktop/static/favicon.png")
 
     print(f"glyph {glyph[5]}x{glyph[6]} at ({glyph[3]},{glyph[4]})")
