@@ -30,5 +30,11 @@
 
 ## 未验证 / 阻塞
 
-- Windows MSI **安装与运行时验收未做**：SAC 拦截未签名构建，且无交互登录用户，只能 SSH/CI。等新 UI 提交 `d160a99` 的 CI 产出 MSI 后走 SSH 安装验收。
-- 未改动任何机器安全策略；未在本机之外分发构建产物。
+- ~~Windows MSI 安装与运行时验收未做~~ → 已于同日完成安装与运行时验收，见下节。
+
+## 验收补记（2026-10-25 晚，run 40190713084 / commit 362959c）
+
+- MSI（sha256 `65acfdc5…`）经 SSH 上传至 win（100.94.223.63，用户 TGP），`msiexec /i /qn` 退出码 0，注册表 DisplayVersion 由 1.3.0.1 升至 1.4.0.1，两个 exe 就位。**SAC 未拦截 CI 构建的 MSI**（此前拦截的是本机未签名构建）。
+- SSH 会话 0 直接启动会因无交互桌面在 WebView2 处 panic（`0x80070578`，预期内）；改用 `LogonType Interactive` 计划任务在 tgp 控制台会话启动成功：进程 `Responding=True`、真实窗口（class `Tauri Window`）存在、4 个 WebView2 子进程运行。
+- 截屏曾显示纯色 `#012456`，经采样比对确认为截屏任务自带 PowerShell 窗口背景（应用色板无此色），应用窗口当时处于最小化；恢复窗口、唤醒屏幕后机器正在被 Timmy 全屏游戏中，遂停止继续截屏以免打扰。**Windows 视觉 UI 验收仍开放**，进程/窗口/WebView2 健康已验证。
+- 临时产物（Windows 端）：`C:\Users\TGP\LocalTranscribe-1.4.0-beta.1.msi`、`lt-*.ps1/txt/png`、计划任务 `LT-*` 若干，待 Timmy 确认后清理。
