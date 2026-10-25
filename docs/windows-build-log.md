@@ -83,3 +83,12 @@ A later process transcript records `cargo fmt --all -- --check` exit 0, then `ca
   - Local copy: `/Users/REDACTED/Downloads/VoiceToTextApp-Windows/`
 - Still not validated: real speech-to-text inference. No model weights were downloaded and no audio was transcribed, so transcription quality/accuracy is unverified. The installer is unsigned; Smart App Control on a protected Windows device may still block it at run time, which is separate from the CI build result.
 - The Windows gaming PC stayed shut down throughout; this build used GitHub-hosted `windows-2022`. No security policy was changed.
+
+
+## Windows sidecar CRT mismatch (LNK2005/LNK2038) and the toolchain fix (2026-10-25)
+
+- The current `windows-validation.yml` release build failed at the sidecar link step with two coupled errors: `LNK2038` reported `MT_StaticRelease` (in `libllama_cpp_sys_2 rlib(llama.obj)`) versus `MD_DynamicRelease`, and the follow-up `LNK2005` duplicates were all `std` symbols (`msvcprt`/`libcpmt` mixed linkage).
+- Root cause: llama.cpp's `cmake_minimum_required(3.14...3.28)` makes policy `CMP0091=NEW`, so CMake selects the MSVC runtime from `CMAKE_MSVC_RUNTIME_LIBRARY` (default `/MD`), overriding the `/MT` flag cmake-rs passes on the command line. Setting only `LLAMA_STATIC_CRT=1` (which `llama-cpp-sys-2-0.1.160/build.rs` reads around lines 501 and 917) therefore did not align the runtime, and run `40180926235` still failed with `LNK2038`.
+- Fix (`237f54f` attempt, then `ff175fa`): added `scripts/msvc-static-crt.cmake` setting `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>`, injected it via `CMAKE_TOOLCHAIN_FILE` in `.github/workflows/windows-validation.yml`, and added `CXXFLAGS: /MT` so llama.cpp's `common` feature `wrapper_common.cpp` matches. Run `40185381468` (`ff175fa`) linked the sidecar successfully, proving the approach; it then failed only on `cargo fmt` for `llm.rs:293/300`.
+- `cargo fmt --all` was applied locally and pushed as `2113292` (only `llm.rs` changed). Run `40186220524` (`2113292`) passed end to end: **first fully green Windows validation since the CRT changes, MSI produced**.
+- Not yet validated on Windows: MSI installation and runtime/UI acceptance (SAC blocks unsigned local builds with no interactive login, so acceptance is SSH/CI only).
