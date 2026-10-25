@@ -293,12 +293,20 @@ fn build_prompt(request: &GenerationRequest) -> Result<(String, String), String>
             let system = format!(
                 "Answer only from the supplied transcription. Do not invent names, numbers, events, or conclusions. If the text does not contain the answer, say so. Keep the answer concise and identify supporting wording with short verbatim quotes when possible. {policy} {language}"
             );
-            return Ok((system.trim_end().to_owned(), segment_user_prompt(request, &request.text)));
+            return Ok((
+                system.trim_end().to_owned(),
+                segment_user_prompt(request, &request.text),
+            ));
         }
         _ => return Err("Choose summary, points, todos, explain, or ask.".to_owned()),
     };
     let user_prompt = segment_user_prompt(request, source);
-    Ok((format!("{instruction} {policy} {language}").trim_end().to_owned(), user_prompt))
+    Ok((
+        format!("{instruction} {policy} {language}")
+            .trim_end()
+            .to_owned(),
+        user_prompt,
+    ))
 }
 
 fn segment_user_prompt(request: &GenerationRequest, transcript: &str) -> String {
