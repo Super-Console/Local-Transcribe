@@ -36,18 +36,29 @@
   }
 
   function recommendationFor(entry: CatalogModel): MessageKey {
-    if (entry.kind === "llm") {
-      switch (entry.id) {
-        case "qwen3-4b":
-          return "model.profileQwen4b";
-        case "qwen3-8b":
-          return "model.profileQwen8b";
-        case "qwen3-1.7b":
-          return "model.profileQwen17b";
-        default:
-          return "model.profileLanguageGeneral";
-      }
+    switch (entry.id) {
+      case "qwen3-4b":
+        return "model.profileQwen4b";
+      case "qwen3-8b":
+        return "model.profileQwen8b";
+      case "qwen3-1.7b":
+        return "model.profileQwen17b";
+      case "x-asr-zh-en":
+        return "model.profileXasr";
+      case "fire-red-asr2":
+        return "model.profileFireRed";
+      case "qwen3-asr-0.6b":
+        return "model.profileQwen3Asr";
+      case "sensevoice-small":
+        return "model.profileSenseVoice";
+      case "paraformer-zh":
+        return "model.profileParaformer";
+      case "zipformer-ctc-small-zh":
+        return "model.profileZipformerCtc";
+      default:
+        break;
     }
+    if (entry.kind === "llm") return "model.profileLanguageGeneral";
     if (entry.tier === "quality") return "model.recommendQuality";
     if (entry.tier === "speed") return "model.recommendSpeed";
     return "model.recommendPunctuation";
@@ -117,7 +128,7 @@
                     })}
                   </span>
                   <span class="sep">·</span>
-                  <span>{t("model.recommendation", { suggestion: t(recommendation) })}</span>
+                  <span>{t(recommendation)}</span>
                   {#if active}
                     <span class="sep">·</span>
                     <span>{dl?.state === "installing" ? t("model.installing") : `${percent}%`}</span>
@@ -213,7 +224,7 @@
                 })}
               </span>
               <span class="sep">·</span>
-              <span>{t("model.recommendation", { suggestion: t(recommendation) })}</span>
+              <span>{t(recommendation)}</span>
               <span class="sep">·</span>
               <span>{t("model.installedNotLoaded")}</span>
             </div>

@@ -128,8 +128,10 @@ test('reader specifications: computed styles, media preferences and geometry', {
       for(const [index,row] of rows.entries()){
         check(/Estimated memory|预计内存|Geschätzter Speicher|Memoria estimada|Mémoire estimée/.test(row.text),
           `${label} row ${index}: memory estimate is visible`);
-        check(/Suggested:|建议：|Empfehlung:|Recomendado:|Conseil :/.test(row.text),
+        check(/准确优先|速度优先|标点辅助|中文均衡|听写|五语速转|中文速转|极简速转|Prioritize|punctuation helper|Balanced|speech transcription|five languages|Fast Chinese|Genauigkeit|Geschwindigkeit|Zeichensetzung|Ausgewogen|Sprachtranskription|precisión|velocidad|puntuación|Equilibrado|transcripción de voz|Privilégier|ponctuation|Équilibré|transcription vocale/.test(row.text),
           `${label} row ${index}: usage suggestion is visible`);
+        check(!/Suggested:|建议：|Empfehlung:|Recomendado:|Conseil :/.test(row.text),
+          `${label} row ${index}: suggestion shows without a prefix`);
         check(!/License|Lizenz|Licencia|Licence|许可证/.test(row.text),
           `${label} row ${index}: license is not displayed`);
         check(row.width>0&&row.height>0,`${label} row ${index}: subtitle has layout`);

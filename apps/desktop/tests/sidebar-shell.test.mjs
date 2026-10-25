@@ -55,6 +55,28 @@ test("sidebar toggle lives in the right toolbar capsule group, not the left head
   assert.match(sidebar, /inert=\{collapsed\}/);
 });
 
+test("toolbar button order is search, theme toggle, sidebar collapse, model picker", () => {
+  // 2026-10-25：用户要求搜索最左，其次深浅色切换，再次折叠，模型选择器保持最右。
+  const search = toolbar.indexOf('class="search"');
+  const theme = toolbar.indexOf('class="icon-btn theme"');
+  const toggle = toolbar.indexOf('class="icon-btn panel-toggle"');
+  const picker = toolbar.indexOf('class="model-pick"');
+  assert.ok(search >= 0, "search capsule exists");
+  assert.ok(theme > search, "theme toggle comes after search");
+  assert.ok(toggle > theme, "sidebar collapse comes after theme toggle");
+  assert.ok(picker > toggle, "model picker stays rightmost");
+});
+
+test("search button icon matches the other toolbar icon buttons", () => {
+  // 2026-10-25：搜索按钮曾用 --text-3，视觉上比月亮/折叠（--text-2）浅，用户不要。
+  const searchBlock = toolbar.match(/\.search\s*\{[^}]*\}/s)?.[0] ?? "";
+  const iconBlock = toolbar.match(/\.search-icon\s*\{[^}]*\}/s)?.[0] ?? "";
+  assert.match(searchBlock, /color: var\(--text-2\)/);
+  assert.match(iconBlock, /color: var\(--text-2\)/);
+  assert.doesNotMatch(searchBlock, /--text-3/);
+  assert.doesNotMatch(iconBlock, /--text-3/);
+});
+
 test("window header starts dragging programmatically for non-interactive targets", () => {
   // macOS Overlay 标题栏下 data-tauri-drag-region 不生效（tauri#9503），且其属性值
   // 只认直接命中；标题栏必须改用显式 mousedown -> startDragging()，并放行可交互控件。

@@ -70,18 +70,6 @@
 <div class="toolbar" role="toolbar" aria-label={t("toolbar.ariaLabel")} tabindex="-1">
   <div class="spacer"></div>
 
-  <button
-    type="button"
-    class="icon-btn panel-toggle"
-    aria-label={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
-    title={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
-    aria-expanded={!sidebarCollapsed}
-    aria-controls="app-sidebar"
-    onclick={onToggleSidebar}
-  >
-    <Icon name="panel" size={16} stroke={1.6} />
-  </button>
-
   <div class="search" class:open={searchOpen}>
     <button
       type="button"
@@ -139,6 +127,17 @@
     onclick={toggleTheme}
   >
     <Icon name={theme.resolved === "dark" ? "sun" : "moon"} />
+  </button>
+  <button
+    type="button"
+    class="icon-btn panel-toggle"
+    aria-label={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
+    title={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
+    aria-expanded={!sidebarCollapsed}
+    aria-controls="app-sidebar"
+    onclick={onToggleSidebar}
+  >
+    <Icon name="panel" size={16} stroke={1.6} />
   </button>
   <div class="model-pick">
     <button
@@ -342,7 +341,7 @@
     border: 1px solid var(--capsule-find-border);
     border-radius: 999px;
     background: var(--capsule-find);
-    color: var(--text-3);
+    color: var(--text-2);
     overflow: hidden;
     transition:
       width var(--speed) var(--ease-out),
@@ -384,7 +383,7 @@
     padding: 0;
     border: 0;
     background: transparent;
-    color: var(--text-3);
+    color: var(--text-2);
     cursor: pointer;
   }
 
