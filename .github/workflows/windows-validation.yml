@@ -20,8 +20,18 @@ jobs:
       # sherpa-onnx 预编译库用的是静态 CRT（/MT）。llama-cpp-sys-2 默认按动态
       # CRT（/MD）构建 llama.cpp，两种 C++ 运行库链进同一个 exe 会出现
       # LNK2005/LNK2038（std 符号重复定义 + RuntimeLibrary 不匹配）。
-      # 该开关让 llama.cpp 也按静态 CRT 构建，与 sherpa-onnx 对齐。
+      #
+      # 仅设 LLAMA_STATIC_CRT=1 不够：它传的 /MT 进 CMAKE_C_FLAGS_RELEASE，
+      # 但 llama.cpp 的 cmake_minimum_required(3.14...3.28) 让 CMP0091 为
+      # NEW，CMake 改由 CMAKE_MSVC_RUNTIME_LIBRARY 决定运行库（默认 /MD）
+      # 并覆盖该标志。所以再经 toolchain 文件（CMake ≥3.21 读 env）直接
+      # 设置 CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded，见 scripts/ 下注释。
       LLAMA_STATIC_CRT: "1"
+      CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/scripts/msvc-static-crt.cmake
+      # llama-cpp-sys-2 的 common feature 用 cc 直接编 wrapper_common.cpp
+      # （不走 cmake），cc 默认 /MD。MSVC 取最后出现的运行库标志，故用
+      # CXXFLAGS=/MT 把它与 llama.cpp、sherpa-onnx 对齐。
+      CXXFLAGS: /MT
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
