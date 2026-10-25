@@ -516,6 +516,8 @@ pub fn run_server(options: ServerOptions) -> Result<(), ServerStartError> {
     fs::create_dir_all(&data_dir).map_err(|error| {
         ServerStartError::Other(format!("Cannot prepare the service data folder: {error}"))
     })?;
+    voice_to_text_core::set_compute_lock_path(data_dir.join(".compute.lock"))
+        .map_err(ServerStartError::Other)?;
 
     let lock = OpenOptions::new()
         .create(true)

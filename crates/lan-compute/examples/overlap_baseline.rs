@@ -59,6 +59,8 @@ fn main() {
             model_dir: None,
             media_root: None,
             retention_policy: None,
+            llm_models_dir: None,
+            llm_idle_unload_seconds: None,
         },
         vec![model_b.clone()],
     )

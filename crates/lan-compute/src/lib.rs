@@ -2,6 +2,7 @@
 //! and LAN client for `Local Transcribe`.
 
 pub mod client;
+pub mod llm;
 pub mod node;
 pub mod protocol;
 pub mod retention;

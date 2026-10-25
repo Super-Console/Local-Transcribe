@@ -122,6 +122,7 @@ struct CachedRecognizer {
     model_id: String,
     directory: PathBuf,
     recognizer: OfflineRecognizer,
+    _compute_lock: crate::ComputeLockGuard,
     /// 最后一次使用结束的时间（进程启动以来的毫秒）。任务结束、成功、失败、
     /// 取消都会刷新；空闲卸载只认这个值。
     last_used_ms: Arc<AtomicU64>,
@@ -206,6 +207,22 @@ pub fn loaded_model_id() -> Option<String> {
         .lock()
         .ok()
         .and_then(|current| current.clone())
+}
+
+/// Explicitly release the in-process ASR cache so the LLM can occupy the
+/// single large-model memory slot. If transcription is active, this waits on
+/// the same cache lock until that operation reaches its task boundary.
+pub fn unload_cached_model() -> Result<bool, String> {
+    let mut cache = RECOGNIZER_CACHE
+        .lock()
+        .map_err(|_| "The transcription model cache is unavailable.".to_owned())?;
+    let was_loaded = cache.is_some();
+    *cache = None;
+    let mut current = CURRENT_MODEL
+        .lock()
+        .map_err(|_| "The transcription model status is unavailable.".to_owned())?;
+    *current = None;
+    Ok(was_loaded)
 }
 
 pub fn idle_unload_seconds() -> u64 {
@@ -852,6 +869,10 @@ pub fn transcribe_file_streaming_with_options(
         .as_ref()
         .is_some_and(|entry| entry.model_id == model.id && entry.directory == model.directory);
     if !reusable {
+        // Release this process's previous ASR model before trying to become the
+        // one machine-wide resident model owner.
+        *cache = None;
+        let compute_lock = crate::acquire_compute_lock_for_model_directory(&model.directory)?;
         let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| {
             "sherpa-onnx could not load this model. Verify that its files are a compatible export."
                 .to_owned()
@@ -860,6 +881,7 @@ pub fn transcribe_file_streaming_with_options(
             model_id: model.id.clone(),
             directory: model.directory.clone(),
             recognizer,
+            _compute_lock: compute_lock,
             last_used_ms: Arc::new(AtomicU64::new(now_ms())),
         });
         if let Ok(mut current) = CURRENT_MODEL.lock() {
@@ -963,7 +985,7 @@ pub fn transcribe_file_streaming_with_options(
 mod tests {
     use super::{
         collapse_degenerate_repetitions, expired, inspect_model_directory, set_idle_unload,
-        ModelFamily, UseGuard, IDLE_UNLOAD_CHOICES,
+        unload_cached_model, ModelFamily, UseGuard, IDLE_UNLOAD_CHOICES,
     };
     use std::time::Duration;
     use std::{fs, path::PathBuf};
@@ -1059,6 +1081,12 @@ mod tests {
         assert!(set_idle_unload(0).is_err());
         assert!(set_idle_unload(999_999).is_err());
         assert!(set_idle_unload(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn explicit_unload_reports_an_empty_cache_without_error() {
+        assert!(!unload_cached_model().expect("empty ASR cache can be unloaded"));
+        assert_eq!(super::loaded_model_id(), None);
     }
 
     #[test]

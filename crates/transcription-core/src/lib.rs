@@ -1,4 +1,5 @@
 mod asr;
+mod compute_lock;
 mod input_file;
 mod jobs;
 mod library;
@@ -8,9 +9,13 @@ mod punctuation;
 pub use asr::{
     idle_unload_seconds, inspect_model_directory, loaded_model_id, set_idle_unload,
     transcribe_file, transcribe_file_cancellable, transcribe_file_streaming,
-    transcribe_file_streaming_with_options, LocalModel, ModelFamily, ModelFiles,
-    TranscriptionOptions, TranscriptionProgress, TranscriptionSegmentUpdate,
+    transcribe_file_streaming_with_options, unload_cached_model, LocalModel, ModelFamily,
+    ModelFiles, TranscriptionOptions, TranscriptionProgress, TranscriptionSegmentUpdate,
     DEFAULT_IDLE_UNLOAD_SECONDS, IDLE_UNLOAD_CHOICES,
+};
+pub use compute_lock::{
+    acquire_compute_lock_for_model_directory, acquire_compute_lock_for_models_directory,
+    set_compute_lock_path, ComputeLockGuard,
 };
 pub use input_file::{InputFile, InputFileError};
 pub use jobs::{JobLease, JobState, JobStatus, JobStore};

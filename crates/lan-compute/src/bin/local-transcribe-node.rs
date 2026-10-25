@@ -4,6 +4,7 @@
 //! local-transcribe-node --name <显示名> --data-dir <目录> --listen <IPv4:端口>
 //!     [--netmask <掩码>] [--compute on|off] [--role gpu|cpu|auto]
 //!     [--models-dir <应用数据目录>] [--model-dir <模型目录>]
+//!     [--llm-models-dir <目录>]
 //!     [--selected-model <selected-model.json>] [--media-root <目录>]
 //!     [--parent-pid <pid>]
 //!
@@ -51,6 +52,7 @@ OPTIONS:
     --models-dir <应用数据目录>   Serve every model under <目录>/models
     --model-dir <模型目录>        Serve one model; takes precedence over --models-dir
     --selected-model <文件>       selected-model.json; that model is served first
+    --llm-models-dir <目录>       Three catalogued GGUF files for local generation
     --media-root <目录>           Only paths inside this root may be written by collect
     --retention-file <文件>       Terminal-task cleanup policy JSON (optional)
     --parent-pid <pid>            Exit when the parent process disappears
@@ -74,6 +76,7 @@ struct Args {
     role: String,
     model_dir: Option<PathBuf>,
     models_dir: Option<PathBuf>,
+    llm_models_dir: Option<PathBuf>,
     selected_model: Option<PathBuf>,
     media_root: Option<PathBuf>,
     parent_pid: Option<u32>,
@@ -82,6 +85,23 @@ struct Args {
     /// `--from-settings` 模式：节点需在 SSH 断开后继续存活，因此忽略 SIGHUP
     /// 并把 stdio 重定向到日志（等价 nohup），见 [`detach_from_terminal`]。
     from_settings: bool,
+}
+
+fn compute_lock_path(args: &Args) -> PathBuf {
+    // The task store lives in `<app-data>/lan-host`, but desktop and node
+    // inference must coordinate on the app-data root's single lock file.
+    let app_data_root = args
+        .models_dir
+        .as_deref()
+        .or_else(|| args.llm_models_dir.as_deref().and_then(Path::parent))
+        .or_else(|| {
+            args.model_dir
+                .as_deref()
+                .and_then(Path::parent)
+                .and_then(Path::parent)
+        })
+        .unwrap_or(&args.data_dir);
+    app_data_root.join(".compute.lock")
 }
 
 /// Written to `<data-dir>/lan-node.json` so a second launch can detect a live
@@ -133,6 +153,10 @@ fn main() {
         eprintln!("error: {error}");
         std::process::exit(2);
     }
+    if let Err(error) = voice_to_text_core::set_compute_lock_path(compute_lock_path(&args)) {
+        eprintln!("error: {error}");
+        std::process::exit(2);
+    }
 
     if let Err(error) = refuse_if_another_node_runs(&args.data_dir) {
         eprintln!("error: {error}");
@@ -165,6 +189,8 @@ fn main() {
             .retention_file
             .as_deref()
             .and_then(voice_to_text_lan::retention::read_policy),
+        llm_models_dir: args.llm_models_dir.clone(),
+        llm_idle_unload_seconds: Some(args.idle_unload),
     };
 
     let served_models = models
@@ -276,6 +302,7 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
     let mut role: Option<String> = None;
     let mut model_dir = None;
     let mut models_dir = None;
+    let mut llm_models_dir = None;
     let mut selected_model = None;
     let mut media_root = None;
     let mut parent_pid = None;
@@ -322,6 +349,9 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
             }
             "--model-dir" => model_dir = Some(PathBuf::from(take_value("--model-dir")?)),
             "--models-dir" => models_dir = Some(PathBuf::from(take_value("--models-dir")?)),
+            "--llm-models-dir" => {
+                llm_models_dir = Some(PathBuf::from(take_value("--llm-models-dir")?))
+            }
             "--selected-model" => {
                 selected_model = Some(PathBuf::from(take_value("--selected-model")?))
             }
@@ -380,6 +410,9 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
         }
         if models_dir.is_none() {
             models_dir = Some(root.clone());
+        }
+        if llm_models_dir.is_none() {
+            llm_models_dir = Some(root.join("llm"));
         }
         if selected_model.is_none() {
             selected_model = Some(root.join("selected-model.json"));
@@ -444,6 +477,7 @@ fn parse_args<I: Iterator<Item = String>>(mut arguments: I) -> Result<Args, Pars
         role: role.unwrap_or_else(|| "auto".to_owned()),
         model_dir,
         models_dir,
+        llm_models_dir,
         selected_model,
         media_root,
         parent_pid,
@@ -878,6 +912,35 @@ mod tests {
                 ParseOutcome::Help => panic!("unexpected help"),
             }
         }
+    }
+
+    #[test]
+    fn llm_models_directory_can_be_selected_explicitly() {
+        let path = PathBuf::from("/application-data/llm");
+        let args = parse_vec(base(
+            "127.0.0.1:7878",
+            &["--llm-models-dir", path.to_str().unwrap()],
+        ))
+        .unwrap();
+        assert_eq!(args.llm_models_dir, Some(path));
+    }
+
+    #[test]
+    fn shared_compute_lock_uses_the_application_data_root_not_node_task_dir() {
+        let args = parse_vec(base(
+            "127.0.0.1:7878",
+            &[
+                "--models-dir",
+                "/application-data",
+                "--llm-models-dir",
+                "/application-data/llm",
+            ],
+        ))
+        .unwrap();
+        assert_eq!(
+            compute_lock_path(&args),
+            PathBuf::from("/application-data/.compute.lock")
+        );
     }
 
     #[test]

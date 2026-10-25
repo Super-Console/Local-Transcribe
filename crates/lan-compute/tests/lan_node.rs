@@ -33,12 +33,152 @@ fn start_node(
         model_dir,
         media_root,
         retention_policy: None,
+        llm_models_dir: None,
+        llm_idle_unload_seconds: None,
     };
     NodeServer::start(config).expect("node starts")
 }
 
 fn base_url(node: &RunningNode) -> String {
     format!("http://127.0.0.1:{}", node.port())
+}
+
+#[tokio::test]
+async fn llm_status_route_reports_an_unloaded_model() {
+    let dir = scratch("llm-status");
+    let node = start_node(&dir, false, None, None, "llm-token");
+
+    let response = reqwest::get(format!("{}/api/v1/llm/status", base_url(&node)))
+        .await
+        .expect("LLM status request succeeds");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let status: serde_json::Value = response.json().await.expect("status is JSON");
+    assert_eq!(status["loaded"], false);
+    assert_eq!(status["busy"], false);
+    assert_eq!(status["model_id"], serde_json::Value::Null);
+    assert_eq!(status["loading_progress"], serde_json::Value::Null);
+
+    node.shutdown();
+    node.wait();
+}
+
+#[tokio::test]
+async fn llm_summarize_requires_a_source_before_opening_a_stream() {
+    let dir = scratch("llm-no-source");
+    let node = start_node(&dir, false, None, None, "unused-token");
+    let response = reqwest::Client::new()
+        .post(format!("{}/api/v1/summarize", base_url(&node)))
+        .json(&serde_json::json!({ "style": "summary" }))
+        .send()
+        .await
+        .expect("source validation response");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let error: serde_json::Value = response.json().await.expect("error is JSON");
+    assert_eq!(error["code"], "text_required");
+
+    node.shutdown();
+    node.wait();
+}
+
+#[tokio::test]
+async fn llm_routes_enforce_question_history_and_selection_limits() {
+    let dir = scratch("llm-input-limits");
+    let node = start_node(&dir, false, None, None, "unused-token");
+    let client = reqwest::Client::new();
+    let base = base_url(&node);
+
+    let oversized_question = client
+        .post(format!("{base}/api/v1/ask"))
+        .json(&serde_json::json!({
+            "text": "原文内容",
+            "question": "问".repeat(2_001)
+        }))
+        .send()
+        .await
+        .expect("question validation response");
+    assert_eq!(
+        oversized_question.status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        oversized_question
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["code"],
+        "question_too_long"
+    );
+
+    let oversized_history = client
+        .post(format!("{base}/api/v1/ask"))
+        .json(&serde_json::json!({
+            "text": "原文内容",
+            "question": "谁负责？",
+            "history": (0..4).map(|index| serde_json::json!({
+                "question": format!("问题 {index}"),
+                "answer": "回答"
+            })).collect::<Vec<_>>()
+        }))
+        .send()
+        .await
+        .expect("history validation response");
+    assert_eq!(oversized_history.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        oversized_history.json::<serde_json::Value>().await.unwrap()["code"],
+        "history_too_long"
+    );
+
+    let missing_selection = client
+        .post(format!("{base}/api/v1/summarize"))
+        .json(&serde_json::json!({ "text": "完整转写", "style": "explain" }))
+        .send()
+        .await
+        .expect("selection validation response");
+    assert_eq!(missing_selection.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        missing_selection.json::<serde_json::Value>().await.unwrap()["code"],
+        "selection_required"
+    );
+
+    node.shutdown();
+    node.wait();
+}
+
+#[tokio::test]
+async fn llm_stream_reports_missing_model_and_releases_the_generation_slot() {
+    let dir = scratch("llm-stream-missing-model");
+    let node = start_node(&dir, false, None, None, "unused-token");
+    let base = base_url(&node);
+    let response = reqwest::Client::new()
+        .post(format!("{base}/api/v1/summarize"))
+        .json(&serde_json::json!({ "text": "一段本地转写。", "style": "summary" }))
+        .send()
+        .await
+        .expect("stream response");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    let body = response
+        .text()
+        .await
+        .expect("SSE body closes after the load error");
+    assert!(body.contains("event: error"));
+    assert!(body.contains("model_not_installed"));
+
+    let status: serde_json::Value = reqwest::get(format!("{base}/api/v1/llm/status"))
+        .await
+        .expect("status request")
+        .json()
+        .await
+        .expect("status JSON");
+    assert_eq!(status["busy"], false);
+    assert_eq!(status["loaded"], false);
+    node.shutdown();
+    node.wait();
 }
 
 #[test]

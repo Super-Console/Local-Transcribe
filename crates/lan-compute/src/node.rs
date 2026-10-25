@@ -15,15 +15,18 @@ use axum::body::Bytes;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, Query, State};
 use axum::http::{Request, StatusCode};
 use axum::middleware::{self, Next};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
+use futures_util::stream;
 use mdns_sd::{ServiceDaemon, ServiceInfo};
 use serde::Deserialize;
-use tokio::sync::Notify;
+use tokio::sync::{mpsc, Notify};
 
 use voice_to_text_core::{inspect_model_directory, transcribe_file_cancellable, LocalModel};
 
+use crate::llm::{select_references, split_reference_segments, LlmRuntime, LlmStatus};
 use crate::protocol::{
     ApiError, Capabilities, CollectReport, RemoteModel, Segment, StorageInfo, Task, TaskError,
     TaskResult, TaskState, UploadProgress, MAX_UPLOAD_CHUNK_BYTES, MDNS_SERVICE_TYPE,
@@ -39,6 +42,7 @@ const WORKER_POLL: Duration = Duration::from_millis(100);
 /// in that state before the worker resolves it to `Cancelled`. This keeps the
 /// cancel response deterministic for the caller.
 const CANCEL_GRACE: Duration = Duration::from_millis(1200);
+const MAX_LLM_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 /// Everything a node needs to run: naming, storage, security and compute.
 #[derive(Clone)]
@@ -59,6 +63,10 @@ pub struct NodeConfig {
     pub media_root: Option<PathBuf>,
     /// Optional cleanup for received media (terminal tasks only, Trash).
     pub retention_policy: Option<crate::retention::LanRetentionPolicy>,
+    /// Folder containing the three catalogued local GGUF models.
+    pub llm_models_dir: Option<PathBuf>,
+    /// LLM idle timeout; defaults to the process-wide ASR timeout.
+    pub llm_idle_unload_seconds: Option<u64>,
 }
 
 impl Default for NodeConfig {
@@ -72,6 +80,8 @@ impl Default for NodeConfig {
             model_dir: None,
             media_root: None,
             retention_policy: None,
+            llm_models_dir: None,
+            llm_idle_unload_seconds: None,
         }
     }
 }
@@ -86,6 +96,7 @@ impl std::fmt::Debug for NodeConfig {
             .field("role", &self.role)
             .field("model_dir", &self.model_dir)
             .field("media_root", &self.media_root)
+            .field("llm_models_dir", &self.llm_models_dir)
             .finish()
     }
 }
@@ -216,6 +227,17 @@ impl NodeServer {
             })
             .collect();
         let models = Arc::new(models);
+        let llm_models_dir = config
+            .llm_models_dir
+            .clone()
+            .unwrap_or_else(|| config.data_dir.join("llm"));
+        let llm_idle_unload_seconds = config
+            .llm_idle_unload_seconds
+            .unwrap_or_else(voice_to_text_core::idle_unload_seconds);
+        let llm = Arc::new(
+            LlmRuntime::new(llm_models_dir, llm_idle_unload_seconds)
+                .map_err(NodeError::Configuration)?,
+        );
 
         let store = Arc::new(TaskStore::new(config.data_dir.clone()));
 
@@ -243,10 +265,13 @@ impl NodeServer {
             let stopping = Arc::clone(&stopping);
             let compute_enabled = config.compute_enabled;
             let models = Arc::clone(&models);
+            let llm = Arc::clone(&llm);
             let retention = config.retention_policy.clone();
             std::thread::Builder::new()
                 .name("lan-compute-worker".to_owned())
-                .spawn(move || worker_loop(store, models, compute_enabled, stopping, retention))
+                .spawn(move || {
+                    worker_loop(store, models, compute_enabled, stopping, retention, llm)
+                })
                 .map_err(|error| NodeError::Io(error.to_string()))?
         };
 
@@ -271,6 +296,7 @@ impl NodeServer {
             model_id,
             models: remote_models,
             media_root: config.media_root.clone(),
+            llm,
         };
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
         let server_thread = {
@@ -451,6 +477,7 @@ struct AppState {
     model_id: Option<String>,
     models: Vec<RemoteModel>,
     media_root: Option<PathBuf>,
+    llm: Arc<LlmRuntime>,
 }
 
 fn build_router(state: AppState) -> Router {
@@ -466,10 +493,421 @@ fn build_router(state: AppState) -> Router {
         .route("/api/v1/collect", post(collect))
         .route("/api/v1/storage", get(storage))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_CHUNK_BYTES as usize));
+    let llm_routes = Router::new()
+        .route("/api/v1/llm/status", get(llm_status))
+        .route("/api/v1/llm/load", post(llm_load))
+        .route("/api/v1/llm/unload", post(llm_unload))
+        .route("/api/v1/llm/cancel", post(llm_cancel))
+        .route("/api/v1/summarize", post(llm_summarize))
+        .route("/api/v1/ask", post(llm_ask))
+        .layer(DefaultBodyLimit::max(MAX_LLM_BODY_BYTES));
     Router::new()
         .route("/api/v1/health", get(health))
+        .merge(llm_routes)
         .merge(protected)
         .with_state(state)
+}
+
+async fn llm_status(State(state): State<AppState>) -> Json<LlmStatus> {
+    Json(state.llm.status())
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmLoadRequest {
+    model_id: String,
+}
+
+async fn llm_load(State(state): State<AppState>, Json(request): Json<LlmLoadRequest>) -> Response {
+    match tokio::task::spawn_blocking(move || state.llm.load(&request.model_id)).await {
+        Ok(Ok(status)) => Json(status).into_response(),
+        Ok(Err(message)) => {
+            let status = if message.contains("busy") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            error_response(status, llm_error_code(&message), &message)
+        }
+        Err(error) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "llm_worker_failed",
+            &error.to_string(),
+        ),
+    }
+}
+
+async fn llm_unload(State(state): State<AppState>) -> Json<LlmStatus> {
+    let llm = Arc::clone(&state.llm);
+    let _ = tokio::task::spawn_blocking(move || llm.unload()).await;
+    Json(state.llm.status())
+}
+
+async fn llm_cancel(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "cancelled": state.llm.cancel_generation()
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmRequest {
+    model_id: Option<String>,
+    task_id: Option<String>,
+    text: Option<String>,
+    style: Option<String>,
+    selection: Option<String>,
+    question: Option<String>,
+    #[serde(default)]
+    history: Vec<AskTurn>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AskTurn {
+    question: String,
+    answer: String,
+}
+
+#[derive(Debug, Clone)]
+struct LlmSource {
+    text: String,
+    segments: Vec<String>,
+}
+
+async fn llm_summarize(State(state): State<AppState>, Json(request): Json<LlmRequest>) -> Response {
+    start_llm_stream(state, request, false).await
+}
+
+async fn llm_ask(State(state): State<AppState>, Json(request): Json<LlmRequest>) -> Response {
+    start_llm_stream(state, request, true).await
+}
+
+fn node_segment_user_prompt(
+    ask: bool,
+    style: &str,
+    transcript: &str,
+    selection: Option<&str>,
+    question: &str,
+    history: &str,
+) -> String {
+    if ask {
+        return format!(
+            "TRANSCRIPTION:\n{transcript}\n\n{history}QUESTION:\n{}",
+            question.trim()
+        );
+    }
+    if style == "explain" {
+        return format!(
+            "TRANSCRIPTION:\n{transcript}\n\nSELECTED PASSAGE:\n{}",
+            selection.unwrap_or_default().trim()
+        );
+    }
+    format!("TRANSCRIPTION:\n{transcript}")
+}
+
+fn node_merge_user_prompt(
+    ask: bool,
+    question: &str,
+    selection: Option<&str>,
+    partials: &str,
+) -> String {
+    let mut prompt = format!("PARTIAL RESULTS FROM TRANSCRIPTION SEGMENTS:\n{partials}");
+    if ask {
+        prompt.push_str(&format!("\n\nQUESTION:\n{}", question.trim()));
+    } else if let Some(selection) = selection {
+        if !selection.trim().is_empty() {
+            prompt.push_str(&format!("\n\nSELECTED PASSAGE:\n{}", selection.trim()));
+        }
+    }
+    prompt.push_str("\n\nCombine the partial results into one concise, coherent answer. Do not add facts absent from the partial results.");
+    prompt
+}
+
+async fn start_llm_stream(state: AppState, request: LlmRequest, ask: bool) -> Response {
+    let source = match resolve_llm_source(&state, &request) {
+        Ok(source) => source,
+        Err((status, code, message)) => return error_response(status, code, message),
+    };
+    let model_id = request.model_id.unwrap_or_else(|| "qwen3-4b".to_owned());
+    let style = request
+        .style
+        .clone()
+        .unwrap_or_else(|| "summary".to_owned());
+    let question = request.question.clone().unwrap_or_default();
+    let mut history = String::new();
+    if ask {
+        for (index, turn) in request.history.iter().take(3).enumerate() {
+            history.push_str(&format!(
+                "Earlier turn {} — question: {}\nEarlier answer: {}\n",
+                index + 1,
+                turn.question.chars().take(2000).collect::<String>(),
+                turn.answer.chars().take(4000).collect::<String>()
+            ));
+        }
+    }
+    let (system_prompt, user_prompt) = if ask {
+        let question = question.trim();
+        if question.is_empty() {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "question_required",
+                "Enter a question.",
+            );
+        }
+        if question.chars().count() > 2_000 {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "question_too_long",
+                "The question exceeds the 2,000-character limit.",
+            );
+        }
+        if request.history.len() > 3 {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "history_too_long",
+                "Ask history is limited to three turns. Clear it before continuing.",
+            );
+        }
+        (
+            "Answer only from the supplied transcription. Do not invent names, numbers, events, or conclusions. If the text does not contain the answer, say so. Keep the answer concise and identify supporting wording with short verbatim quotes when possible.".to_owned(),
+            node_segment_user_prompt(
+                true,
+                &style,
+                &source.text,
+                request.selection.as_deref(),
+                question,
+                &history,
+            ),
+        )
+    } else {
+        let instruction = match style.as_str() {
+            "summary" => "Write a concise summary of the transcription.",
+            "points" => "Extract the key points as a short bullet list.",
+            "todos" => "List only explicit action items and their stated owners or deadlines. If none are present, say there are no explicit action items.",
+            "explain" => {
+                let selection = request.selection.as_deref().unwrap_or_default().trim();
+                if selection.is_empty() {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "selection_required",
+                        "Select a passage in the transcription to explain.",
+                    );
+                }
+                if selection.chars().count() > 20_000 {
+                    return error_response(
+                        StatusCode::BAD_REQUEST,
+                        "selection_too_long",
+                        "The selected passage exceeds the 20,000-character limit.",
+                    );
+                }
+                "Explain the selected passage using only the surrounding transcription."
+            }
+            _ => return error_response(StatusCode::BAD_REQUEST, "invalid_style", "Choose summary, points, todos, or explain."),
+        };
+        (
+            format!("{instruction} Use only the supplied transcription. Do not add names, numbers, events, or conclusions absent from it."),
+            node_segment_user_prompt(
+                false,
+                &style,
+                &source.text,
+                request.selection.as_deref(),
+                &question,
+                &history,
+            ),
+        )
+    };
+
+    let generation_id = match state.llm.prepare_generation() {
+        Ok(id) => id,
+        Err(message) => return error_response(StatusCode::CONFLICT, "llm_busy", &message),
+    };
+    let runtime = Arc::clone(&state.llm);
+    let (sender, receiver) = mpsc::channel::<Event>(16);
+    let _ = sender.try_send(
+        Event::default()
+            .event("phase")
+            .data(serde_json::json!({ "phase": "loading", "model_id": model_id }).to_string()),
+    );
+    tokio::task::spawn_blocking(move || {
+        let token_sender = sender.clone();
+        let partial_sender = sender.clone();
+        let progress_sender = sender.clone();
+        let generated = runtime.generate_segmented_stream(
+            generation_id,
+            &model_id,
+            &system_prompt,
+            &user_prompt,
+            &source.text,
+            |segment| {
+                node_segment_user_prompt(
+                    ask,
+                    &style,
+                    segment,
+                    request.selection.as_deref(),
+                    &question,
+                    &history,
+                )
+            },
+            |partials| {
+                node_merge_user_prompt(ask, &question, request.selection.as_deref(), partials)
+            },
+            Arc::new(move |progress| {
+                progress_sender
+                    .blocking_send(
+                        Event::default().event("progress").data(
+                            serde_json::json!({
+                                "phase": "loading",
+                                "progress": progress
+                            })
+                            .to_string(),
+                        ),
+                    )
+                    .is_ok()
+            }),
+            {
+                let stage_sender = sender.clone();
+                move |phase, current, total| {
+                    stage_sender
+                        .blocking_send(
+                            Event::default().event("stage").data(
+                                serde_json::json!({
+                                    "phase": phase,
+                                    "current": current,
+                                    "total": total
+                                })
+                                .to_string(),
+                            ),
+                        )
+                        .is_ok()
+                }
+            },
+            |token| {
+                partial_sender
+                    .blocking_send(Event::default().event("partial_token").data(token))
+                    .is_ok()
+            },
+            |token| {
+                token_sender
+                    .blocking_send(Event::default().event("token").data(token))
+                    .is_ok()
+            },
+        );
+        match generated {
+            Ok(completed) => {
+                if completed && ask {
+                    let references = select_references(
+                        &source.segments,
+                        request.question.as_deref().unwrap_or_default(),
+                    );
+                    let _ = sender.blocking_send(
+                        Event::default()
+                            .event("references")
+                            .data(serde_json::json!({ "references": references }).to_string()),
+                    );
+                }
+                let _ = sender.blocking_send(
+                    Event::default()
+                        .event("done")
+                        .data(serde_json::json!({ "cancelled": !completed }).to_string()),
+                );
+            }
+            Err(message) => {
+                let _ = sender.blocking_send(
+                    Event::default().event("error").data(
+                        serde_json::json!({ "code": llm_error_code(&message), "message": message })
+                            .to_string(),
+                    ),
+                );
+            }
+        }
+    });
+    let events = stream::unfold(receiver, |mut receiver| async {
+        receiver
+            .recv()
+            .await
+            .map(|event| (Ok::<_, std::convert::Infallible>(event), receiver))
+    });
+    Sse::new(events)
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+fn resolve_llm_source(
+    state: &AppState,
+    request: &LlmRequest,
+) -> Result<LlmSource, (StatusCode, &'static str, &'static str)> {
+    if let Some(text) = request
+        .text
+        .as_deref()
+        .filter(|text| !text.trim().is_empty())
+    {
+        if text.chars().count() > 500_000 {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "text_too_long",
+                "The supplied transcription exceeds the 500,000-character limit.",
+            ));
+        }
+        let segments = split_reference_segments(text);
+        return Ok(LlmSource {
+            text: text.to_owned(),
+            segments,
+        });
+    }
+    let task_id = request.task_id.as_deref().ok_or((
+        StatusCode::BAD_REQUEST,
+        "text_required",
+        "Provide text or a completed task_id.",
+    ))?;
+    let task = state.store.get(task_id).ok_or((
+        StatusCode::NOT_FOUND,
+        "task_not_found",
+        "The transcription task was not found on this node.",
+    ))?;
+    if task.state != TaskState::Completed {
+        return Err((
+            StatusCode::CONFLICT,
+            "task_not_completed",
+            "Wait for the transcription task to complete before asking about it.",
+        ));
+    }
+    let result = task.result.ok_or((
+        StatusCode::CONFLICT,
+        "task_result_missing",
+        "The completed task has no stored transcription result.",
+    ))?;
+    if result.transcript.chars().count() > 500_000 {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "text_too_long",
+            "The transcription exceeds the 500,000-character limit.",
+        ));
+    }
+    let segments = if result.segments.is_empty() {
+        vec![result.transcript.clone()]
+    } else {
+        result
+            .segments
+            .iter()
+            .map(|segment| segment.text.clone())
+            .collect()
+    };
+    Ok(LlmSource {
+        text: result.transcript,
+        segments,
+    })
+}
+
+fn llm_error_code(message: &str) -> &'static str {
+    if message.contains("not installed") {
+        "model_not_installed"
+    } else if message.contains("busy") {
+        "llm_busy"
+    } else if message.contains("memory") || message.contains("RAM") {
+        "insufficient_memory"
+    } else if message.contains("cancel") {
+        "cancelled"
+    } else {
+        "llm_load_failed"
+    }
 }
 
 async fn list_models(State(state): State<AppState>) -> Json<Vec<RemoteModel>> {
@@ -933,9 +1371,11 @@ fn worker_loop(
     compute_enabled: bool,
     stopping: Arc<AtomicBool>,
     retention: Option<crate::retention::LanRetentionPolicy>,
+    llm: Arc<LlmRuntime>,
 ) {
     let mut cancel_seen: HashMap<String, Instant> = HashMap::new();
     while !stopping.load(Ordering::SeqCst) {
+        llm.unload_if_idle();
         // Resolve stray cancel requests (tasks that were never picked up).
         for task in store.list() {
             if task.state == TaskState::CancelRequested {
@@ -965,6 +1405,7 @@ fn worker_loop(
                     .iter()
                     .find(|model| Some(&model.id) == task.model_id.as_ref())
                 {
+                    llm.unload();
                     run_task(&store, &task, model, &stopping);
                 } else {
                     let _ = store.finish_err(
@@ -1282,6 +1723,26 @@ fn unix_now_ms() -> u64 {
 #[cfg(test)]
 mod lan_scope_tests {
     use super::*;
+
+    #[test]
+    fn segmented_node_prompts_keep_source_isolated_and_merge_grounded_partials() {
+        let segment = node_segment_user_prompt(
+            true,
+            "summary",
+            "这一段转写",
+            None,
+            "谁负责？",
+            "Earlier answer: 林青负责。\n",
+        );
+        assert!(segment.contains("TRANSCRIPTION:\n这一段转写"));
+        assert!(segment.contains("林青负责"));
+        assert!(segment.contains("QUESTION:\n谁负责？"));
+
+        let merge = node_merge_user_prompt(false, "", Some("选中的段落"), "部分结果");
+        assert!(merge.contains("PARTIAL RESULTS FROM TRANSCRIPTION SEGMENTS"));
+        assert!(merge.contains("SELECTED PASSAGE:\n选中的段落"));
+        assert!(merge.contains("Do not add facts absent from the partial results"));
+    }
 
     #[test]
     fn mdns_plan_skips_non_rfc1918_loopback_and_announces_private() {
