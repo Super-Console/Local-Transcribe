@@ -4,7 +4,7 @@
 
 Local Transcribe is a local-first desktop app that transcribes user-selected audio/video files into text — entirely on your own machine. One Rust core serves three equal interfaces: a desktop GUI, a command-line tool, and a local MCP server.
 
-macOS and Windows builds are published under [Releases](https://github.com/TimmySheep/Local-Transcribe/releases). The visual design continues to evolve; the product name is settled.
+macOS and Windows builds are published under [Releases](https://github.com/Super-Console/Local-Transcribe/releases). The visual design continues to evolve; the product name is settled.
 
 
 ## Product boundary
