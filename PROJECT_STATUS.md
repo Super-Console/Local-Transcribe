@@ -474,3 +474,77 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - `gen-tray-icon.py` 增加 A/B/C 三档参数（3.0/3.5/4.0px），正式资源按 B 档生成（22/44/32，macOS 黑/Windows 白）；实测 16×22、竖笔 3px、间距 3px、面积 3.7%。
 - 对照图 `design/tray-weight-compare.png`（深/浅两行 × A/B/C 真实尺寸 + 4 倍放大）；`gen-tray-compare.py` 生成，仅作证据。
 - 测试 11/11。本机 Pro 已按 B 档重装（pid 45524，1.3.0-beta.1）；未单独发版，GitHub release 资产待下一批。本机构建 strip 绕行沿用 docs/local-build.md，未改 release 配置。
+
+## 菜单栏引号整体占幅修正并安装（2026-10-24）
+
+- Timmy反馈引号仍显小；在保留双引号轮廓与描边半径的前提下，将曲线中心位置相对画布中心放大 1.55 倍。@2x 外框从 16×22px 增至 22×31px（约 11×15.5pt），纯不透明面积 5.48%；黑色 macOS 与白色 Windows 资源仍为 22/44/32px。
+- 更新几何断言；托盘资源测试 11/11 通过。`bundle:mac` 成功，版本仍 1.3.0-beta.1；ad-hoc 签名，`codesign --verify --deep --strict` 通过，二进制哈希 `825e6c3a…298f3d`，并确认新 22×22 模板已嵌入。
+- 原安装移至 `~/Applications/Local Transcribe Backups/before-tray-size-20261024-192910/` 保留；新包安装并从 `~/Applications/Local Transcribe.app` 启动（PID 14845）。应用按现有配置同时启动 LAN sidecar（PID 14910，端口 7878）；未停止。未截图/评价观感、未发布、未清理。
+- 仓库缺少项目规则要求先读的 `logs/README.md`，故正式 `logs/2026-10/` 记录待 Timmy 确认是否按现有日志格式继续。
+
+## 当前安装包 CUA 验收：浮层、历史复制入口与菜单栏资源（2026-10-24）
+
+- 实机 CUA（已安装包 PID 14845，路径 `~/Applications/Local Transcribe.app`）：模型浮层通过真实页面外点击关闭；触发按钮在打开时再次点击可关闭；Esc 可关闭。页面导航回模型页后回读确认默认模型仍为 FireRedASR2、浮层关闭。曾有一次坐标点击误选 Paraformer，已通过界面恢复 FireRedASR2 并回读确认。
+- CUA 打开一条现有历史详情，确认「复制」按钮存在且启用，TXT/JSON 导出控件同时存在且均为 30px 高。未触发复制：系统剪贴板当时包含多种格式，CUA 只能写纯文本/图片/文件 URL，不能原样恢复，因此没有读取或替换剪贴板，也没有读取转写正文。详情复制的数据选择、反馈计时、失败回退、空正文禁用及间距由前端定向测试覆盖。
+- 菜单栏状态项未出现在 CUA 可访问性窗口树中；遵守任务书不截图、不评价实际观感，因此本轮不能声称已通过菜单栏图标视觉验收。新图标尺寸、bundle 嵌入与安装路径已由本轮安装核验记录（§“菜单栏引号整体占幅修正并安装”）。
+- `npm run check` 0 errors / 0 warnings；并发运行时一次 reader-spec 测试遇到 inspector target 导航错误，单独重跑通过，之后顺序完整 `npm test` 82/82 通过。弹层内部空白点击、真实窗口失焦焦点恢复及复制内容未作 CUA 端到端断言；其中可自动验证部分由现有测试覆盖。
+- 本轮未截图、未改代码、未发布；LAN sidecar 仍按原运行状态保持。正式开发日志仍因缺少 `logs/README.md` 待确认。
+
+## 本地大模型 P1 · 运行时与节点 API（2026-10-24）
+
+- 实现候选运行时 `llama-cpp-2 = 0.1.160`：macOS target 启用 Metal，其他 target 使用 CPU 配置；桌面进程与托管 LAN 节点均按需使用 `<app-data>/llm`。两者各自进程内会先卸载 ASR cache，再加载 LLM；本地转写与节点任务开始前会先卸载对应进程的 LLM。
+- 节点新增受限 LLM 状态、加载、卸载、取消与流式总结/提问 API；桌面注册对应 Tauri command/event。请求正文、文本、问题、选区与追问轮数均有边界校验；空模型路径通过 SSE 错误回报并释放生成槽。
+- 验证：macOS `cargo test --workspace` 217 passed / 0 failed / 11 ignored；workspace strict Clippy 与 fmt check 通过；frontend check 0 errors / 0 warnings、npm test 82/82 通过。22:18 CST 另复跑节点与桌面 LLM 定向单测，各 4/4 通过。单元测试验证共享 advisory lock 会排斥第二个驻留者，新增节点路径测试确认 sidecar 以应用数据根目录配置同一把锁。锁跨 desktop/service/node 的真实模型加载/转写周期仍未做端到端实测。11 项 ignored 仍依赖模型、录音、网络或 sidecar 条件。
+- P1 的代码/接口/build gate 已完成。P2 固定目录代码也已实现：三档模型展示大小、估算内存、Apache-2.0；下载 URL 固定到官方 revision，安装前按字节数与 SHA-256 校验，删除进废纸篓。官方仓库元数据和许可证已只读核实并记入 `docs/model-licenses.md`。
+- **P2 下载事故与修复（2026-10-25 00:44 CST）**：2026-10-24 22:30 CST Qwen3-4B 已到 41.04%（1,024,775,311 字节）时主源长连接断开，旧实现切镜像重试时用 `File::create` 截断暂存文件、进度清零并从头重下；镜像随后也在 52,202,208 字节处失败，下载任务报错结束，应用进程于约 22:35 CST 退出（无崩溃报告）。已用 TDD 修复：`fetch()` 现在按暂存文件大小发送 `Range` 续传，服务器返回 206 时追加写入；返回 200（不支持 Range）或暂存文件已达完整体积时从零重写并把进度归零，不再丢已有进度。新增 3 个本地 HTTP 服务器测试（断流后续传、服务器无视 Range、超体积陈旧文件重下）；`model_download` 测试组 16 passed / 0 failed / 1 ignored（网络依赖），strict Clippy 与 fmt 通过。已用 `curl -r` 核实固定 revision URL 返回 `206` 与 `Content-Range`。00:43 CST 重启应用（PID 41143，Vite 开发服务器 1420）并从 52,202,208 字节续传，00:44 CST 回读 256,315,270 / 2,497,280,256 字节（10.26%）。
+- **P2 三档下载与安装已全部完成（2026-10-25 02:21 CST）**：三档均经固定 revision URL 下载、字节数 + SHA-256 双重校验后安装到 `<app-data>/llm/`，并经 `shasum -a 256` 独立回读比对 `docs/model-licenses.md` 一致：Qwen3-4B `7485fe6f…`（2,497,280,256 字节）、Qwen3-8B `d98cdcbd…`（5,027,783,488 字节）、Qwen3-1.7B `061b54da…`（1,834,426,016 字节）。真实窗口三档均显示「已下载」及「删除」动作，暂存目录已清空。02:21 CST 磁盘可用 17 GiB。下载途中网络多次断流：4B 曾在 41% 被旧逻辑清零（已修复为 Range 断点续传），8B 靠新增的 `fetch_with_fallback`（主源/镜像交替、最多 8 次自动续传重试）完成；`model_download` 测试组 18 passed / 0 failed / 1 ignored（网络依赖），strict Clippy 与 fmt 通过。
+- **P2 验收结论**：目录展示（体积/预计内存/Apache-2.0）、固定 revision、进度、取消、删除进废纸篓、断点续传与三档安装均已实测。三档加载/生成指标与事实一致性实测按任务书属 P5（macOS 实测），将在 P5 执行；P2 的下载与安装范围判定通过。
+- **尚未完成**：P3（卡片 UI + 视觉）及之后阶段全部未开始。三档模型的冷加载、首 token、token/s、峰值/空闲 RSS、真实取消与人名/数字一致性实测属 P5；跨进程锁不主动卸载另一进程的缓存，冲突时提示 busy，待持有进程按设置空闲卸载后再重试。架构与验证见 `docs/architecture.md`、`docs/technical-validation.md`。
+- 按全局日志规则，项目缺少 `logs/README.md`，本轮不自行创建该规则文件或正式开发日志；现有 `logs/2026-10/` 日志格式是否可代替需 Timmy 确认。未提交、未发布、未清理。
+
+## 菜单栏引号图标清晰度根因修复与精确字形采用（2026-10-25）
+
+- Timmy 反馈「菜单栏引号的问题还没修」。定位到跨多轮迭代一直存在的根因：`tray-icon` crate 将嵌入的位图渲染进固定 18pt 高的显示框（2x 菜单栏 = 36 物理像素），而 macOS 二进制一直嵌入 22×22 的 1x 模板，系统被强制上采样约 1.6 倍——此前所有形状/粗细迭代（竖波、细体、取中 B 档、1.55x 放大）在 Retina 下都被渲染成软边，与系统图标的锐利度不匹配。
+- TDD 修复：新增 `tray::tests::tray_icon_bitmap_is_retina_density` 断言嵌入位图为 44×44（红：`(22,22)≠(44,44)` 已确认）；`tray.rs` 抽出 `TRAY_ICON_BYTES` 共享常量，macOS 分支改嵌 `tray-template@2x.png`，44px 位图降采样到 36 物理像素后为锐利渲染。绿：desktop crate 61 passed / 0 failed，fmt 与 strict Clippy 通过。
+- 采用 worktree `menu-bar-logo-scale` 的图形提取方向：菜单栏/托盘图标取应用图标中的原始引号 alpha 掩模等比缩放，不手绘、不变形。按实机资源对比后将 B 档定为 22pt 画布宽 12.5pt（A/B/C=10.5/12.5/14.5），@2x 不透明外框 26×20px、opaque area 13.4%；比最初 8.5pt B 档线性增大约 47%，避免「太小」，同时低于最大档以免视觉过重。新 A/B/C 深浅背景对照已更新。
+- TDD 增加 Retina 密度测试，macOS embed 改为 `tray-template@2x.png`（44×44）；`scripts/test-tray-icon.py` 10/10、desktop crate 61 passed / 0 failed / 4 ignored、fmt 与 strict Clippy 通过。Debug binary 已重建并字节级确认嵌入当前 44×44 PNG、不含 22×22 PNG。
+- **运行态限制**：当前没有运行中的 VoiceToTextApp/debug 进程，已安装 `~/Applications/Local Transcribe.app` 也未启动或替换；所以本轮只验证资产、编译、测试与 binary embed，未声称实机菜单栏视觉验收。待项目后续打包安装阶段再用真实菜单栏做最终观感验收。Vite dev 进程仍在 1420。
+- worktree `menu-bar-logo-scale` 内同样的改动仍未提交，未清理（按规则待批准）。未提交、未发布。
+
+## P3 思考标签过滤与回归（2026-10-25）
+
+- Qwen3 的 `/no_think` 指令仍可能泄漏 `<think>`/`</think>` 与内部思考正文。新增共享 `ThinkTagFilter`，在 `lan-compute` token stream 向回调发出前过滤，因此 desktop event 与 LAN-node SSE 共用；支持标签跨 token 分块、丢弃未闭合 thinking block，不误删普通 `<thinking>` 文本。
+- TDD：3 个针对性测试先红（透传标签与思考内容），实现后 3/3 通过。`cargo test --workspace --offline` 全量通过（220 passed / 0 failed / 11 ignored）；workspace strict Clippy 与 fmt 通过；desktop `npm run check` 成功、`npm test` 93/93。
+- 当前 debug binary 已重建并确认含 44×44 菜单栏资源。思考过滤改后尚未重跑实际 GGUF / `track-1.wav` 窗口流；这是实测缺口，将在任务书 P5 CUA 与三模型实测中核验，不把模拟 token 单测记为真实模型验收。
+- P3 代码、前端状态测试和构建 gate 已完成；P4 长文分段下一步实现。原 143 分钟录音的 9766-token / 8192-context 报错为已复现基线；Windows P6 仍待真实 Windows host/CI。
+
+## P4 长文分段与递归汇总（2026-10-25）
+
+- `LlmRuntime::generate_segmented_stream` 已用于桌面和 LAN SSE 入口。以模型 tokenizer 计算完整 prompt（system、问题/历史与模板开销），每段限制在 8192 上下文的 60% 内；按段落、句子切分，不拆单句，超预算的单句明确报错不截断。
+- 对多段先逐段生成 ≤512-token 局部结果，再按完整合并 prompt 预算分组、递归汇总，最终答案最多 1024 tokens。提示词要求只用当前段/局部结果、保留人名数字与不确定性，不得引入新事实。
+- 分段局部结果用独立 `partial_token` 流显示为临时预览，最终汇总开始输出后替换；UI 展示“正在读第 x/y 段”与合并进度，五语言覆盖。LAN SSE 的阶段与预览事件在断连时可检测发送失败并停止生成。
+- 资源边界测试覆盖段落/句子、过长单句、数字小数、英文缩写、闭合引号与递归分组。`cargo test --workspace --offline` 231 passed / 0 failed / 11 ignored；workspace strict Clippy、fmt 通过；`npm run check` 0 errors，`npm test` 94/94。
+- **运行态仍待 P5**：未用真实 GGUF 重跑 ≥30 分钟 transcript，也未实测长文分段的答案事实一致性、首 token、token/s、RSS 或停止/断连。先前 143 分钟录音的 9766-token/context 错误是修复前基线，不能当作本次分段已实机通过。P5 真实 macOS CUA/三模型验收下一步；P6 Windows 仍待真实 Windows host/CI。
+
+## P5 macOS 真实窗口验收尝试（2026-10-25，阻塞）
+
+- 当前工作树的 Tauri dev 窗口已运行（PID 87937，window 4503）。AX 树能读到 143:48 历史稿及模型页条目，但同一窗口截图在历史详情页和模型页的主内容区均为空白；这是截图与辅助功能内容不一致，尚不能归因为应用渲染缺陷或 CUA 捕获缺陷。
+- 曾对一条约 68 分钟历史记录启动一次真实模型总结，并在生成中按「停止」；流程只到部分输出/重试状态，没有完整答案。没有可信的首 token/总耗时、token/s、峰值 RSS、卸载后 RSS 或三个人名/数字核对结果，故不计作模型验收通过。
+- 因主内容区无法视觉核验，任务书 P5 的七项界面检查均未通过验收；三模型同文同提示对照、空闲卸载及菜单栏图标观感也仍未验证。通过 CUA 访问窗口计算样式的脚本调用被当前权限策略拒绝，要求 unrestricted mode 与受信任的启动时风险接受；没有更改权限或绕过限制。
+- 后续继续条件：先在不绕过 CUA 权限的前提下恢复/解释真实窗口主内容显示与 AX/截图不一致，再按 P5 规范重新进行完整测量。P6 尚未开始。
+
+## P5 续测：batch 修复与一次真实长文摘要（2026-10-25）
+
+- **已核实的代码修复**：第一次真实 Qwen3-4B 长文摘要触发 llama.cpp `n_tokens_all <= n_batch` 原生断言；运行日志为 `n_ctx=8192 / n_batch=2048 / n_ubatch=512`，而分段器预算为 4915 tokens。`crates/lan-compute/src/llm.rs` 显式把逻辑 batch 设为 8192；回归测试先红后绿，lan crate 49/49、strict Clippy、fmt 与桌面 `npm run check` 通过。
+- **真实窗口结果**：68:26 中文历史稿（113 个片段）上的 Qwen3-4B「总结全文」完成，卡片显示 138 秒并完整渲染答案；运行中 RSS 采样最高 3,704,944 KB，完成后采样 2,459,504 KB。首 token、冷加载、token/s 未分开测量。初步事实核对发现“关闭电脑”可能误述为“关闭远程协助”，事实一致性不通过验收。
+- **限制**：PID 35398 启动于 14:08:19，debug binary 修改时间为 14:08:41，无法确认进程加载当前二进制。当前画面正文和答案卡正常绘制；全桌面截图可见引号状菜单栏项，但没有成功打开托盘菜单，也不能证明所见项来自当前二进制。随后 CUA MCP 连接退出。
+- **资源补充读数**：14:15:56 RSS 为 2,459,504 KB；14:20:09 app 空闲时为 3,746,992 KB。数值波动，前一个较低采样不能作为稳定的空闲卸载结果；未回读 `/api/v1/llm/status`。
+- **P5 未完成**：仅一个模型、一个提示有结果；其余两个模型、三个提示、同文同四提示完整比较、三项事实核对、首 token/token/s/冷加载及空闲 RSS 测量未完成。七项界面验收整体仍未通过；此前“空白主内容”在本次窗口截图未复现。需恢复 CUA 后，从确认当前 binary 的进程重新执行实机清单。P6 Windows 仍待真实 Windows host/CI。
+- **来源文案调整**：按 Timmy 最新要求，AI 答案卡来源行只保留所用转写片段数，移除“没有超出转写内容”这一事实保证；五种语言和当前合订任务书 V2.0 已同步，旧版 V1 任务书未改。精确文案测试先红后绿；`npm run check` 通过，串行前端测试 95/95。标准并行 `npm test` 中 reader-spec 两次遇到 DevTools target 导航关闭，单项复跑与串行全套均通过。
+
+## 局域网节点 sidecar 未更新修复与两台 Mac 换装 1.4.0-beta.1（2026-10-25）
+
+- **Bug**：安装 1.4.0-beta.1 后局域网页报 `The node stopped during startup (exit status: 2)`。直接以桌面端参数运行包内节点复现 `error: unknown argument '--llm-models-dir'`；根因是 `binaries/local-transcribe-node-aarch64-apple-darwin` 停在 2026-10-24 的旧构建，而 `bundle:mac` 只打包该拷贝、不重建节点。
+- **修复**：`bundle:mac` 先重建 `local-transcribe-node` 并覆盖 sidecar，再执行 `tauri build`；新增 `apps/desktop/tests/bundle-sidecar.test.mjs` 断言该顺序（先红后绿）。完整前端测试 101/101 通过。
+- **验收**：重打包后包内节点含新参数；MBP 安装后应用 PID 12745、节点 PID 12752，`lan-node.json` 记录 `1.4.0-beta.1`、`192.168.1.243:7878`、3 个模型，`/api/v1/capabilities` 正常。可执行 SHA-256 `7faff5da…cf4621`，strict 签名校验通过。Air 换装同一构建；共享开关关闭，未自动启节点。
+- **边界**：本机构建未 strip（整包 82.77 MiB）、ad-hoc 未公证；未重跑真实转写或跨机 LAN 转写；P5 界面验收与 P6 Windows 仍未完成。详情见 `logs/2026-10/2026-10-25-lan-node-sidecar-fix.md`。

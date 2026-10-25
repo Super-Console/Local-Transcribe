@@ -10,6 +10,12 @@ Timmy explicitly accepts Tauri 2 + Svelte for Local Transcribe (the product name
 
 The desktop and MCP entry points now use the shared Rust core/task/result store. The store is JSON-file based with cross-process `fs2` locks; SQLite is deferred. The MCP control plane and five stdio tools are implemented and protocol-tested. The core contains an in-process sherpa-onnx path for Paraformer/SenseVoice layouts, but no approved model weights have been used for a real inference test. The CLI is not implemented.
 
+## Local language-model runtime spike (2026-10-24)
+
+- The initial implementation uses `llama-cpp-2 = 0.1.160` in-process. macOS builds enable its Metal backend; non-macOS builds pin CPU inference (`n_gpu_layers = 0`). This is a build-verified candidate, not yet the final runtime decision: no GGUF has been loaded or benchmarked.
+- The desktop process owns one on-demand LLM cache at `<app-data>/llm`; the supervised LAN node has its own runtime pointed at the same directory. Desktop, service, and node configure `<app-data>/.compute.lock`; ASR and LLM hold its OS advisory lock for the full cache-residency lifetime. The kernel releases it on process exit. This prevents simultaneous ASR/LLM residency across those processes, but does not remotely evict another process's idle cache: a competing load returns `busy` until that process's configured idle-unload timeout expires, and the user retries.
+- The node exposes bounded, streamed summary/ask endpoints plus status/load/unload/cancel under the existing user-enabled trusted-LAN HTTP boundary. Tauri commands use events and add no network listener. Long-text chunking and the answer-card UI are subsequent phases.
+
 ```mermaid
 flowchart TB
   subgraph Entrypoints[User and Agent entry points]

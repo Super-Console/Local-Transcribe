@@ -26,3 +26,17 @@
   因此当前不涉及把权重打进安装包；如果将来要随包分发或商用，需要先向上游确认授权。
 - 本轮按要求**没有删除或修改**任何清单条目；是否继续提供这 6 个未标注模型，由
   Timmy 决定。
+
+## 本地语言模型候选（2026-10-24）
+
+只读核验 Hugging Face 官方 `Qwen` 仓库元数据及不可变 commit tree；文件体积与 SHA-256
+取自该 revision 的 LFS 元数据，`license` 取自仓库 API 的 `cardData.license`，并回读了
+仓库 `LICENSE`。下载前代码使用固定 revision、精确字节数和 SHA-256 校验。
+
+| 档位 | 仓库 / 文件 | Revision | 大小（字节） | LFS SHA-256 | License |
+| --- | --- | --- | ---: | --- | --- |
+| 中文默认 | [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) · `Qwen3-4B-Q4_K_M.gguf` | `bc640142c66e1fdd12af0bd68f40445458f3869b` | 2,497,280,256 | `7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5` | Apache-2.0 |
+| 中文大模型 | [Qwen/Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) · `Qwen3-8B-Q4_K_M.gguf` | `7c41481f57cb95916b40956ab2f0b139b296d974` | 5,027,783,488 | `d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785` | Apache-2.0 |
+| 多语言轻量 | [Qwen/Qwen3-1.7B-GGUF](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF) · `Qwen3-1.7B-Q8_0.gguf` | `90862c4b9d2787eaed51d12237eafdfe7c5f6077` | 1,834,426,016 | `061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a` | Apache-2.0 |
+
+以上是**来源与元数据核实**，不等于模型质量或双平台运行验收。三档权重已按明确授权下载到本机应用数据目录用于测试；模型权重不在源代码仓库或安装包内。Qwen3-4B 仅有一次长文摘要完成记录，事实核验未通过；Qwen3-1.7B/8B 的运行表现尚未验证。目录中的内存读数是估算，不是逐台设备实测峰值。模型页不显示许可证行，但此处保留来源与许可核查记录。

@@ -6,11 +6,12 @@ Local Transcribe is a local-first desktop app that transcribes user-selected aud
 
 macOS and Windows builds are published under [Releases](https://github.com/TimmySheep/Local-Transcribe/releases). The visual design continues to evolve; the product name is settled.
 
-## Product boundary (V1, frozen)
+
+## Product boundary
 
 - Local file → on-device transcription → TXT or JSON export.
 - Source media stays read-only and is never uploaded.
-- No live dictation/subtitles, no cloud ASR, no translation, summarization or note generation.
+- No live dictation/subtitles, cloud ASR, or translation. Optional local language-model summaries and questions are introduced in 1.4.0-beta.1; they run on-device and are experimental.
 - Local recording is in scope since 1.0: record inside the app (microphone and/or a chosen meeting app), then transcribe the tracks locally. Nothing is uploaded.
 - MCP is local stdio only; no TCP/HTTP listener, no unrestricted filesystem access, no shell execution.
 - Models come from a verified in-app list; transcription runs fully offline and never uploads audio.
@@ -39,6 +40,7 @@ All three interfaces talk to the same file-backed service instance, so a job sta
 - **Model picker** in the toolbar lists downloaded models, marks the default one, and shows a **green dot only when that model is actually resident in memory** (models load on demand, are reused across jobs, and unload after 120 s idle).
 - **Storage** settings show every app directory (models, history results, job records, app data) and offer automatic cleanup by age (1/3/5/7/30 days) or size (1/5/10 GB), off by default; deletions go to the Trash.
 - **Interface languages**: 简体中文, English, Español, Français, Deutsch (follows macOS by default).
+- **Local language models (1.4.0-beta.1, experimental)**: download a Qwen3 GGUF model separately to summarize a transcript or ask questions in a local answer card. The model and transcript stay on-device; no cloud service is used. Models are not included in the installer, memory figures are estimates, and generated answers can be inaccurate—verify them against the transcript. See [model licenses](docs/model-licenses.md).
 
 ## LAN compute (protocol V1.1)
 
