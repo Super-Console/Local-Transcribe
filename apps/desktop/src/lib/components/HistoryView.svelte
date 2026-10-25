@@ -1,8 +1,10 @@
 <script lang="ts">
   import Icon from "./Icon.svelte";
   import Reader from "./Reader.svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { t, formatDayLabel, formatClock } from "$lib/i18n.svelte";
   import { prettyName } from "$lib/model-names.svelte";
+  import { createCopyFeedback, resolveCopyText } from "$lib/copy-text.js";
   import type { HistoryEntry, SearchHit, Transcript } from "$lib/types";
 
   let {
@@ -112,6 +114,51 @@
     if (!blocked) onDelete?.(target);
   }
 
+  /** Historical detail's body text is the only content exposed by the copy action. */
+  const fullText = $derived(
+    detail?.segments?.length
+      ? detail.segments.map((segment) => segment.text).join("\n")
+      : (detail?.text ?? ""),
+  );
+  const copyable = $derived(fullText.trim().length > 0);
+  let readerBody = $state<HTMLDivElement | null>(null);
+  let copyState = $state<"idle" | "copied" | "failed">("idle");
+  const copyFeedback = createCopyFeedback({
+    onChange: (state) => (copyState = state as "idle" | "copied" | "failed"),
+  });
+  $effect(() => () => copyFeedback.dispose());
+
+  const copyAnnouncement = $derived(
+    copyState === "copied"
+      ? t("reader.copied")
+      : copyState === "failed"
+        ? t("reader.copyFailed")
+        : "",
+  );
+
+  async function onCopy() {
+    if (!copyable) return;
+    const selection = window.getSelection?.() ?? null;
+    const text = resolveCopyText({
+      selectedText: selection?.toString() ?? "",
+      anchorNode: selection?.anchorNode ?? null,
+      focusNode: selection?.focusNode ?? null,
+      body: readerBody,
+      fullText,
+    });
+    try {
+      await navigator.clipboard.writeText(text);
+      copyFeedback.success();
+    } catch {
+      try {
+        await invoke("copy_to_clipboard", { text });
+        copyFeedback.success();
+      } catch {
+        copyFeedback.failure();
+      }
+    }
+  }
+
   // 点击外部或 Esc 关闭菜单；滚动/缩放也关，避免菜单和卡片错位。
   $effect(() => {
     if (!menu) return;
@@ -152,6 +199,7 @@
           : []}
       initialFollow={false}
       onBack={onBack}
+      bind:bodyEl={readerBody}
     >
       {#snippet heading()}
         <div class="detail-head">
@@ -166,12 +214,32 @@
         </div>
       {/snippet}
       {#snippet actions()}
-        <button type="button" class="act btn-secondary" onclick={() => onExport("txt")}>
-          <Icon name="download" size={13} />TXT
-        </button>
-        <button type="button" class="act btn-secondary" onclick={() => onExport("json")}>
-          <Icon name="download" size={13} />JSON
-        </button>
+        <div class="actions">
+          <span class="copy-slot" title={copyable ? undefined : t("reader.copyEmpty")}>
+            <button
+              type="button"
+              class="act btn-secondary"
+              onclick={onCopy}
+              disabled={!copyable}
+            >
+              <Icon name={copyState === "copied" ? "check" : "copy"} size={13} />
+              {copyState === "copied"
+                ? t("reader.copied")
+                : copyState === "failed"
+                  ? t("reader.copyFailed")
+                  : t("reader.copy")}
+            </button>
+          </span>
+          <div class="exports">
+            <button type="button" class="act btn-secondary" onclick={() => onExport("txt")}>
+              <Icon name="download" size={13} />TXT
+            </button>
+            <button type="button" class="act btn-secondary" onclick={() => onExport("json")}>
+              <Icon name="download" size={13} />JSON
+            </button>
+          </div>
+          <span class="sr-only" aria-live="polite">{copyAnnouncement}</span>
+        </div>
       {/snippet}
     </Reader>
   {:else}
@@ -581,6 +649,35 @@
 
   .sep {
     color: var(--hairline-2);
+  }
+
+  /* Copy stays separate from the TXT/JSON export group as specified. */
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .exports {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .copy-slot {
+    display: inline-flex;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 
 </style>

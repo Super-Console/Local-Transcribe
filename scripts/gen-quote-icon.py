@@ -12,8 +12,8 @@ Outputs (all deterministic; no third-party Python packages):
   icons/icon.png 1024, 32/64/128/256, icon.icns, icon.ico,
   Windows Square*/Store logos, static/favicon.png.
 
-Tray/menu-bar icons are generated separately by scripts/gen-tray-icon.py
-(three-bar template, taskbook "菜单栏图标重做").
+Tray/menu-bar icons are generated separately by scripts/gen-tray-icon.py,
+reusing this source quotation glyph as a smaller monochrome template.
 
 Frames are produced at 4x and box-averaged; downscales use ffmpeg's lanczos.
 """

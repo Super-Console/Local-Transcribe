@@ -1,7 +1,9 @@
 <script lang="ts">
   import { t } from "$lib/i18n.svelte";
+  import type { MessageKey } from "$lib/i18n/messages/zh";
   import { prettyName } from "$lib/model-names.svelte";
   import { catalogEntryFor } from "$lib/model-names.js";
+  import { defaultLlm } from "$lib/llm-default.svelte";
   import type { CatalogModel, LibraryModelSummary, ModelDownloadEvent } from "$lib/types";
 
   let {
@@ -28,9 +30,33 @@
 
   function sizeLabel(bytes: number): string {
     if (!bytes) return t("model.unknownSize");
-    const gigabytes = bytes / 1_073_741_824;
+    const gigabytes = bytes / 1_000_000_000;
     if (gigabytes >= 1) return `${gigabytes.toFixed(2)} GB`;
-    return `${Math.max(1, Math.round(bytes / 1_048_576))} MB`;
+    return `${Math.max(1, Math.round(bytes / 1_000_000))} MB`;
+  }
+
+  function recommendationFor(entry: CatalogModel): MessageKey {
+    if (entry.kind === "llm") {
+      switch (entry.id) {
+        case "qwen3-4b":
+          return "model.profileQwen4b";
+        case "qwen3-8b":
+          return "model.profileQwen8b";
+        case "qwen3-1.7b":
+          return "model.profileQwen17b";
+        default:
+          return "model.profileLanguageGeneral";
+      }
+    }
+    if (entry.tier === "quality") return "model.recommendQuality";
+    if (entry.tier === "speed") return "model.recommendSpeed";
+    return "model.recommendPunctuation";
+  }
+
+  function recommendationForInstalledModel(_model: LibraryModelSummary): MessageKey {
+    // Imported models are outside the built-in catalog, so avoid inventing a
+    // quality/speed ranking; their supported use is local speech transcription.
+    return "model.recommendTranscription";
   }
 
   const total = $derived(models.reduce((sum, model) => sum + model.bytes, 0));
@@ -48,14 +74,23 @@
   {#if catalog.length > 0}
     <div class="list catalog">
       <div class="section-label">{t("model.downloadTitle")}</div>
-      {#each ["quality", "speed", "punctuation"] as tier (tier)}
+      {#each ["quality", "speed", "language", "punctuation"] as tier (tier)}
         {@const entries = catalog.filter((entry) => entry.tier === tier)}
         {#if entries.length > 0}
           <div class="tier-label">
-            {t(tier === "quality" ? "model.tierQuality" : tier === "speed" ? "model.tierSpeed" : "model.tierPunctuation")}
+            {t(
+              tier === "quality"
+                ? "model.tierQuality"
+                : tier === "speed"
+                  ? "model.tierSpeed"
+                  : tier === "language"
+                    ? "model.tierLanguage"
+                    : "model.tierPunctuation",
+            )}
           </div>
           {#each entries as entry (entry.id)}
             {@const dl = downloads[entry.id]}
+            {@const recommendation = recommendationFor(entry)}
             {@const active = !!dl && (dl.state === "downloading" || dl.state === "installing")}
             {@const percent =
               dl && dl.total > 0 ? Math.min(99, Math.round((dl.received / dl.total) * 100)) : 0}
@@ -75,6 +110,14 @@
                   {/if}
                   <span class="sep">·</span>
                   <span>{sizeLabel(entry.bytes)}</span>
+                  <span class="sep">·</span>
+                  <span>
+                    {t("model.estimatedMemory", {
+                      memory: sizeLabel(entry.estimatedMemoryBytes),
+                    })}
+                  </span>
+                  <span class="sep">·</span>
+                  <span>{t("model.recommendation", { suggestion: t(recommendation) })}</span>
                   {#if active}
                     <span class="sep">·</span>
                     <span>{dl?.state === "installing" ? t("model.installing") : `${percent}%`}</span>
@@ -92,6 +135,19 @@
               </div>
               <div class="row-actions">
                 {#if entry.installed}
+                  {#if entry.kind === "llm"}
+                    {#if defaultLlm.id === entry.id}
+                      <span class="hint">{t("model.defaultModel")}</span>
+                    {:else}
+                      <button
+                        type="button"
+                        class="link-action"
+                        onclick={() => defaultLlm.select(entry.id)}
+                      >
+                        {t("model.useDefault")}
+                      </button>
+                    {/if}
+                  {/if}
                   <span class="hint">{t("model.downloaded")}</span>
                   <button
                     type="button"
@@ -135,6 +191,7 @@
     <div class="list">
       <div class="section-label">{t("model.otherInstalled")}</div>
       {#each extraModels as model (model.id)}
+        {@const recommendation = recommendationForInstalledModel(model)}
         <div class="row">
           <div class="body">
             <div class="name">
@@ -149,6 +206,14 @@
               {/if}
               <span class="sep">·</span>
               <span>{sizeLabel(model.bytes)}</span>
+              <span class="sep">·</span>
+              <span>
+                {t("model.estimatedMemory", {
+                  memory: sizeLabel(model.estimatedMemoryBytes),
+                })}
+              </span>
+              <span class="sep">·</span>
+              <span>{t("model.recommendation", { suggestion: t(recommendation) })}</span>
               <span class="sep">·</span>
               <span>{t("model.installedNotLoaded")}</span>
             </div>
@@ -293,6 +358,8 @@
     color: var(--text-3);
     display: flex;
     gap: 8px;
+    flex-wrap: wrap;
+    row-gap: 2px;
   }
 
   .sep {

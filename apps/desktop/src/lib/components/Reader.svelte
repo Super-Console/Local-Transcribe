@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick, type Snippet } from "svelte";
   import Icon from "./Icon.svelte";
+  import AiAskCard from "./AiAskCard.svelte";
   import { t } from "$lib/i18n.svelte";
   import type { Segment } from "$lib/types";
 
@@ -12,6 +13,7 @@
     onBack,
     heading,
     actions,
+    bodyEl = $bindable(null),
   }: {
     jobId: string | null;
     segments: Segment[];
@@ -21,10 +23,11 @@
     onBack?: () => void;
     heading?: Snippet;
     actions?: Snippet;
+    /** 正文容器向外绑定：详情页复制时用它判断选区是否落在正文内。 */
+    bodyEl?: HTMLDivElement | null;
   } = $props();
 
   let scroller = $state<HTMLDivElement | null>(null);
-  let bodyEl = $state<HTMLDivElement | null>(null);
   let findInput = $state<HTMLInputElement | null>(null);
   let following = $state(true);
   let programmatic = false;
@@ -38,6 +41,11 @@
   let atTop = $state(true);
   let atBottom = $state(false);
   let short = $state(false);
+
+  let aiOpen = $state(false);
+  let aiCollapsed = $state(false);
+  let aiHasAnswer = $state(false);
+  let aiSlotEl = $state<HTMLDivElement | null>(null);
 
   const key = $derived(jobId ? `lt.reader.${jobId}` : null);
   const prefersReducedMotion =
@@ -226,10 +234,51 @@
     }
   }
 
+  function aiText(): string {
+    return segments.map((segment) => segment.text).join("\n\n");
+  }
+
+  /** 只认落在正文里的有效选区；点「解释选中的段落」时取用。 */
+  function aiSelection(): string | null {
+    const value = window.getSelection();
+    if (!value || value.isCollapsed || !value.anchorNode || !value.focusNode) {
+      return null;
+    }
+    if (
+      !bodyEl ||
+      !bodyEl.contains(value.anchorNode) ||
+      !bodyEl.contains(value.focusNode)
+    ) {
+      return null;
+    }
+    return value.toString().trim() || null;
+  }
+
+  function toggleAi() {
+    aiOpen = !aiOpen;
+  }
+
+  function focusBody() {
+    scroller?.focus();
+  }
+
   function onWindowKeydown(event: KeyboardEvent) {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      event.shiftKey &&
+      event.key.toLowerCase() === "a"
+    ) {
+      event.preventDefault();
+      toggleAi();
+    } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
       event.preventDefault();
       void openFind();
+    } else if (event.key === "Escape" && aiOpen) {
+      // 有回答时 Esc 只收起卡片；否则关闭面板；焦点回正文。
+      event.preventDefault();
+      if (aiHasAnswer) aiCollapsed = true;
+      else aiOpen = false;
+      focusBody();
     } else if (event.key === "Escape" && findOpen) {
       event.preventDefault();
       closeFind();
@@ -255,6 +304,25 @@
   $effect(() => {
     window.addEventListener("keydown", onWindowKeydown);
     return () => window.removeEventListener("keydown", onWindowKeydown);
+  });
+
+  // AI 卡片插入/收起/流式增长都改变正文上方的高度：按高度差补偿 scrollTop，
+  // 正在读的那一段不跳走；跟随直播到底时交给跟随逻辑。
+  $effect(() => {
+    const element = aiSlotEl;
+    if (!element) return;
+    let last = element.offsetHeight;
+    const observer = new ResizeObserver(() => {
+      const next = element.offsetHeight;
+      const delta = next - last;
+      last = next;
+      if (Math.abs(delta) > 1 && scroller && !following) {
+        scroller.scrollTop += delta;
+        measure();
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
   });
 </script>
 
@@ -321,6 +389,19 @@
         </div>
       {/if}
 
+      <div class="ai-slot" bind:this={aiSlotEl}>
+        <AiAskCard
+          bind:open={aiOpen}
+          bind:collapsed={aiCollapsed}
+          bind:hasAnswer={aiHasAnswer}
+          {jobId}
+          text={aiText}
+          selection={aiSelection}
+          segmentCount={segments.length}
+          onFocusBody={focusBody}
+        />
+      </div>
+
       <div class="reader-body" bind:this={bodyEl}>
         {#if segments.length === 0}
           <p class="placeholder">{running ? t("reader.recognizing") : t("reader.noText")}</p>
@@ -361,6 +442,18 @@
       >
         <span>{t("reader.findOpen")}</span>
         <kbd>⌘F</kbd>
+      </button>
+      <button
+        type="button"
+        class="ai-toggle btn-secondary"
+        class:open={aiOpen}
+        title={t("reader.aiAsk")}
+        aria-label={t("reader.aiAsk")}
+        aria-pressed={aiOpen}
+        onclick={toggleAi}
+      >
+        <span>{t("reader.aiAsk")}</span>
+        <kbd>⌘⇧A</kbd>
       </button>
       <span class="bar-spacer"></span>
       {#if actions}
@@ -516,6 +609,10 @@
     pointer-events: none;
   }
 
+  .ai-toggle :global(*) {
+    pointer-events: none;
+  }
+
   .find-toggle {
     backdrop-filter: blur(18px) saturate(1.1);
     -webkit-backdrop-filter: blur(18px) saturate(1.1);
@@ -530,6 +627,26 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-3);
+  }
+
+  .ai-toggle {
+    backdrop-filter: blur(18px) saturate(1.1);
+    -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  }
+
+  .ai-toggle.open {
+    background: var(--capsule-find-pressed);
+    transform: translateY(1px);
+  }
+
+  .ai-toggle kbd {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-3);
+  }
+
+  .ai-slot {
+    position: relative;
   }
 
   .reader-head {

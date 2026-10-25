@@ -1,6 +1,6 @@
 {
   "name": "voice-to-text-desktop",
-  "version": "1.3.0-beta.1",
+  "version": "1.4.0-beta.1",
   "description": "Local Transcribe — local-first desktop audio/video transcription.",
   "type": "module",
   "scripts": {
@@ -11,7 +11,7 @@
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "bundle:mac": "tauri build --bundles app --no-sign && codesign --force --sign - --identifier com.timmy.voicetotextapp \"../../target/release/bundle/macos/Local Transcribe.app/Contents/MacOS/local-transcribe-node\" && codesign --force --sign - --identifier com.timmy.voicetotextapp \"../../target/release/bundle/macos/Local Transcribe.app\"",
+    "bundle:mac": "cargo build --release -p voice-to-text-lan --bin local-transcribe-node && cp ../../target/release/local-transcribe-node src-tauri/binaries/local-transcribe-node-aarch64-apple-darwin && tauri build --bundles app --no-sign && codesign --force --sign - --identifier com.timmy.voicetotextapp \"../../target/release/bundle/macos/Local Transcribe.app/Contents/MacOS/local-transcribe-node\" && codesign --force --sign - --identifier com.timmy.voicetotextapp \"../../target/release/bundle/macos/Local Transcribe.app\"",
     "tauri": "tauri"
   },
   "license": "MIT",

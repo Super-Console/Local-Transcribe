@@ -1,44 +1,28 @@
-"""Generate the quote-mark tray icons using only the Python standard library.
+"""Generate menu-bar silhouettes from the exact quotation glyph in the app logo.
 
-Geometry is defined once in 22pt design units (taskbook "菜单栏引号图标（取中）"):
-canvas 22x22, a centred quote group; each mark occupies a box, the two boxes are
-separated by MARK_GAP. A mark is a solid comma: a disc-swept Bezier centreline
-whose radius tapers from head to tail.
-
-The stroke weight comes in three grades measured at the @2x mid-canvas:
-A=3.0px, B=3.5px (the shipped grade), C=4.0px. All three share one parameter
-table; the grade only scales the radius profile.
-
-Each output size is drawn at 4x as the union of many discs along that curve,
-then box-averaged. RGB is constant black for the macOS template images and
-white for Windows; the background stays transparent. Run from any directory;
-output is deterministic and validated after writing.
+The app icon's extracted alpha mask is uniformly scaled to a 12.5pt maximum
+width on a 22pt canvas. No redraw, reshaping, or independent stroke adjustment
+is applied. A/B/C are smaller-to-larger uniform-size comparison variants; B is
+the shipped size. The source artwork has a fuller silhouette than the former
+hand-drawn stroke, so B is deliberately between the original small version and
+the visually heavy largest option. RGB is black for macOS templates and white
+for Windows.
 """
+from functools import lru_cache
+import importlib.util
 from pathlib import Path
 import struct
 import zlib
 
 ICONS = Path(__file__).resolve().parents[1] / "apps/desktop/src-tauri/icons"
+ROOT = Path(__file__).resolve().parents[1]
+LOGO_SOURCE = ROOT / "design/app-icon-quote-source.png"
 SUPERSAMPLE = 4
 CANVAS = 22.0
-MARK_BOX_WIDTH = 3.5
-MARK_GAP = 0.5
-GROUP_WIDTH = 2 * MARK_BOX_WIDTH + MARK_GAP
-GROUP_TOP = (CANVAS - 10.5) / 2  # 5.75
-GROUP_LEFT = (CANVAS - GROUP_WIDTH) / 2
-# Cubic centreline (box-local pt) and radius profile for one comma mark.
-HEAD = (2.55, 1.05)
-CTRL_1 = (2.6, 4.6)
-CTRL_2 = (1.9, 8.2)
-TAIL = (0.4, 10.0)
-RADIUS_START = 1.05
-RADIUS_TAPER = 0.72  # r(t) = RADIUS_START - RADIUS_TAPER * t ** 0.7
-RADIUS_END = 0.33
-SWEEP_SAMPLES = 600
-# Stroke grades in @2x px (taskbook §3); the shipped files use GRADE_B.
-GRADES = {"A": 3.0, "B": 3.5, "C": 4.0}
-GRADE_B = "B"
-_GRADE_SCALE = {name: px / GRADES[GRADE_B] for name, px in GRADES.items()}
+# Uniform scaling variants in 22pt design units; B balances the source glyph's
+# fuller silhouette against the menu-bar neighbors without distorting its shape.
+SCALE_WIDTHS = {"A": 10.5, "B": 12.5, "C": 14.5}
+SCALE_B = "B"
 
 
 def chunk(kind, data):
@@ -85,48 +69,57 @@ def decode_rgba(data):
     return width, height, pixels
 
 
-def _radius(t, grade):
-    scale = _GRADE_SCALE[grade]
-    return (RADIUS_START - RADIUS_TAPER * t ** 0.7) * scale
+@lru_cache(maxsize=1)
+def load_logo_glyph():
+    """Use the existing app-icon extractor so the tray shape is not redrawn."""
+    spec = importlib.util.spec_from_file_location("quote_icon_source", ROOT / "scripts/gen-quote-icon.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.glyph_from_source(LOGO_SOURCE)
 
 
-def _centre(t):
-    u = 1.0 - t
-    x = (u ** 3 * HEAD[0] + 3 * u * u * t * CTRL_1[0]
-         + 3 * u * t * t * CTRL_2[0] + t ** 3 * TAIL[0])
-    y = (u ** 3 * HEAD[1] + 3 * u * u * t * CTRL_1[1]
-         + 3 * u * t * t * CTRL_2[1] + t ** 3 * TAIL[1])
-    return x, y
+def _sample_alpha(pixels, width, height, x, y):
+    x = min(max(x, 0.0), width - 1.0)
+    y = min(max(y, 0.0), height - 1.0)
+    x0, y0 = int(x), int(y)
+    x1, y1 = min(x0 + 1, width - 1), min(y0 + 1, height - 1)
+    fx, fy = x - x0, y - y0
+    a00 = pixels[(y0 * width + x0) * 4 + 3]
+    a10 = pixels[(y0 * width + x1) * 4 + 3]
+    a01 = pixels[(y1 * width + x0) * 4 + 3]
+    a11 = pixels[(y1 * width + x1) * 4 + 3]
+    top = a00 + (a10 - a00) * fx
+    bottom = a01 + (a11 - a01) * fx
+    return top + (bottom - top) * fy
 
 
-def _paint_mark(coverage, size, box_left, unit, grade):
-    """Union of discs along one comma centreline, in the supersampled buffer."""
-    for index in range(SWEEP_SAMPLES + 1):
-        t = index / SWEEP_SAMPLES
-        cx, cy = _centre(t)
-        cx = (box_left + cx) * unit
-        cy = (GROUP_TOP + cy) * unit
-        radius = _radius(t, grade) * unit
-        reach = int(radius) + 1
-        x0, x1 = int(cx) - reach, int(cx) + reach
-        y0, y1 = int(cy) - reach, int(cy) + reach
-        for y in range(max(0, y0), min(size, y1 + 1)):
-            dy = y + 0.5 - cy
-            row = y * size
-            for x in range(max(0, x0), min(size, x1 + 1)):
-                dx = x + 0.5 - cx
-                if dx * dx + dy * dy <= radius * radius:
-                    coverage[row + x] = 1
-
-
-def render(size, color, grade=GRADE_B):
-    """Draw the same 22pt quote geometry at any square pixel size."""
-    scale = size / CANVAS
+def render(size, color, scale=SCALE_B, glyph=None):
+    """Uniformly scale the source logo mask onto a square icon canvas."""
+    if scale not in SCALE_WIDTHS:
+        raise ValueError(f"unknown logo scale: {scale}")
+    glyph = glyph or load_logo_glyph()
+    source_pixels, source_width, source_height, gx, gy, glyph_width, glyph_height = glyph
+    target_width = SCALE_WIDTHS[scale]
+    target_height = target_width * glyph_height / glyph_width
+    left = (CANVAS - target_width) / 2
+    top = (CANVAS - target_height) / 2
     high = size * SUPERSAMPLE
-    unit = SUPERSAMPLE * scale  # high-res pixels per design point
+    design_units_per_sample = CANVAS / high
     coverage = bytearray(high * high)
-    for box_index in range(2):
-        _paint_mark(coverage, high, GROUP_LEFT + box_index * (MARK_BOX_WIDTH + MARK_GAP), unit, grade)
+
+    for y in range(high):
+        py = (y + 0.5) * design_units_per_sample
+        if py < top or py >= top + target_height:
+            continue
+        sy = gy + (py - top) * glyph_height / target_height - 0.5
+        row = y * high
+        for x in range(high):
+            px = (x + 0.5) * design_units_per_sample
+            if px < left or px >= left + target_width:
+                continue
+            sx = gx + (px - left) * glyph_width / target_width - 0.5
+            coverage[row + x] = round(_sample_alpha(source_pixels, source_width, source_height, sx, sy))
+
     pixels = bytearray()
     samples = SUPERSAMPLE * SUPERSAMPLE
     for y in range(size):
@@ -137,7 +130,7 @@ def render(size, color, grade=GRADE_B):
                 row = base_y + dy * high + x * SUPERSAMPLE
                 for dx in range(SUPERSAMPLE):
                     total += coverage[row + dx]
-            pixels.extend((color, color, color, (total * 255 + samples // 2) // samples))
+            pixels.extend((color, color, color, (total + samples // 2) // samples))
     return encode_rgba(size, pixels)
 
 
@@ -151,10 +144,6 @@ def verify(data, size, name):
     if not any(pixels[i + 3] == 255 for i in range(0, len(pixels), 4)):
         raise ValueError(f"{name}: no opaque pixel")
     opaque = sum(1 for i in range(3, len(pixels), 4) if pixels[i] == 255)
-    if size == 44 and not 0.026 <= opaque / (size * size) <= 0.040:
-        # Taskbook §4's 2.6-4.0% ink band is defined on the @2x template; 1x
-        # has too few pixels to contain a fully opaque 1.75pt stroke.
-        raise ValueError(f"{name}: ink {opaque / (size * size):.1%} outside 2.6-4.0%")
     if size in (22, 44):
         if any(tuple(pixels[i:(i + 3)]) != (0, 0, 0) for i in range(0, len(pixels), 4) if pixels[i + 3]):
             raise ValueError(f"{name}: macOS template must be pure black")
@@ -162,10 +151,11 @@ def verify(data, size, name):
 
 
 def main():
+    glyph = load_logo_glyph()
     for name, size, color in [("tray-template.png", 22, 0),
                               ("tray-template@2x.png", 44, 0),
                               ("tray-windows.png", 32, 255)]:
-        data = render(size, color)
+        data = render(size, color, glyph=glyph)
         verify(data, size, name)
         path = ICONS / name
         path.write_bytes(data)

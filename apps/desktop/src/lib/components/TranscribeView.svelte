@@ -20,7 +20,6 @@
     onChooseModel,
     onCancel,
     onExport,
-    onCopy,
     onBack,
   }: {
     /** 本条结果实际使用的模型 id（记录里的），不是顶栏"当前选中"的模型。 */
@@ -38,7 +37,6 @@
     onChooseModel: () => void;
     onCancel: () => void;
     onExport: (format: "txt" | "json") => void;
-    onCopy: () => void;
     onBack: () => void;
   } = $props();
 
@@ -108,6 +106,7 @@
     if (minutes < 60) return t("transcribe.etaMinutes", { minutes });
     return t("transcribe.etaHours", { hours: Math.floor(minutes / 60), minutes: minutes % 60 });
   }
+
 </script>
 
 <section class="content">
@@ -217,9 +216,6 @@
           <button type="button" class="quiet" onclick={onCancel}>{t("common.cancel")}</button>
         {:else}
           <div class="actions">
-            <button type="button" class="act btn-secondary" onclick={onCopy} disabled={segments.length === 0}>
-              <Icon name="copy" size={13} />{t("transcribe.copyAll")}
-            </button>
             <button type="button" class="act btn-secondary" onclick={() => onExport("txt")} disabled={segments.length === 0 || !transcript}>
               <Icon name="download" size={13} />TXT
             </button>
@@ -337,13 +333,6 @@
     color: var(--text-2);
   }
 
-  .actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-top: 16px;
-  }
-
   .kbd {
     font-size: 11.5px;
     color: var(--text-3);
@@ -398,6 +387,13 @@
   .meta b {
     font-weight: 500;
     color: var(--text-2);
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 16px;
   }
 
   .sep {

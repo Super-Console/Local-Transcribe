@@ -11,9 +11,9 @@ const desktopLockPattern = (version) =>
   new RegExp(`name = "voice-to-text-desktop"\\r?\\nversion = "${version.replaceAll('.', '\\.') }"`);
 
 test("release version check accepts LF and CRLF Cargo.lock checkouts", () => {
-  const pattern = desktopLockPattern("1.3.0-beta.1");
-  assert.match('name = "voice-to-text-desktop"\nversion = "1.3.0-beta.1"', pattern);
-  assert.match('name = "voice-to-text-desktop"\r\nversion = "1.3.0-beta.1"', pattern);
+  const pattern = desktopLockPattern("1.4.0-beta.1");
+  assert.match('name = "voice-to-text-desktop"\nversion = "1.4.0-beta.1"', pattern);
+  assert.match('name = "voice-to-text-desktop"\r\nversion = "1.4.0-beta.1"', pattern);
 });
 
 test("macOS content extends into the native title bar", () => {
@@ -29,7 +29,7 @@ test("desktop release versions stay in sync", () => {
   const cargo = read("../src-tauri/Cargo.toml");
   const cargoLock = read("../../../Cargo.lock");
   const npmLock = JSON.parse(read("../package-lock.json"));
-  assert.equal(packageJson.version, "1.3.0-beta.1");
+  assert.equal(packageJson.version, "1.4.0-beta.1");
   assert.equal(tauri.version, packageJson.version);
   assert.match(cargo, new RegExp(`version = "${packageJson.version.replaceAll('.', '\\.') }"`));
   assert.equal(npmLock.version, packageJson.version);
@@ -37,12 +37,20 @@ test("desktop release versions stay in sync", () => {
   assert.match(cargoLock, desktopLockPattern(packageJson.version));
 });
 
-test("sidebar toggle remains outside the collapsible navigation", () => {
+test("sidebar toggle lives in the right toolbar capsule group, not the left header", () => {
+  // 2026-10-25：折叠按钮曾独占左上角，样式（--hairline-2 圆形）与右侧工具栏的
+  // 胶囊按钮不一致；现在它必须进入右侧同一组，复用 icon-btn 的胶囊样式。
   assert.match(page, /const SIDEBAR_COLLAPSE_ENABLED = true/);
-  assert.match(page, /aria-expanded=\{!sidebarCollapsed\}/);
-  assert.match(page, /aria-controls="app-sidebar"/);
-  assert.match(page, /onclick=\{toggleSidebar\}/);
-  assert.match(page, /onmousedown=\{headerPointerDown\}/);
+  assert.match(toolbar, /sidebarCollapsed/);
+  assert.match(toolbar, /onToggleSidebar/);
+  assert.match(toolbar, /class="icon-btn panel-toggle"/);
+  assert.match(toolbar, /aria-expanded=\{!sidebarCollapsed\}/);
+  assert.match(toolbar, /aria-controls="app-sidebar"/);
+  assert.match(toolbar, /onclick=\{onToggleSidebar\}/);
+  // 折叠按钮必须复用与深色/浅色切换相同的胶囊外观，而不是另起一套。
+  const toggleBlock = toolbar.match(/\.icon-btn\.panel-toggle\s*\{[^}]*\}/s)?.[0] ?? "";
+  assert.match(toggleBlock, /var\(--capsule-find\)/);
+  assert.doesNotMatch(toggleBlock, /border-radius:\s*50%/);
   assert.match(sidebar, /id="app-sidebar"/);
   assert.match(sidebar, /inert=\{collapsed\}/);
 });

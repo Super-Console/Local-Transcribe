@@ -87,6 +87,7 @@ try {
   const toolbar = mount(Toolbar, { target, props: {
     model: { id: 'test', family: 'test', displayName: 'Long model name '.repeat(20) },
     onSearchChange: () => {}, onSelectModel: () => {}, onManageModels: () => {},
+    onToggleSidebar: () => {},
   } });
   await settle();
   for (const selector of ['.search', '.theme', '.select']) {

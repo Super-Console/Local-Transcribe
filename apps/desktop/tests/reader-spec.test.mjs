@@ -121,6 +121,21 @@ test('reader specifications: computed styles, media preferences and geometry', {
       check(contrast[key].color==='rgb(20, 20, 19)',`${key}: contrast text token`);
       check(contrast[key].border.includes('0.14'),`${key}: contrast hairline-2`);
     }
+    for(const [width,label] of [[1280,'desktop'],[375,'mobile']]){
+      await send('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:width===375});
+      const rows=await evaluate('await probe.modelMetadata()');
+      check(rows.length===5,`${label}: all four catalog types and one imported model render`);
+      for(const [index,row] of rows.entries()){
+        check(/Estimated memory|预计内存|Geschätzter Speicher|Memoria estimada|Mémoire estimée/.test(row.text),
+          `${label} row ${index}: memory estimate is visible`);
+        check(/Suggested:|建议：|Empfehlung:|Recomendado:|Conseil :/.test(row.text),
+          `${label} row ${index}: usage suggestion is visible`);
+        check(!/License|Lizenz|Licencia|Licence|许可证/.test(row.text),
+          `${label} row ${index}: license is not displayed`);
+        check(row.width>0&&row.height>0,`${label} row ${index}: subtitle has layout`);
+        check(row.scrollWidth<=row.width,`${label} row ${index}: subtitle wraps without horizontal overflow`);
+      }
+    }
     check(history.home.scrollbarWidth==='thin','home scrollbar thin');
     check(history.list.scrollbarWidth==='thin','actual home list scrollbar thin');
     assert.deepEqual(failures,[]);

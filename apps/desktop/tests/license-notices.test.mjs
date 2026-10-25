@@ -59,7 +59,8 @@ test("both READMEs keep the name and icon out of the MIT grant", () => {
 });
 
 test("all seven catalog models were checked against their model cards", () => {
-  const rows = modelLicenses.split("\n").filter((line) => line.startsWith("| ") && line.includes("huggingface.co"));
+  const asrLicenses = modelLicenses.split("## 本地语言模型候选")[0];
+  const rows = asrLicenses.split("\n").filter((line) => line.startsWith("| ") && line.includes("huggingface.co"));
   assert.equal(rows.length, 7, "one row per catalog model");
   assert.match(modelLicenses, /未标注/);
   assert.match(modelLicenses, /apache-2\.0/i);
@@ -74,5 +75,13 @@ test("all seven catalog models were checked against their model cards", () => {
     "csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12",
   ]) {
     assert.match(modelLicenses, new RegExp(repository.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  const languageRows = modelLicenses
+    .split("## 本地语言模型候选")[1]
+    .split("\n")
+    .filter((line) => line.startsWith("| ") && line.includes("huggingface.co"));
+  assert.equal(languageRows.length, 3, "one row per pinned language model");
+  for (const repository of ["Qwen3-4B-GGUF", "Qwen3-8B-GGUF", "Qwen3-1.7B-GGUF"]) {
+    assert.match(modelLicenses, new RegExp(repository));
   }
 });

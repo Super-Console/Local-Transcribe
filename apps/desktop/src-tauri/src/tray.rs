@@ -19,6 +19,14 @@ use crate::lan_host::HostState;
 
 const TRAY_ID: &str = "main";
 
+// The tray crate renders the icon bitmap inside a fixed 18-point box, so the
+// embed must be @2x density on macOS: a 22-pixel bitmap would be upscaled on a
+// Retina menu bar and render soft next to the system icons.
+#[cfg(target_os = "macos")]
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-template@2x.png");
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-windows.png");
+
 static LOCALE: Mutex<String> = Mutex::new(String::new());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,16 +100,10 @@ fn labels(locale: &str) -> Labels {
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     // Embed resources so startup does not depend on the working directory.
     #[cfg(target_os = "macos")]
-    let (bytes, resource): (&[u8], &str) = (
-        include_bytes!("../icons/tray-template.png"),
-        "icons/tray-template.png",
-    );
+    let resource = "icons/tray-template@2x.png";
     #[cfg(not(target_os = "macos"))]
-    let (bytes, resource): (&[u8], &str) = (
-        include_bytes!("../icons/tray-windows.png"),
-        "icons/tray-windows.png",
-    );
-    let icon = tauri::image::Image::from_bytes(bytes).map_err(|error| {
+    let resource = "icons/tray-windows.png";
+    let icon = tauri::image::Image::from_bytes(TRAY_ICON_BYTES).map_err(|error| {
         tauri::Error::AssetNotFound(format!("Unable to decode tray icon {resource}: {error}"))
     })?;
     let menu = build_menu(app, &Status::NotSharing)?;
@@ -265,5 +267,18 @@ mod tests {
         assert_eq!(classify_status(true, false, true), StatusKind::Error);
         assert_eq!(classify_status(true, true, true), StatusKind::Computing);
         assert_eq!(classify_status(true, true, false), StatusKind::Sharing);
+    }
+
+    /// The tray crate renders the bitmap inside a fixed 18-point box. On a 2x
+    /// menu bar that box is 36 physical pixels, so an embedded 22-pixel bitmap
+    /// gets upscaled ~1.6x and the icon renders soft next to the system icons.
+    /// The macOS embed must therefore be the @2x (44x44) bitmap, which the
+    /// system downsamples to 36 physical pixels instead.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn tray_icon_bitmap_is_retina_density() {
+        let icon = tauri::image::Image::from_bytes(super::TRAY_ICON_BYTES)
+            .expect("embedded macOS tray icon decodes");
+        assert_eq!((icon.width(), icon.height()), (44, 44));
     }
 }

@@ -21,10 +21,12 @@ use voice_to_text_core::{
     TranscriptionOptions, inspect_model_directory, transcribe_file_streaming_with_options,
 };
 use voice_to_text_lan::client::LanClient;
+use voice_to_text_lan::llm::LlmRuntime;
 use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, TaskResult};
 
 mod lan;
 mod lan_host;
+mod llm;
 mod model_download;
 mod node_supervisor;
 mod permissions;
@@ -194,6 +196,7 @@ struct LibraryModelSummary {
     /// 与清单 directory 完全相等时带出的语言标签；未知模型为 None。
     languages: Option<String>,
     bytes: u64,
+    estimated_memory_bytes: u64,
     selected: bool,
 }
 
@@ -583,6 +586,7 @@ fn library_summary(
         family: family_label(entry.model.family).to_owned(),
         languages: catalog_languages(&entry.model),
         bytes: entry.bytes,
+        estimated_memory_bytes: model_download::estimated_asr_memory_bytes(entry.bytes),
         selected: selected.as_deref() == Some(entry.model.id.as_str()),
     })
 }
@@ -688,9 +692,11 @@ async fn start_transcription(
     path: String,
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
+    llm_runtime: State<'_, Arc<LlmRuntime>>,
 ) -> Result<JobStatus, String> {
     let input = InputFile::inspect(&path).map_err(|error| error.to_string())?;
     let selected_model = read_selected_model(&app)?;
+    let llm_runtime = Arc::clone(llm_runtime.inner());
     // 局域网派发：prefer_lan 且存在已启用、在线的节点时把任务交给节点执行；
     // 其余模式（以及节点不可达时）回退本机转写。
     let dispatch_node = {
@@ -702,10 +708,19 @@ async fn start_transcription(
         }
     };
     if let Some(node) = dispatch_node {
+        tauri::async_runtime::spawn_blocking({
+            let llm_runtime = Arc::clone(&llm_runtime);
+            move || llm_runtime.unload()
+        })
+        .await
+        .map_err(|error| format!("Could not release the language model: {error}"))?;
         return lan::start_lan_transcription(&app, state.inner(), &input, node, selected_model);
     }
     let model = selected_model
         .ok_or_else(|| "Choose a local Paraformer or SenseVoice model folder first.".to_owned())?;
+    tauri::async_runtime::spawn_blocking(move || llm_runtime.unload())
+        .await
+        .map_err(|error| format!("Could not release the language model: {error}"))?;
     let store = JobStore::new(app_data_dir(&app)?);
     let state = Arc::clone(state.inner());
     let started_at_ms = unix_now_ms();
@@ -922,6 +937,7 @@ fn library_models(app: AppHandle) -> Result<Vec<LibraryModelSummary>, String> {
             family: family_label(entry.model.family).to_owned(),
             languages: catalog_languages(&entry.model),
             bytes: entry.bytes,
+            estimated_memory_bytes: model_download::estimated_asr_memory_bytes(entry.bytes),
             selected: selected.as_deref() == Some(entry.model.id.as_str()),
         })
         .collect())
@@ -953,7 +969,17 @@ fn delete_library_model(id: String, app: AppHandle) -> Result<String, String> {
 
 /// Delete a model that came from the built-in download catalog.
 #[tauri::command]
-fn delete_catalog_model(id: String, app: AppHandle) -> Result<String, String> {
+fn delete_catalog_model(
+    id: String,
+    app: AppHandle,
+    llm_runtime: State<'_, Arc<LlmRuntime>>,
+) -> Result<String, String> {
+    let llm_status = llm_runtime.status();
+    if llm_status.model_id.as_deref() == Some(&id)
+        || llm_status.loading_model_id.as_deref() == Some(&id)
+    {
+        return Err("请先卸载正在使用的大模型，再删除它。".to_owned());
+    }
     let data = app_data_dir(&app)?;
     if let Some(target) = model_download::installed_path(&data, &id)
         && let Some(selected) = read_selected_model(&app)?
@@ -1342,6 +1368,14 @@ fn open_directory(path: String) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("无法打开目录：{error}"))
+}
+
+/// `navigator.clipboard.writeText` 失败时的回退：直接写系统剪贴板（arboard）。
+/// 只用于详情页复制正文，不做读取，避免权限与隐私边界扩大。
+#[tauri::command]
+fn copy_to_clipboard(text: String) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
+    clipboard.set_text(text).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -2129,12 +2163,36 @@ pub fn run() {
                     state.set_notice(Some(format!("自动恢复共享失败：{error}")));
                 }
             });
-            // 界面进程自己的空闲卸载档位；非法值已在读取时回落 120。
-            if let Ok(settings) = lan::read_lan_settings(app.handle())
-                && let Err(error) = voice_to_text_core::set_idle_unload(settings.idle_unload_gui)
-            {
+            // 界面进程内 ASR 与 LLM 共用同一档空闲卸载设置。
+            let idle_unload = lan::read_lan_settings(app.handle())
+                .map(|settings| settings.idle_unload_gui)
+                .unwrap_or_else(|_| voice_to_text_core::idle_unload_seconds());
+            if let Err(error) = voice_to_text_core::set_idle_unload(idle_unload) {
                 eprintln!("idle unload setting ignored: {error}");
             }
+            let data_dir = app_data_dir(app.handle()).map_err(std::io::Error::other)?;
+            voice_to_text_core::set_compute_lock_path(data_dir.join(".compute.lock"))
+                .map_err(std::io::Error::other)?;
+            let llm_runtime = Arc::new(
+                LlmRuntime::new(data_dir.join("llm"), idle_unload)
+                    .map_err(std::io::Error::other)?,
+            );
+            if !app.manage(Arc::clone(&llm_runtime)) {
+                return Err(std::io::Error::other("LLM runtime state already exists").into());
+            }
+            let weak_runtime = Arc::downgrade(&llm_runtime);
+            thread::Builder::new()
+                .name("llm-idle-unload".to_owned())
+                .spawn(move || {
+                    loop {
+                        thread::sleep(std::time::Duration::from_secs(1));
+                        let Some(runtime) = weak_runtime.upgrade() else {
+                            break;
+                        };
+                        runtime.unload_if_idle();
+                    }
+                })
+                .map_err(std::io::Error::other)?;
             // 启动时按用户的保留策略清理历史与任务记录（默认关闭 = 不删任何东西）。
             let handle = app.handle().clone();
             let outcome = apply_retention(&handle);
@@ -2168,6 +2226,7 @@ pub fn run() {
             open_directory,
             open_path,
             third_party_notices_path,
+            copy_to_clipboard,
             clear_app_data,
             list_audio_devices,
             list_audio_apps,
@@ -2175,6 +2234,11 @@ pub fn run() {
             stop_recording,
             recording_status,
             model_runtime,
+            llm::status,
+            llm::load,
+            llm::unload,
+            llm::cancel,
+            llm::start_generation,
             get_retention_policy,
             set_retention_policy,
             set_sidebar_toggle_label,

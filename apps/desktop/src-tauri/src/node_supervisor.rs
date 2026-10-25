@@ -86,6 +86,8 @@ impl NodeSupervisor {
             .arg("cpu")
             .arg("--models-dir")
             .arg(root)
+            .arg("--llm-models-dir")
+            .arg(root.join("llm"))
             .arg("--selected-model")
             .arg(root.join("selected-model.json"))
             .arg("--parent-pid")

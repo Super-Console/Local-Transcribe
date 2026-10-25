@@ -3,6 +3,7 @@
   import { theme } from "$lib/theme.svelte";
   import { t } from "$lib/i18n.svelte";
   import { prettyName } from "$lib/model-names.svelte";
+  import { clickOutside } from "$lib/click-outside";
   import type { LibraryModelSummary, ModelSummary } from "$lib/types";
 
   let {
@@ -13,10 +14,12 @@
     remoteLabel = null,
     remoteSelection = null,
     search = "",
+    sidebarCollapsed = false,
     onSearchChange,
     onSelectModel,
     onSelectRemote,
     onManageModels,
+    onToggleSidebar,
   }: {
     model: ModelSummary | null;
     models?: LibraryModelSummary[];
@@ -29,13 +32,16 @@
     remoteLabel?: string | null;
     remoteSelection?: { nodeId: string; modelId: string } | null;
     search?: string;
+    sidebarCollapsed?: boolean;
     onSearchChange: (value: string) => void;
     onSelectModel: (id: string) => void;
     onSelectRemote?: (nodeId: string, modelId: string) => void;
     onManageModels: () => void;
+    onToggleSidebar: () => void;
   } = $props();
 
   let open = $state(false);
+  let triggerEl = $state<HTMLButtonElement | null>(null);
   // A selected remote model is as "active" as a loaded local model: the dot
   // next to the chip must stay green when the menu closes.
   const remoteDotOn = $derived(remoteSelection !== null);
@@ -63,6 +69,18 @@
 
 <div class="toolbar" role="toolbar" aria-label={t("toolbar.ariaLabel")} tabindex="-1">
   <div class="spacer"></div>
+
+  <button
+    type="button"
+    class="icon-btn panel-toggle"
+    aria-label={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
+    title={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
+    aria-expanded={!sidebarCollapsed}
+    aria-controls="app-sidebar"
+    onclick={onToggleSidebar}
+  >
+    <Icon name="panel" size={16} stroke={1.6} />
+  </button>
 
   <div class="search" class:open={searchOpen}>
     <button
@@ -126,6 +144,7 @@
     <button
       type="button"
       class="select"
+      bind:this={triggerEl}
       aria-haspopup="listbox"
       aria-expanded={open}
       onclick={() => (open = !open)}
@@ -149,7 +168,20 @@
         aria-label={t("common.cancel")}
         onclick={() => (open = false)}
       ></button>
-      <div class="menu" role="listbox" aria-label={t("toolbar.defaultModel")}>
+      <div
+        class="menu"
+        role="listbox"
+        aria-label={t("toolbar.defaultModel")}
+        use:clickOutside={{
+          trigger: () => triggerEl,
+          onOutside: () => (open = false),
+          onEscape: () => {
+            open = false;
+            triggerEl?.focus();
+          },
+          onBlur: () => (open = false),
+        }}
+      >
         <div class="menu-group">{t("toolbar.localSection")}</div>
         {#each models as entry (entry.id)}
           <button
@@ -259,6 +291,25 @@
   .icon-btn.theme {
     border-radius: 999px;
     background: var(--capsule-find);
+  }
+
+  /* 折叠按钮与月亮同组同款：胶囊底色、同尺寸，不再另起一套左上角样式 */
+  .icon-btn.panel-toggle {
+    border-radius: 999px;
+    background: var(--capsule-find);
+  }
+
+  .icon-btn.panel-toggle:hover {
+    background: var(--capsule-find-hover);
+  }
+
+  .icon-btn.panel-toggle:active {
+    transform: translateY(1px);
+  }
+
+  .icon-btn.panel-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .icon-btn.theme:hover {
@@ -442,6 +493,7 @@
 
   .search,
   .icon-btn.theme,
+  .icon-btn.panel-toggle,
   .select {
     box-shadow: inset 0 1px 0 var(--capsule-highlight);
     backdrop-filter: blur(18px) saturate(1.1);

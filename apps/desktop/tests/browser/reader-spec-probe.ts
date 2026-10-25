@@ -16,6 +16,23 @@ document.documentElement.dataset.glass = 'on';
 const settle = async () => { await tick(); await new Promise(r => setTimeout(r, 350)); };
 const props = { jobId: 'synthetic-reader-spec', initialFollow: false, onBack: () => {},
   segments: Array.from({length: 70}, (_, i) => ({startMs:i,endMs:i+1,text:`Synthetic text ${i}`})) };
+const modelProps = {
+  models:[{id:'imported',displayName:'Synthetic imported',family:'Paraformer',languages:'zh',bytes:120_000_000,
+    estimatedMemoryBytes:472_435_456,selected:false}],
+  catalog:[
+    {id:'asr-quality',name:'Synthetic accuracy model',directory:'quality',family:'ASR',kind:'asr' as const,tier:'quality' as const,
+      languages:'zh',bytes:120_000_000,estimatedMemoryBytes:472_435_456,installed:false},
+    {id:'asr-speed',name:'Synthetic speed model',directory:'speed',family:'ASR',kind:'asr' as const,tier:'speed' as const,
+      languages:'zh/en',bytes:80_000_000,estimatedMemoryBytes:404_435_456,installed:true},
+    {id:'punctuation-zh-en',name:'Synthetic punctuation model',directory:'punctuation',family:'Punctuation',
+      kind:'punctuation' as const,tier:'punctuation' as const,languages:'zh/en',bytes:29_000_000,
+      estimatedMemoryBytes:317_735_456,
+      installed:true},
+    {id:'qwen3-4b',name:'Qwen3-4B',directory:'Qwen3-4B.gguf',family:'Qwen3',kind:'llm' as const,tier:'language' as const,
+      languages:'zh/multilingual',bytes:2_497_280_256,estimatedMemoryBytes:3_926_906_688,installed:true},
+  ],
+  downloads:{},busy:false,onSelect:()=>{},onDelete:()=>{},onDeleteCatalog:()=>{},onDownload:()=>{},onCancelDownload:()=>{},
+};
 const css = (selector: string, pseudo?: string) => {
   const el = target.querySelector<HTMLElement>(selector)!;
   if(!el) throw new Error(`Missing probe element: ${selector}`);
@@ -126,7 +143,7 @@ export async function history() {
 export async function toolbar() {
   if(instance) await unmount(instance);
   instance=mount(Toolbar,{target,props:{model:{id:'test',family:'test',displayName:'Long model '.repeat(50)},
-    onSearchChange:()=>{},onSelectModel:()=>{},onManageModels:()=>{}}});await settle();
+    onSearchChange:()=>{},onSelectModel:()=>{},onManageModels:()=>{},onToggleSidebar:()=>{}}});await settle();
   const normal={search:css('.search'),moon:css('.theme'),model:css('.select')};
   const arrow=css('.select svg');
   const name=target.querySelector<HTMLElement>('.name')!;
@@ -176,10 +193,7 @@ export async function buttons() {
   };
   instance=mount(RecordView,{target,props:{onRecorded:noop}});await settle();inspect('record');await unmount(instance);
   instance=mount(LanView,{target,props:{settings:null,onSettingsSaved:noop}});await settle();inspect('lan');await unmount(instance);
-  instance=mount(ModelView,{target,props:{models:[{id:'test',displayName:'Synthetic',family:'test',bytes:1,selected:false}],
-    catalog:[{id:'available',name:'Synthetic available',directory:'test',family:'test',kind:'asr',tier:'quality',languages:'en',bytes:1,installed:false},
-      {id:'installed',name:'Synthetic installed',directory:'test2',family:'test',kind:'asr',tier:'speed',languages:'en',bytes:1,installed:true}],
-    downloads:{},busy:false,onSelect:noop,onDelete:noop,onDeleteCatalog:noop,onDownload:noop,onCancelDownload:noop}});
+  instance=mount(ModelView,{target,props:modelProps});
   await settle();inspect('model');await unmount(instance);
   instance=mount(SettingsView,{target,props:{model:null,storage:null,service:null,appVersion:'test',retention:null,lanMode:null,lanSettings:null,
     onLanSettingsChange:async()=>{},onOpenLibrary:noop,onOpenHistory:noop,onOpenPath:noop,onOpenNotices:noop,onGoModels:noop,onGoLan:noop,onRefreshService:noop,onRetentionChange:noop}});
@@ -197,4 +211,17 @@ export async function buttons() {
     transcript:{schemaVersion:'1',jobId:'button-spec-result',sourceFileName:'Synthetic',modelId:'test',engine:'test',text:'Synthetic'}}});
   await settle();inspect('transcribe-result');
   return pages;
+}
+
+export async function modelMetadata() {
+  instance=mount(ModelView,{target,props:modelProps});
+  await settle();
+  const rows=[...target.querySelectorAll<HTMLElement>('.row')].map(row=>{
+    const meta=row.querySelector<HTMLElement>('.meta')!;
+    const rect=meta.getBoundingClientRect();
+    return {text:meta.innerText,width:meta.clientWidth,scrollWidth:meta.scrollWidth,height:rect.height};
+  });
+  await unmount(instance);
+  target.replaceChildren();
+  return rows;
 }

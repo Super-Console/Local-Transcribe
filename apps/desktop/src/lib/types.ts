@@ -29,6 +29,7 @@ export type LibraryModelSummary = {
   family: string;
   languages?: string | null;
   bytes: number;
+  estimatedMemoryBytes: number;
   selected: boolean;
 };
 
@@ -37,11 +38,12 @@ export type CatalogModel = {
   name: string;
   directory: string;
   family: string;
-  kind: "asr" | "punctuation";
-  tier: "quality" | "speed" | "punctuation";
+  kind: "asr" | "punctuation" | "llm";
+  tier: "quality" | "speed" | "punctuation" | "language";
   languages: string;
   bytes: number;
   installed: boolean;
+  estimatedMemoryBytes: number;
 };
 
 export type ModelDownloadEvent = {

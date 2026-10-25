@@ -1,6 +1,6 @@
 [package]
 name = "voice-to-text-desktop"
-version = "1.3.0-beta.1"
+version = "1.4.0-beta.1"
 description = "Local Transcribe — local-first desktop transcription."
 authors = ["TimmySheep"]
 edition = "2024"
@@ -37,6 +37,12 @@ hound = "3"
 # 官方模型下载：流式读取 + 系统 TLS（macOS Security.framework / Windows SChannel，
 # 不需要交叉编译 C 依赖）。仅本机直连 Hugging Face 及其镜像。
 reqwest = { version = "0.13", default-features = false, features = ["stream", "native-tls"] }
+arboard = { version = "3", default-features = false }
+sha2 = "=0.10.9"
+
+# 断点续传测试：本地 HTTP 服务器模拟 206/Range 与中途断流（仅测试使用）。
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "=0.2.191"

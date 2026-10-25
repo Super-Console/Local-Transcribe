@@ -9,7 +9,6 @@
 
   import AppSidebar from "$lib/components/AppSidebar.svelte";
   import AppToolbar from "$lib/components/AppToolbar.svelte";
-  import Icon from "$lib/components/Icon.svelte";
   import TranscribeView from "$lib/components/TranscribeView.svelte";
   import HistoryView from "$lib/components/HistoryView.svelte";
   import ModelView from "$lib/components/ModelView.svelte";
@@ -128,10 +127,6 @@
             : null;
         })()
       : null,
-  );
-
-  const fullText = $derived(
-    transcript?.text ?? segments.map((segment) => segment.text).join("\n"),
   );
 
   /** 描述"这条结果"的模型：以记录里的 model_id 为准，取不到才是未知。 */
@@ -436,15 +431,6 @@
       await invoke("cancel_transcription", { jobId: job.jobId });
     } catch (issue) {
       error = String(issue);
-    }
-  }
-
-  async function copyAll() {
-    if (!fullText) return;
-    try {
-      await navigator.clipboard.writeText(fullText);
-    } catch (issue) {
-      error = t("error.copyFailed", { error: String(issue) });
     }
   }
 
@@ -806,17 +792,7 @@
 
 <div class="app" class:collapsed={sidebarCollapsed}>
   <header class="window-header" role="presentation" onmousedown={headerPointerDown}>
-    <div class="sidebar-header">
-      <button
-        type="button"
-        class="sidebar-toggle"
-        aria-label={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
-        title={sidebarCollapsed ? t("nav.expandTitle") : t("nav.collapseTitle")}
-        aria-expanded={!sidebarCollapsed}
-        aria-controls="app-sidebar"
-        onclick={toggleSidebar}
-      ><Icon name="panel" size={18} /></button>
-    </div>
+    <div class="sidebar-header"></div>
     <div class="header-tools">
     <AppToolbar
       {model}
@@ -830,6 +806,8 @@
       onSelectModel={selectModel}
       onSelectRemote={selectRemoteModel}
       onManageModels={() => (view = "model")}
+      {sidebarCollapsed}
+      onToggleSidebar={toggleSidebar}
     />
     </div>
   </header>
@@ -869,7 +847,6 @@
           onChooseModel={chooseModel}
           onCancel={cancelJob}
           onExport={exportResult}
-          onCopy={copyAll}
           onBack={() => {
             job = null;
             transcript = null;
@@ -973,21 +950,6 @@
     background: var(--bg);
     border-right-color: transparent;
   }
-
-  .sidebar-toggle {
-    width: 30px;
-    height: 30px;
-    flex: none;
-    display: grid;
-    place-items: center;
-    border: 1px solid var(--hairline-2);
-    border-radius: 50%;
-    background: var(--hover);
-    color: var(--text-2);
-    cursor: default;
-  }
-
-  .sidebar-toggle:hover { background: var(--selected); }
 
   .header-tools { flex: 1; min-width: 0; }
 

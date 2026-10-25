@@ -1,9 +1,4 @@
-"""Render the A/B/C weight comparison sheet; evidence only, not app artwork.
-
-Taskbook "菜单栏引号图标（取中）" §3: two rows (dark #3B4CB8-ish and light
-#F2F0EB), each showing grade A/B/C at true 22pt size plus a 4x magnified copy.
-Pure stdlib, deterministic, idempotent.
-"""
+"""Render source-logo size variants on dark and light backgrounds; evidence only."""
 from pathlib import Path
 import importlib.util
 import struct
@@ -21,7 +16,7 @@ LIGHT = (242, 240, 235)  # #F2F0EB
 MAGNIFY = 4
 PAD = 24
 GAP = 16
-GRADES = ("A", "B", "C")
+SCALES = ("A", "B", "C")  # small / selected / large uniform sizes
 
 
 def chunk(kind, data):
@@ -50,8 +45,9 @@ def stamp(canvas, cw, ch, icon, size, ox, oy, color):
 
 
 def main():
-    icons = {grade: gen.render(22, 0, grade) for grade in GRADES}
-    magnified = {grade: gen.render(22 * MAGNIFY, 0, grade) for grade in GRADES}
+    glyph = gen.load_logo_glyph()
+    icons = {scale: gen.render(22, 0, scale, glyph) for scale in SCALES}
+    magnified = {scale: gen.render(22 * MAGNIFY, 0, scale, glyph) for scale in SCALES}
 
     cell = 22
     mag_cell = cell * MAGNIFY
@@ -65,18 +61,18 @@ def main():
         for y in range(top, top + row_height):
             for x in range(PAD, width - PAD):
                 canvas[(y * width + x) * 3:(y * width + x) * 3 + 3] = bytes(background)
-        for index, grade in enumerate(GRADES):
+        for index, scale in enumerate(SCALES):
             ox = PAD + index * (cell + GAP)
             oy = top + (row_height - cell) // 2
-            stamp(canvas, width, height, icons[grade], cell, ox, oy, text)
+            stamp(canvas, width, height, icons[scale], cell, ox, oy, text)
             mag_ox = PAD + cell * 3 + GAP * 2 + GAP + index * (mag_cell + GAP)
-            stamp(canvas, width, height, magnified[grade], mag_cell, mag_ox, top, text)
+            stamp(canvas, width, height, magnified[scale], mag_cell, mag_ox, top, text)
 
     data = encode_rgb(width, height, canvas)
     OUT.write_bytes(data)
     if data[:8] != b"\x89PNG\r\n\x1a\n" or struct.unpack(">II", data[16:24]) != (width, height):
         raise ValueError("comparison sheet failed PNG round-trip")
-    print(f"{OUT.name}: {width}x{height}; grades {GRADES}; dark {DARK} / light {LIGHT}")
+    print(f"{OUT.name}: {width}x{height}; scales {SCALES}; dark {DARK} / light {LIGHT}")
 
 
 if __name__ == "__main__":
