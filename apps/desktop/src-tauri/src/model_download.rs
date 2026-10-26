@@ -228,6 +228,17 @@ pub fn languages_for_directory(directory: &str) -> Option<&'static str> {
         .map(|entry| entry.languages)
 }
 
+fn should_select_downloaded_asr(
+    preferred_model_id: Option<&str>,
+    has_selected_model: bool,
+    downloaded_model_id: &str,
+) -> bool {
+    match preferred_model_id {
+        Some(preferred) => preferred == downloaded_model_id,
+        None => !has_selected_model,
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogState {
@@ -555,7 +566,12 @@ async fn run(
             inspect_model_directory(&temp)?;
             let library = ModelLibrary::new(app_data);
             let imported = library.import(&temp)?;
-            if crate::read_selected_model(app)?.is_none() {
+            let preferred = crate::onboarding::read_state(app_data)?.preferred_asr_model_id;
+            if should_select_downloaded_asr(
+                preferred.as_deref(),
+                crate::read_selected_model(app)?.is_some(),
+                &imported.model.id,
+            ) {
                 crate::save_selected_model(app, &imported.model)?;
             }
             move_to_trash(&temp);
@@ -852,9 +868,33 @@ pub fn cancel_model_download() -> Result<(), String> {
 mod tests {
     use super::{
         CATALOG, CatalogKind, CatalogTier, delete_installed_to, entry_by_id, installed_path,
-        punctuation_model_path, states, verify_llm_file,
+        punctuation_model_path, should_select_downloaded_asr, states, verify_llm_file,
     };
     use voice_to_text_lan::llm::{LLM_MODELS, model_spec};
+
+    #[test]
+    fn downloading_a_different_model_does_not_override_an_explicit_uninstalled_preference() {
+        assert!(!should_select_downloaded_asr(
+            Some("recommended-model"),
+            false,
+            "another-model"
+        ));
+        assert!(should_select_downloaded_asr(
+            Some("downloaded-model"),
+            false,
+            "downloaded-model"
+        ));
+        assert!(!should_select_downloaded_asr(
+            None,
+            true,
+            "downloaded-model"
+        ));
+        assert!(should_select_downloaded_asr(
+            None,
+            false,
+            "downloaded-model"
+        ));
+    }
 
     #[test]
     fn catalog_ids_are_unique() {

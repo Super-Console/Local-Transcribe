@@ -97,6 +97,11 @@ export type StorageSummary = {
   dataPath: string;
 };
 
+export type OnboardingState = {
+  onboarding_completed: boolean;
+  preferred_asr_model_id: string | null;
+};
+
 /** 模型运行时状态：loadedModelId 非空才代表模型真的驻留内存。 */
 export type ModelRuntime = {
   loadedModelId?: string | null;

@@ -77,6 +77,27 @@ mod native {
         }
     }
 
+    pub(super) fn request_microphone_access() -> Result<bool, String> {
+        use std::sync::mpsc;
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let callback: block2::RcBlock<dyn Fn(objc2::runtime::Bool)> =
+            block2::RcBlock::new(move |granted: objc2::runtime::Bool| -> () {
+                let _ = sender.send(granted.as_bool());
+            });
+        unsafe {
+            let media: *const AnyObject = AVMediaTypeAudio;
+            let _: () = msg_send![
+                class!(AVCaptureDevice),
+                requestAccessForMediaType: media,
+                completionHandler: &*callback
+            ];
+        }
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(90))
+            .map_err(|_| "The microphone permission request timed out.".to_owned())
+    }
+
     pub(super) fn screen_capture_granted() -> bool {
         unsafe { CGPreflightScreenCaptureAccess() }
     }
@@ -106,6 +127,23 @@ pub(crate) fn open_pane(pane: &str) -> Result<(), String> {
     {
         let _ = pane;
         Err("Privacy panes are managed by macOS.".to_owned())
+    }
+}
+
+/// Ask macOS for microphone permission only after the user presses Allow.
+pub(crate) fn request_microphone() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let current = native::microphone_status();
+        if current != 0 {
+            return Ok(microphone_label(current));
+        }
+        native::request_microphone_access()
+            .map(|granted| if granted { "authorized" } else { "denied" }.to_owned())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok("unknown".to_owned())
     }
 }
 

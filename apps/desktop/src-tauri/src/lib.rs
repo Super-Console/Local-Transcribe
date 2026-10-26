@@ -29,6 +29,7 @@ mod lan_host;
 mod llm;
 mod model_download;
 mod node_supervisor;
+mod onboarding;
 mod permissions;
 mod recording;
 #[cfg(windows)]
@@ -684,6 +685,10 @@ fn get_selected_model(app: AppHandle) -> Result<Option<ModelSummary>, String> {
 fn set_selected_model(path: String, app: AppHandle) -> Result<ModelSummary, String> {
     let model = inspect_model_directory(path)?;
     save_selected_model(&app, &model)?;
+    let data_dir = app_data_dir(&app)?;
+    let mut state = onboarding::read_state(&data_dir)?;
+    state.preferred_asr_model_id = Some(model.id.clone());
+    onboarding::write_state(&data_dir, &state)?;
     Ok(summarize_model(&model))
 }
 
@@ -696,6 +701,7 @@ async fn start_transcription(
 ) -> Result<JobStatus, String> {
     let input = InputFile::inspect(&path).map_err(|error| error.to_string())?;
     let selected_model = read_selected_model(&app)?;
+    let data_dir = app_data_dir(&app)?;
     let llm_runtime = Arc::clone(llm_runtime.inner());
     // 局域网派发：prefer_lan 且存在已启用、在线的节点时把任务交给节点执行；
     // 其余模式（以及节点不可达时）回退本机转写。
@@ -716,12 +722,17 @@ async fn start_transcription(
         .map_err(|error| format!("Could not release the language model: {error}"))?;
         return lan::start_lan_transcription(&app, state.inner(), &input, node, selected_model);
     }
+    if let Some(preferred_id) = onboarding::read_state(&data_dir)?.preferred_asr_model_id
+        && selected_model.as_ref().map(|model| model.id.as_str()) != Some(preferred_id.as_str())
+    {
+        return Err("The preferred ASR model is not installed yet. Download it from the Models page before transcribing.".to_owned());
+    }
     let model = selected_model
         .ok_or_else(|| "Choose a local Paraformer or SenseVoice model folder first.".to_owned())?;
     tauri::async_runtime::spawn_blocking(move || llm_runtime.unload())
         .await
         .map_err(|error| format!("Could not release the language model: {error}"))?;
-    let store = JobStore::new(app_data_dir(&app)?);
+    let store = JobStore::new(data_dir);
     let state = Arc::clone(state.inner());
     let started_at_ms = unix_now_ms();
     {
@@ -926,8 +937,11 @@ fn library_directory(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn library_models(app: AppHandle) -> Result<Vec<LibraryModelSummary>, String> {
-    let library = ModelLibrary::new(app_data_dir(&app)?);
-    let selected = read_selected_model(&app)?.map(|model| model.id);
+    let data_dir = app_data_dir(&app)?;
+    let library = ModelLibrary::new(&data_dir);
+    let selected = onboarding::read_state(&data_dir)?
+        .preferred_asr_model_id
+        .or(read_selected_model(&app)?.map(|model| model.id));
     Ok(library
         .list()?
         .into_iter()
@@ -945,16 +959,26 @@ fn library_models(app: AppHandle) -> Result<Vec<LibraryModelSummary>, String> {
 
 #[tauri::command]
 fn select_library_model(id: String, app: AppHandle) -> Result<LibraryModelSummary, String> {
-    let library = ModelLibrary::new(app_data_dir(&app)?);
+    let data_dir = app_data_dir(&app)?;
+    let library = ModelLibrary::new(&data_dir);
     let path = library.path_for(&id)?;
     let model = inspect_model_directory(&path)?;
     save_selected_model(&app, &model)?;
+    let mut onboarding_state = onboarding::read_state(&data_dir)?;
+    onboarding_state.preferred_asr_model_id = Some(id);
+    onboarding::write_state(&data_dir, &onboarding_state)?;
     let bytes = std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
     library_summary(&app, voice_to_text_core::LibraryModel { model, bytes })
 }
 
 #[tauri::command]
 fn delete_library_model(id: String, app: AppHandle) -> Result<String, String> {
+    let data_dir = app_data_dir(&app)?;
+    let mut onboarding_state = onboarding::read_state(&data_dir)?;
+    if onboarding_state.preferred_asr_model_id.as_deref() == Some(id.as_str()) {
+        onboarding_state.preferred_asr_model_id = None;
+        onboarding::write_state(&data_dir, &onboarding_state)?;
+    }
     if let Some(selected) = read_selected_model(&app)?
         && selected.id == id
     {
@@ -962,7 +986,7 @@ fn delete_library_model(id: String, app: AppHandle) -> Result<String, String> {
         // a model until one is chosen again.
         clear_selected_model(&app)?;
     }
-    let library = ModelLibrary::new(app_data_dir(&app)?);
+    let library = ModelLibrary::new(data_dir);
     let moved = library.delete(&id)?;
     Ok(moved.to_string_lossy().into_owned())
 }
@@ -981,6 +1005,11 @@ fn delete_catalog_model(
         return Err("请先卸载正在使用的大模型，再删除它。".to_owned());
     }
     let data = app_data_dir(&app)?;
+    let mut onboarding_state = onboarding::read_state(&data)?;
+    if onboarding_state.preferred_asr_model_id.as_deref() == Some(id.as_str()) {
+        onboarding_state.preferred_asr_model_id = None;
+        onboarding::write_state(&data, &onboarding_state)?;
+    }
     if let Some(target) = model_download::installed_path(&data, &id)
         && let Some(selected) = read_selected_model(&app)?
         && (selected.directory == target || selected.directory.starts_with(&target))
@@ -1043,6 +1072,84 @@ fn storage_summary(app: AppHandle) -> Result<StorageSummary, String> {
         logs_bytes,
         data_path: data_dir.to_string_lossy().into_owned(),
     })
+}
+
+#[tauri::command]
+fn get_onboarding_platform() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "macos",
+        "windows" => "windows",
+        _ => "other",
+    }
+}
+
+#[tauri::command]
+fn get_onboarding_state(app: AppHandle) -> Result<onboarding::OnboardingState, String> {
+    onboarding::read_state(&app_data_dir(&app)?)
+}
+
+#[tauri::command]
+fn get_onboarding_info(app: AppHandle) -> Result<onboarding::OnboardingInfo, String> {
+    let data_dir = app_data_dir(&app)?;
+    let library = ModelLibrary::new(&data_dir);
+    let logs_dir = app
+        .path()
+        .app_log_dir()
+        .unwrap_or_else(|_| data_dir.join("logs"));
+    let mut model_bytes = model_download::CATALOG
+        .iter()
+        .filter(|entry| entry.kind == model_download::CatalogKind::Asr)
+        .map(|entry| (entry.id.to_owned(), entry.bytes))
+        .collect::<HashMap<_, _>>();
+    for entry in voice_to_text_lan::llm::LLM_MODELS {
+        model_bytes.insert(entry.id.to_owned(), entry.bytes);
+    }
+    Ok(onboarding::OnboardingInfo {
+        hardware: onboarding::detect_hardware(&data_dir),
+        data_path: data_dir.to_string_lossy().into_owned(),
+        model_path: library.directory().to_string_lossy().into_owned(),
+        logs_path: logs_dir.to_string_lossy().into_owned(),
+        model_bytes,
+    })
+}
+
+#[tauri::command]
+fn begin_onboarding(app: AppHandle) -> Result<(), String> {
+    let data_dir = app_data_dir(&app)?;
+    let mut state = onboarding::read_state(&data_dir)?;
+    state.onboarding_completed = false;
+    onboarding::write_state(&data_dir, &state)
+}
+
+#[tauri::command]
+fn complete_onboarding(app: AppHandle) -> Result<(), String> {
+    let data_dir = app_data_dir(&app)?;
+    let mut state = onboarding::read_state(&data_dir)?;
+    state.onboarding_completed = true;
+    onboarding::write_state(&data_dir, &state)
+}
+
+#[tauri::command]
+fn set_default_asr_model(id: String, app: AppHandle) -> Result<(), String> {
+    let data_dir = app_data_dir(&app)?;
+    let library = ModelLibrary::new(&data_dir);
+    let installed = library
+        .list()?
+        .into_iter()
+        .find(|entry| entry.model.id == id);
+    if let Some(entry) = installed {
+        save_selected_model(&app, &entry.model)?;
+    } else if !model_download::CATALOG
+        .iter()
+        .any(|entry| entry.id == id && entry.kind == model_download::CatalogKind::Asr)
+    {
+        return Err("Choose an ASR model from the built-in catalog.".to_owned());
+    } else {
+        clear_selected_model(&app)?;
+    }
+    let mut state = onboarding::read_state(&data_dir)?;
+    state.preferred_asr_model_id = Some(id);
+    onboarding::write_state(&data_dir, &state)
 }
 
 /// 模型运行时状态：绿点只表示模型确实驻留内存（任务书：空闲 120 秒卸载）。
@@ -1824,6 +1931,16 @@ fn app_permissions() -> permissions::AppPermissionStatus {
 }
 
 #[tauri::command]
+fn request_microphone_permission() -> Result<String, String> {
+    permissions::request_microphone()
+}
+
+#[tauri::command]
+fn request_local_network_permission() -> String {
+    lan::request_local_network_access().to_owned()
+}
+
+#[tauri::command]
 fn open_privacy_settings(pane: String) -> Result<(), String> {
     permissions::open_pane(&pane)
 }
@@ -2223,6 +2340,14 @@ pub fn run() {
             select_library_model,
             delete_library_model,
             storage_summary,
+            get_onboarding_state,
+            get_onboarding_info,
+            get_onboarding_platform,
+            begin_onboarding,
+            complete_onboarding,
+            set_default_asr_model,
+            request_microphone_permission,
+            request_local_network_permission,
             open_directory,
             open_path,
             third_party_notices_path,

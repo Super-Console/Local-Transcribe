@@ -364,6 +364,22 @@ pub(crate) fn diagnostics(app: &AppHandle) -> LanDiagnostics {
     }
 }
 
+/// Trigger the macOS Local Network prompt only on an explicit user action.
+pub(crate) fn request_local_network_access() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        match voice_to_text_lan::client::local_network_access_detail().0 {
+            LocalNetworkAccess::Granted => "granted",
+            LocalNetworkAccess::Denied => "denied",
+            LocalNetworkAccess::NoNetwork => "no_network",
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "unknown"
+    }
+}
+
 /// 打开 macOS「隐私与安全性 → 本地网络」设置页。
 pub(crate) fn open_local_network_settings() -> Result<(), String> {
     #[cfg(target_os = "macos")]

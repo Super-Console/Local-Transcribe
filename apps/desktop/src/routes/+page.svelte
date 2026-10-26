@@ -15,6 +15,7 @@
   import SettingsView from "$lib/components/SettingsView.svelte";
   import RecordView from "$lib/components/RecordView.svelte";
   import LanView from "$lib/components/LanView.svelte";
+  import OnboardingView from "$lib/components/OnboardingView.svelte";
   import { t } from "$lib/i18n.svelte";
   import { ensureModelNames, prettyName } from "$lib/model-names.svelte";
   import type {
@@ -27,6 +28,7 @@
     ModelDownloadEvent,
     ModelRuntime,
     ModelSummary,
+    OnboardingState,
     RecordedTrack,
     RetentionPolicy,
     SearchHit,
@@ -44,6 +46,13 @@
   const OPEN_EVENT = "voice-to-text:open-media";
 
   const tauriAvailable = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+  let onboardingStatus = $state<"checking" | "open" | "closed">(tauriAvailable ? "checking" : "closed");
+  let onboardingPlatform = $state<"macos" | "windows" | "other">("other");
+  let onboardingState = $state<OnboardingState>({
+    onboarding_completed: false,
+    preferred_asr_model_id: null,
+  });
 
   const MEDIA_EXTENSIONS = [
     "wav", "wave", "aiff", "aif", "caf", "mp3", "mp2", "mp1", "m4a",
@@ -80,6 +89,21 @@
   let libraryBusy = $state(false);
   let catalog = $state<CatalogModel[]>([]);
   let modelDownloads = $state<Record<string, ModelDownloadEvent>>({});
+  const defaultAsrModelId = $derived(
+    onboardingState.preferred_asr_model_id ?? libraryModels.find((entry) => entry.selected)?.id ?? null,
+  );
+  const defaultAsrDisplayName = $derived(
+    catalog.find((entry) => entry.id === defaultAsrModelId)?.name ??
+      libraryModels.find((entry) => entry.id === defaultAsrModelId)?.displayName ??
+      model?.displayName ??
+      null,
+  );
+  const defaultAsrInstalled = $derived(
+    defaultAsrModelId !== null &&
+      (model?.id === defaultAsrModelId ||
+        libraryModels.some((entry) => entry.id === defaultAsrModelId) ||
+        catalog.some((entry) => entry.id === defaultAsrModelId && entry.installed)),
+  );
   let storage = $state<StorageSummary | null>(null);
   let service = $state<ServiceStatus | null>(null);
 
@@ -258,11 +282,11 @@
     }
   }
 
-  async function refreshLanSettings() {
+  async function refreshLanSettings(probeNodes = false) {
     if (!tauriAvailable) return;
     try {
       lanSettings = await invoke<LanSettings>("get_lan_settings");
-      await refreshLanGroups(lanSettings);
+      if (probeNodes) await refreshLanGroups(lanSettings);
     } catch {
       /* 浏览器预览没有 Tauri 后端 */
     }
@@ -343,10 +367,10 @@
     if (next === "settings") {
       void refreshService();
       void refreshLibrary();
-      void refreshLanSettings();
+      void refreshLanSettings(false);
     }
-    if (next === "lan") void refreshLanSettings();
-    if (next === "home") void refreshLanSettings();
+    if (next === "lan") void refreshLanSettings(true);
+    if (next === "home") void refreshLanSettings(false);
     if (next === "model") {
       void refreshLibrary();
       void refreshCatalog();
@@ -573,6 +597,33 @@
     }
   }
 
+  async function restartOnboarding() {
+    error = "";
+    try {
+      await invoke("begin_onboarding");
+      onboardingState = { ...onboardingState, onboarding_completed: false };
+      onboardingStatus = "open";
+    } catch (issue) {
+      error = String(issue);
+    }
+  }
+
+  async function finishOnboarding(importFirst: boolean, preferredAsrModelId: string | null) {
+    onboardingState = {
+      ...onboardingState,
+      onboarding_completed: true,
+      preferred_asr_model_id: preferredAsrModelId,
+    };
+    onboardingStatus = "closed";
+    await Promise.all([refreshLibrary(), refreshCatalog()]);
+    try {
+      model = await invoke<ModelSummary | null>("get_selected_model");
+    } catch {
+      /* Onboarding is complete even if the toolbar refresh is delayed. */
+    }
+    if (importFirst) await pickFile();
+  }
+
   async function deleteCatalogModel(entry: CatalogModel) {
     const approved = await confirm(t("dialog.deleteModelMessage", { name: entry.name }), {
       title: t("dialog.deleteModelTitle"),
@@ -586,6 +637,7 @@
     try {
       await invoke("delete_catalog_model", { id: entry.id });
       await Promise.all([refreshLibrary(), refreshCatalog(), refreshModel()]);
+      onboardingState = await invoke<OnboardingState>("get_onboarding_state");
     } catch (issue) {
       error = String(issue);
     } finally {
@@ -609,6 +661,7 @@
     try {
       await invoke("delete_library_model", { id: target.id });
       await Promise.all([refreshLibrary(), refreshModel()]);
+      onboardingState = await invoke<OnboardingState>("get_onboarding_state");
     } catch (issue) {
       error = String(issue);
     } finally {
@@ -693,9 +746,25 @@
         /* 浏览器预览没有 Tauri 后端 */
       });
     void refreshRetention();
-    void refreshLanSettings();
+    void refreshLanSettings(false);
     void refreshLibrary();
     void refreshCatalog();
+
+    if (tauriAvailable) {
+      void Promise.all([
+        invoke<OnboardingState>("get_onboarding_state"),
+        invoke<string>("get_onboarding_platform"),
+      ])
+        .then(([state, platform]) => {
+          onboardingState = state;
+          onboardingPlatform = platform === "macos" || platform === "windows" ? platform : "other";
+          onboardingStatus = state.onboarding_completed ? "closed" : "open";
+        })
+        .catch(() => {
+          // A malformed/missing state must not block access to the app.
+          onboardingStatus = "closed";
+        });
+    }
 
     const onKeydown = (event: KeyboardEvent) => {
       if (SIDEBAR_COLLAPSE_ENABLED && (event.metaKey || event.ctrlKey) && event.key === "\\") {
@@ -790,6 +859,22 @@
   });
 </script>
 
+{#if onboardingStatus === "checking"}
+  <div class="onboarding-check" aria-busy="true" aria-label="Local Transcribe">
+    <span>Local Transcribe</span>
+  </div>
+{:else if onboardingStatus === "open"}
+  <OnboardingView
+    platform={onboardingPlatform}
+    preferredAsrModelId={defaultAsrModelId}
+    installedModels={libraryModels}
+    {catalog}
+    downloads={modelDownloads}
+    onDownload={downloadModel}
+    onCancelDownload={cancelModelDownload}
+    onComplete={finishOnboarding}
+  />
+{:else}
 <div class="app" class:collapsed={sidebarCollapsed}>
   <header class="window-header" role="presentation" onmousedown={headerPointerDown}>
     <div class="sidebar-header"></div>
@@ -878,6 +963,7 @@
       <ModelView
         models={libraryModels}
         {catalog}
+        preferredAsrModelId={defaultAsrModelId}
         downloads={modelDownloads}
         busy={libraryBusy}
         onSelect={selectModel}
@@ -894,6 +980,8 @@
     {:else}
       <SettingsView
         {model}
+        preferredAsrDisplayName={defaultAsrDisplayName}
+        preferredAsrInstalled={defaultAsrInstalled}
         {storage}
         {service}
         {appVersion}
@@ -909,13 +997,26 @@
         onRetentionChange={changeRetention}
         onGoModels={() => (view = "model")}
         onGoLan={() => (view = "lan")}
+        onRerunOnboarding={restartOnboarding}
       />
     {/if}
   </main>
   </div>
 </div>
+{/if}
 
 <style>
+  .onboarding-check {
+    display: grid;
+    width: 100%;
+    height: 100vh;
+    place-items: center;
+    background: var(--bg);
+    color: var(--text-2);
+    font-family: var(--font-display);
+    font-size: 20px;
+  }
+
   .app {
     --sidebar-width: 204px;
     display: flex;

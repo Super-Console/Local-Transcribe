@@ -548,3 +548,10 @@ Windows CI is green end to end on `windows-2022`: Rust tests, strict Clippy, rel
 - **修复**：`bundle:mac` 先重建 `local-transcribe-node` 并覆盖 sidecar，再执行 `tauri build`；新增 `apps/desktop/tests/bundle-sidecar.test.mjs` 断言该顺序（先红后绿）。完整前端测试 101/101 通过。
 - **验收**：重打包后包内节点含新参数；MBP 安装后应用 PID 12745、节点 PID 12752，`lan-node.json` 记录 `1.4.0-beta.1`、`192.168.1.243:7878`、3 个模型，`/api/v1/capabilities` 正常。可执行 SHA-256 `7faff5da…cf4621`，strict 签名校验通过。Air 换装同一构建；共享开关关闭，未自动启节点。
 - **边界**：本机构建未 strip（整包 82.77 MiB）、ad-hoc 未公证；未重跑真实转写或跨机 LAN 转写；P5 界面验收与 P6 Windows 仍未完成。详情见 `logs/2026-10/2026-10-25-lan-node-sidecar-fix.md`。
+
+## 首次引导 OOBE 实现（2026-10-26；独立功能分支，未发布）
+
+- **已实现**：首次启动五步引导、Windows 跳过权限步、五语言文案、硬件/磁盘推荐、显式权限请求、真实数据路径与隐私说明、完成/跳过/设置页重跑；ASR 偏好与模型页、设置页同步，并对尚未安装偏好模型明确提示。
+- **已验证**：`cargo test --workspace --offline` 全通过（仅测试自身标记的模型/人工验收项忽略）；`cargo clippy --workspace --all-targets --offline -- -D warnings`、`cargo fmt --all -- --check`、`git diff --check` 通过；OOBE 定向 Node 测试 10/10 通过；四个相关 Svelte 文件由现有编译器解析且 0 警告。
+- **验证受阻**：`npm test` 有 113/115 通过；reader interaction 与 reader spec 两个浏览器测试因该 worktree 没有 `node_modules`、无法解析 Vite 而未启动。未安装依赖；复用原 checkout 的依赖时发现其 `vitefu` 与插件导出不兼容。`npm run check` 因同一依赖边界未能完成。
+- **未验收/未发布**：macOS TCC 权限弹窗未端到端验证；本次没有在真实 Windows 主机或 Windows CI 上验证 OOBE，因此 Windows 平台验收仍阻塞。界面为临时功能实现，最终视觉设计仍待 Timmy 确认。完整记录：`logs/2026-10/2026-10-26-oobe-onboarding.md`。

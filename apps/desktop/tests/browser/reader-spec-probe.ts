@@ -18,7 +18,8 @@ const props = { jobId: 'synthetic-reader-spec', initialFollow: false, onBack: ()
   segments: Array.from({length: 70}, (_, i) => ({startMs:i,endMs:i+1,text:`Synthetic text ${i}`})) };
 const modelProps = {
   models:[{id:'imported',displayName:'Synthetic imported',family:'Paraformer',languages:'zh',bytes:120_000_000,
-    estimatedMemoryBytes:472_435_456,selected:false}],
+     estimatedMemoryBytes:472_435_456,selected:false}],
+  preferredAsrModelId:null,
   catalog:[
     {id:'asr-quality',name:'Synthetic accuracy model',directory:'quality',family:'ASR',kind:'asr' as const,tier:'quality' as const,
       languages:'zh',bytes:120_000_000,estimatedMemoryBytes:472_435_456,installed:false},
@@ -195,8 +196,8 @@ export async function buttons() {
   instance=mount(LanView,{target,props:{settings:null,onSettingsSaved:noop}});await settle();inspect('lan');await unmount(instance);
   instance=mount(ModelView,{target,props:modelProps});
   await settle();inspect('model');await unmount(instance);
-  instance=mount(SettingsView,{target,props:{model:null,storage:null,service:null,appVersion:'test',retention:null,lanMode:null,lanSettings:null,
-    onLanSettingsChange:async()=>{},onOpenLibrary:noop,onOpenHistory:noop,onOpenPath:noop,onOpenNotices:noop,onGoModels:noop,onGoLan:noop,onRefreshService:noop,onRetentionChange:noop}});
+   instance=mount(SettingsView,{target,props:{model:null,preferredAsrDisplayName:null,preferredAsrInstalled:false,storage:null,service:null,appVersion:'test',retention:null,lanMode:null,lanSettings:null,
+     onLanSettingsChange:async()=>{},onOpenLibrary:noop,onOpenHistory:noop,onOpenPath:noop,onOpenNotices:noop,onGoModels:noop,onGoLan:noop,onRefreshService:noop,onRetentionChange:noop,onRerunOnboarding:noop}});
   await settle();inspect('settings');await unmount(instance);
   instance=mount(History,{target,props:{entries:[],loading:false,onSelect:noop,onExport:noop}});
   await settle();inspect('history');await unmount(instance);

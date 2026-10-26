@@ -39,12 +39,14 @@ hound = "3"
 reqwest = { version = "0.13", default-features = false, features = ["stream", "native-tls"] }
 arboard = { version = "3", default-features = false }
 sha2 = "=0.10.9"
+sysinfo = "=0.39.6"
 
 # 断点续传测试：本地 HTTP 服务器模拟 206/Range 与中途断流（仅测试使用）。
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "=0.6.2"
 libc = "=0.2.191"
 core-foundation = "0.10"
 objc2-core-audio = "0.3"

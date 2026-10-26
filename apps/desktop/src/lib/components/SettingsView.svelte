@@ -24,6 +24,8 @@
 
   let {
     model,
+    preferredAsrDisplayName,
+    preferredAsrInstalled,
     storage,
     service,
     appVersion,
@@ -39,8 +41,11 @@
     onGoLan,
     onRefreshService,
     onRetentionChange,
+    onRerunOnboarding,
   }: {
     model: ModelSummary | null;
+    preferredAsrDisplayName: string | null;
+    preferredAsrInstalled: boolean;
     storage: StorageSummary | null;
     service: ServiceStatus | null;
     appVersion: string;
@@ -56,6 +61,7 @@
     onGoLan: () => void;
     onRefreshService: () => void;
     onRetentionChange: (policy: RetentionPolicy) => void;
+    onRerunOnboarding: () => void;
   } = $props();
 
   const LAN_MODE_LABELS = $derived.by(() => {
@@ -212,7 +218,12 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           <div class="desc">{t("settings.defaultModelDesc")}</div>
         </div>
         <div class="value">
-          <span class:empty={!model}>{prettyName(model?.displayName) || t("common.noModel")}</span>
+          <span class:empty={!preferredAsrDisplayName && !model}>
+            {prettyName(preferredAsrDisplayName ?? model?.displayName) || t("common.noModel")}
+          </span>
+          {#if preferredAsrDisplayName && !preferredAsrInstalled}
+            <span class="desc">{t("onboarding.modelNotInstalled")}</span>
+          {/if}
           <button type="button" class="link-action" onclick={onGoModels}>{t("settings.manageModels")}</button>
         </div>
       </div>
@@ -622,6 +633,17 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         </div>
         <button type="button" class="link-action" onclick={onOpenNotices}>
           {t("settings.openNotices")}
+        </button>
+      </div>
+    </div>
+    <div class="group">
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("onboarding.rerun")}</div>
+          <div class="desc">{t("onboarding.rerunDesc")}</div>
+        </div>
+        <button type="button" class="link-action" onclick={onRerunOnboarding}>
+          {t("onboarding.rerun")}
         </button>
       </div>
     </div>

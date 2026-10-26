@@ -9,6 +9,7 @@
   let {
     models,
     catalog,
+    preferredAsrModelId,
     downloads,
     busy,
     onSelect,
@@ -19,6 +20,7 @@
   }: {
     models: LibraryModelSummary[];
     catalog: CatalogModel[];
+    preferredAsrModelId: string | null;
     downloads: Record<string, ModelDownloadEvent>;
     busy: boolean;
     onSelect: (id: string) => void;
@@ -71,6 +73,9 @@
   }
 
   const total = $derived(models.reduce((sum, model) => sum + model.bytes, 0));
+  const effectiveDefaultAsrId = $derived(
+    preferredAsrModelId ?? models.find((model) => model.selected)?.id ?? null,
+  );
   /** 已安装但不在清单里的模型（旧版本留下的）；在清单里的只在上面的分组出现一次。 */
   const extraModels = $derived(
     models.filter((model) => !catalogEntryFor(model.id, catalog)),
@@ -103,12 +108,16 @@
             {@const dl = downloads[entry.id]}
             {@const recommendation = recommendationFor(entry)}
             {@const active = !!dl && (dl.state === "downloading" || dl.state === "installing")}
+            {@const isDefaultAsr = entry.kind === "asr" && effectiveDefaultAsrId === entry.id}
             {@const percent =
               dl && dl.total > 0 ? Math.min(99, Math.round((dl.received / dl.total) * 100)) : 0}
             <div class="row">
               <div class="body">
                 <div class="name">
                   {entry.name}
+                  {#if isDefaultAsr}
+                    <span class="tag">{t("model.defaultTag")}</span>
+                  {/if}
                   {#if entry.kind === "punctuation"}
                     <span class="tag">{t("model.punctuationTag")}</span>
                   {/if}
@@ -146,6 +155,15 @@
               </div>
               <div class="row-actions">
                 {#if entry.installed}
+                  {#if entry.kind === "asr"}
+                    {#if isDefaultAsr}
+                      <span class="hint">{t("model.currentDefault")}</span>
+                    {:else}
+                      <button type="button" class="link-action" onclick={() => onSelect(entry.id)} disabled={busy}>
+                        {t("model.setDefault")}
+                      </button>
+                    {/if}
+                  {/if}
                   {#if entry.kind === "llm"}
                     {#if defaultLlm.id === entry.id}
                       <span class="hint">{t("model.defaultModel")}</span>
