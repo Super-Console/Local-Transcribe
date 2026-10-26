@@ -26,3 +26,10 @@
 
 - `logs/README.md` 在本功能 worktree 与原 checkout 中均不存在；未擅自创建该说明文件。项目 `AGENTS.md`、OOBE 任务书及项目状态已阅读。
 - 原 checkout 的未提交网站、移动端与文档工作未混入本分支；没有创建 Git commit。
+
+## 合并与用户验收补记
+
+- 用户明确授权合并后，创建 `c57156f`（OOBE）与 `9238a51`（JSDoc 类型），fast-forward 至 main；未覆盖既有网站、移动端改动。
+- 原 checkout 已有可复用前端依赖，无新增安装。补齐类型后 `npm run check` 0 errors / 0 warnings；`npm test` 115/115。首次与 check 并行运行有浏览器 target closed，分开重跑全通过。
+- Timmy 明确表示在 MacBook Pro 测试本版本，没有问题，接受功能实现。此记录来自用户验收，不冒充 AI 观察的系统权限弹窗/Windows 实机验收。
+- 两次 Tauri dev 构建成功，但启动后退出，未出现可确认的新窗口；观察到的 PID 49546 是已安装应用，不是新 debug binary，不将其截图计为新版本证据。

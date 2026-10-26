@@ -1,5 +1,12 @@
 # Project Status
 
+## OOBE release freeze — 1.5.0-beta.1 (2026-10-26)
+
+- Timmy reports that he tested the OOBE version on his MacBook Pro and accepts the functionality with no issues. This is user acceptance, not an assistant-observed TCC or Windows runtime test.
+- OOBE commits `c57156f` and `9238a51` have been fast-forward merged into `main`. On the main checkout, `npm run check` passed with 0 errors / 0 warnings and `npm test` passed 115/115 after adding JSDoc types.
+- Release versions are being frozen at `1.5.0-beta.1` (WiX `1.5.0.1`). Windows uses the shared four-step flow, omitting macOS permissions; CI now explicitly runs the onboarding policy tests in addition to Rust state tests, frontend check/build and MSI packaging.
+- Publication, same-commit Windows CI, and two-Mac release installation are pending. Windows host SSH currently times out; this does not block Windows CI but does block physical-host runtime acceptance. Existing website/mobile work is excluded.
+
 ## Current milestone
 
 **Current build — 1.3.0-beta.1 (GitHub Pre-release, tag `1.3.0-beta.1` = commit `dea1c4f`, CI run `40066611735` all green). Product name: Local Transcribe (decided 2026-10-24); repository: `TimmySheep/Local-Transcribe`.** GUI, CLI and MCP are service clients over the shared core; the LAN node runs as a supervised `local-transcribe-node` child process. Verified facts: model downloads, deletion and local transcription on Apple Silicon; Windows x64 MSI built by CI, installed on real hardware (Tims-Gaming-PC, SAC off), where runtime window enumeration confirmed no native menu bar, the app-spawned sidecar owned port 7878 with sharing enabled, and `cargo fmt/test/clippy` passed without Code Integrity interception; both Macs replaced with the release asset (identical SHA-256, each `mdfind` shows only the install path); two-Mac LAN end-to-end (Air → MBP node) passed with the release build. Remaining for Timmy: visual checks on Windows (tray white icon, glass, fonts, first-screen clipping); Windows inbound firewall for port 7878 not opened, so other machines cannot reach the Windows node yet. Signing unchanged: macOS ad-hoc/notarization none; Windows unsigned — machines with Smart App Control forced ON can install but not run it.
