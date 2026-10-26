@@ -1,13 +1,18 @@
 const GIB = 1024 ** 3;
 
+/** @param {"macos" | "windows" | "other"} platform */
 export function onboardingSteps(platform) {
   return platform === "windows"
     ? ["welcome", "models", "privacy", "finish"]
     : ["welcome", "models", "permissions", "privacy", "finish"];
 }
 
+/** @typedef {{ memoryBytes?: number | null, availableBytes?: number | null, language: "zh" | "multi", modelBytes: Record<string, number> }} RecommendationInput */
+
 /** Deterministic recommendation policy; all sizes come from the live catalogs. */
-export function recommendModels({ memoryBytes, availableBytes, language, modelBytes }) {
+/** @param {RecommendationInput} input */
+export function recommendModels(input) {
+  const { memoryBytes, availableBytes, language, modelBytes } = input;
   const memoryGiB = (memoryBytes ?? 0) / GIB;
   const tier = memoryGiB <= 8 ? 0 : memoryGiB < 24 ? 1 : 2;
   const asrTiers = language === "multi"
