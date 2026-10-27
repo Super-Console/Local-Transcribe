@@ -2,6 +2,7 @@
   // Provisional functional OOBE surface. The final visual design remains open for Timmy's approval.
   import { onMount, tick } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { LOCALE_NAMES, LOCALE_OPTIONS, locale, t, type LocalePreference } from "$lib/i18n.svelte";
   import type { MessageKey } from "$lib/i18n/messages/zh";
   import { onboardingSteps, recommendModels } from "$lib/onboarding-logic.mjs";
@@ -245,6 +246,13 @@
     if (stepIndex > 0) stepIndex -= 1;
   }
 
+  function dragWindow(event: MouseEvent) {
+    if (event.button !== 0 || event.detail > 1 || !(event.target instanceof Element)) return;
+    if (event.target.closest('button, a, input, select, textarea, label, [contenteditable], [role="button"]')) return;
+    event.preventDefault();
+    try { void getCurrentWindow().startDragging().catch(() => {}); } catch { /* browser preview */ }
+  }
+
   function modelSize(bytes: number): string {
     if (bytes >= GIB) return `${(bytes / GIB).toFixed(2)} GB`;
     return `${Math.round(bytes / (1024 ** 2))} MB`;
@@ -272,22 +280,25 @@
   }
 </script>
 
+{#snippet progressDots()}
+  <div class="progress-dots" role="group" aria-label={t("onboarding.step", { current: stepIndex + 1, total: steps.length })}>
+    {#each steps as item, index (item)}
+      <span class:current={index === stepIndex} class:done={index < stepIndex} aria-hidden="true"></span>
+    {/each}
+  </div>
+{/snippet}
+
 <section class="onboarding-screen" aria-label="Local Transcribe onboarding">
-  <header class="topbar">
-    <div class="progress-dots" role="group" aria-label={t("onboarding.step", { current: stepIndex + 1, total: steps.length })}>
-      {#each steps as item, index (item)}
-        <span class:current={index === stepIndex} class:done={index < stepIndex} aria-hidden="true"></span>
-      {/each}
-    </div>
+  <header class="topbar" onmousedown={dragWindow} role="presentation">
     <button type="button" class="btn-secondary skip" onclick={() => void finish(false)}>
       {t("onboarding.skip")}
     </button>
   </header>
 
   <main class="stage">
+    {#key step}
     <div class="step-content" aria-live="polite">
       {#if step === "welcome"}
-        <p class="eyebrow">Local Transcribe</p>
         <h1>{t("onboarding.welcomeTitle")}</h1>
         <p class="lead">{t("onboarding.welcomeBody")}</p>
         <label class="field-label" for="onboarding-locale">{t("onboarding.languageLabel")}</label>
@@ -296,9 +307,12 @@
             <option value={option}>{option === "system" ? t("common.system") : LOCALE_NAMES[option]}</option>
           {/each}
         </select>
-        <button bind:this={primaryButton} type="button" class="btn-primary welcome-next" onclick={next}>
-          {t("onboarding.next")}
-        </button>
+        <div class="welcome-actions">
+          <button bind:this={primaryButton} type="button" class="btn-primary welcome-next" onclick={next}>
+            {t("onboarding.next")}
+          </button>
+          {@render progressDots()}
+        </div>
       {:else if step === "models"}
         <p class="eyebrow">{t("onboarding.step", { current: stepIndex + 1, total: steps.length })}</p>
         <h1>{t("onboarding.modelsTitle")}</h1>
@@ -449,11 +463,13 @@
         <p class="error-message" role="alert">{actionError}</p>
       {/if}
     </div>
+    {/key}
   </main>
 
   {#if step !== "welcome"}
     <footer class="footer">
       <button type="button" class="link-action" onclick={previous}>{t("onboarding.previous")}</button>
+      {@render progressDots()}
       {#if step !== "finish"}
         <button bind:this={primaryButton} type="button" class="btn-primary" onclick={next}>{t("onboarding.next")}</button>
       {/if}
@@ -482,12 +498,15 @@
     justify-content: space-between;
     gap: 16px;
   }
+  .topbar { justify-content: flex-end; min-height: 44px; }
 
   .progress-dots {
     display: flex;
     align-items: center;
     gap: 9px;
     min-height: 44px;
+    justify-content: center;
+    flex: none;
   }
 
   .progress-dots span {
@@ -515,6 +534,14 @@
   .step-content {
     width: min(100%, 680px);
     padding: 28px 0 34px;
+    animation: step-enter 220ms ease-out both;
+  }
+  @keyframes step-enter {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .step-content { animation: none; }
   }
 
   .eyebrow {
@@ -563,7 +590,8 @@
     font: inherit;
   }
 
-  .welcome-next { display: block; margin-top: 28px; min-width: 132px; min-height: 44px; }
+  .welcome-actions { display: flex; align-items: center; gap: 24px; margin-top: 28px; }
+  .welcome-next { min-width: 132px; min-height: 44px; }
 
   .language-choices {
     display: flex;
@@ -659,8 +687,9 @@
   .finish-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
   .finish-actions button { min-height: 44px; }
   .error-message { margin-top: 18px; color: var(--red); font-size: 13px; }
-  .footer { justify-content: flex-end; padding-top: 14px; }
-  .footer .link-action { margin-right: auto; min-height: 44px; }
+  .footer { display: grid; grid-template-columns: 1fr auto 1fr; padding-top: 14px; }
+  .footer .link-action { justify-self: start; min-height: 44px; }
+  .footer .btn-primary { justify-self: end; }
   .footer .btn-primary { min-width: 120px; min-height: 44px; }
 
   @media (max-width: 600px) {

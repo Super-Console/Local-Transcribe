@@ -87,6 +87,15 @@ test("permissions step is omitted on Windows while other onboarding steps remain
   assert.deepEqual(onboardingSteps("windows"), ["welcome", "models", "privacy", "finish"]);
 });
 
+test("onboarding has centered progress, unobstructed drag, and reduced-motion transitions", () => {
+  const source = readFileSync(new URL("../src/lib/components/OnboardingView.svelte", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /<p class="eyebrow">Local Transcribe<\/p>/);
+  assert.match(source, /class="progress-dots"[\s\S]*?<footer/);
+  assert.match(source, /startDragging\(\)/);
+  assert.match(source, /prefers-reduced-motion:\s*reduce/);
+  assert.match(source, /\{#key step\}/);
+});
+
 test("OOBE stays skippable, localized, and can be restarted from settings", () => {
   const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
   const onboarding = read("../src/lib/components/OnboardingView.svelte");

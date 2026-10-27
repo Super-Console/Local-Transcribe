@@ -11,6 +11,7 @@
 9. Windows verification requires a real Windows build/test run (or clearly identified CI run). A macOS cross-compile is not equivalent to Windows UI/runtime acceptance. If the Windows host is unreachable, record the exact criterion as blocked.
 10. Do not create Git commits or remotes unless Timmy asks. Stage only reviewed project files if later asked to commit.
 11. Update `PROJECT_STATUS.md` when a milestone changes, recording verified facts separately from proposals and blockers.
+12. After changes, Timmy expects the latest verified release synchronized across his MacBook Pro, MacBook Air, and Windows PC, with only the current installed app visible in Spotlight/Windows Search. Inventory old builds first; obtain confirmation for the exact cleanup list and move approved items to the respective recycle bin, never empty it. Preserve user data and report offline devices as blocked.
 
 ## Release process
 
