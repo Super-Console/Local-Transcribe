@@ -563,6 +563,89 @@ pub fn inspect_model_directory(path: impl AsRef<Path>) -> Result<LocalModel, Str
 /// 解码退化重复折叠。自回归模型偶尔陷入循环（实机样本：同一字连续 231 次），
 /// 这里做保守兜底：连续同一字 ≥6 次保留 2 次；同一短语（1–6 字）连续 ≥4 次且
 /// 总长度 ≥12 字保留 2 次。正常口语重复（「对对对」「好的好的」）不受影响。
+/// 去掉模型输出的控制标记（`<sil>`、`<unk>`、`<|endoftext|>` 等），它们不是正文。
+fn strip_special_tokens(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(['<', '[']) {
+        let (head, tail) = rest.split_at(start);
+        out.push_str(head);
+        let open = tail.chars().next().unwrap_or('<');
+        let close = if open == '<' { '>' } else { ']' };
+        let inner_end = tail[1..].find(close).map(|offset| offset + 1);
+        let candidate = inner_end.map(|end| (&tail[1..end], &tail[end + 1..]));
+        let keep = match candidate {
+            Some((inner, remaining))
+                if !inner.trim().is_empty()
+                    && inner.chars().count() <= 32
+                    && inner.chars().all(|ch| {
+                        ch.is_ascii_alphanumeric()
+                            || matches!(ch, '_' | '|' | '-' | '/' | '.' | ':' | ' ')
+                    }) =>
+            {
+                rest = remaining;
+                false
+            }
+            _ => true,
+        };
+        if keep {
+            out.push(open);
+            rest = &tail[open.len_utf8()..];
+        }
+    }
+    out.push_str(rest);
+    out.trim().to_owned()
+}
+
+/// 模型的最小输入长度（1 秒）。短于它的分块（例如 120.065 秒素材切出的
+/// 65 毫秒尾巴）会让 onnxruntime 的 Conv 节点抛出 `Invalid input shape` 的
+/// C++ 异常；Rust 捕获不了外部异常，进程会直接 abort。补静音到 1 秒即可，
+/// 时间轴仍按真实样本数计算。
+const MIN_MODEL_SAMPLES: usize = SAMPLE_RATE as usize;
+
+/// 0.5 秒以下的尾巴不送模型：说不了完整的词，模型只会输出噪声幻觉
+/// （实测 Paraformer 对 65 毫秒尾巴会吐出"的的一的一的"）。
+const MIN_TRANSCRIBE_SAMPLES: usize = SAMPLE_RATE as usize / 2;
+
+fn is_too_short_to_transcribe(samples: &[f32]) -> bool {
+    samples.len() < MIN_TRANSCRIBE_SAMPLES
+}
+
+fn samples_for_model(samples: &[f32]) -> std::borrow::Cow<'_, [f32]> {
+    if samples.len() >= MIN_MODEL_SAMPLES {
+        return std::borrow::Cow::Borrowed(samples);
+    }
+    let mut padded = samples.to_vec();
+    padded.resize(MIN_MODEL_SAMPLES, 0.0);
+    std::borrow::Cow::Owned(padded)
+}
+
+/// 判断一个分块是否基本没有声音：48 kHz/16 kHz 下 20 ms 一帧，
+/// 高于 -55 dBFS 的帧不超过 2 帧（≤40 ms）时视为静音。
+///
+/// 静音输入会让 ASR 模型"幻觉"出不存在的句子（实测 Paraformer 会输出
+/// "怎么了什么"），所以这类分块根本不送进模型。
+fn is_silent_chunk(samples: &[f32]) -> bool {
+    const THRESHOLD: f32 = 0.001_778; // -55 dBFS
+    const MAX_ACTIVE_FRAMES: usize = 2;
+    if samples.is_empty() {
+        return true;
+    }
+    let frame_len = (SAMPLE_RATE as usize / 50).max(1);
+    let mut active = 0usize;
+    for frame in samples.chunks(frame_len) {
+        let energy =
+            frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len().max(1) as f32;
+        if energy.sqrt() >= THRESHOLD {
+            active += 1;
+            if active > MAX_ACTIVE_FRAMES {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 fn collapse_degenerate_repetitions(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
@@ -1026,13 +1109,23 @@ fn transcribe_chunk(
     on_progress: &mut impl FnMut(TranscriptionProgress),
     on_segment: &mut impl FnMut(TranscriptionSegmentUpdate),
 ) -> Result<(), String> {
+    // 过短的尾巴与静音分块都不送进模型：既省算力，也避免模型编造内容。
+    if is_too_short_to_transcribe(samples) || is_silent_chunk(samples) {
+        on_progress(TranscriptionProgress {
+            completed_chunks,
+            total_chunks,
+            total_duration_ms,
+        });
+        return Ok(());
+    }
+    let model_input = samples_for_model(samples);
     let stream = recognizer.create_stream();
-    stream.accept_waveform(SAMPLE_RATE as i32, samples);
+    stream.accept_waveform(SAMPLE_RATE as i32, model_input.as_ref());
     recognizer.decode(&stream);
     let result = stream
         .get_result()
         .ok_or_else(|| "The speech engine returned no result for an audio chunk.".to_owned())?;
-    let text = collapse_degenerate_repetitions(result.text.trim());
+    let text = collapse_degenerate_repetitions(&strip_special_tokens(result.text.trim()));
     if !text.is_empty() {
         let text = match punctuator {
             Some(punctuator) => punctuator.punctuate(&text),
@@ -1061,11 +1154,72 @@ fn transcribe_chunk(
 #[cfg(test)]
 mod tests {
     use super::{
-        collapse_degenerate_repetitions, expired, inspect_model_directory, set_idle_unload,
-        unload_cached_model, ModelFamily, UseGuard, IDLE_UNLOAD_CHOICES,
+        collapse_degenerate_repetitions, expired, inspect_model_directory, is_silent_chunk,
+        is_too_short_to_transcribe, samples_for_model, set_idle_unload, strip_special_tokens,
+        unload_cached_model, ModelFamily, UseGuard, IDLE_UNLOAD_CHOICES, MIN_MODEL_SAMPLES,
     };
     use std::time::Duration;
     use std::{fs, path::PathBuf};
+
+    #[test]
+    fn short_tails_are_padded_before_the_model_sees_them() {
+        let short = vec![0.2f32; 1_000];
+        let padded = samples_for_model(&short);
+        assert_eq!(padded.len(), MIN_MODEL_SAMPLES);
+        assert_eq!(&padded[..1_000], &short[..]);
+        assert!(padded[1_000..].iter().all(|sample| *sample == 0.0));
+
+        let full = vec![0.2f32; 20_000];
+        let unchanged = samples_for_model(&full);
+        assert_eq!(unchanged.len(), 20_000);
+        assert!(matches!(unchanged, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn tails_shorter_than_half_a_second_are_not_transcribed() {
+        assert!(is_too_short_to_transcribe(&vec![0.2f32; 1_000]));
+        assert!(!is_too_short_to_transcribe(&vec![0.2f32; 8_000]));
+        assert!(!is_too_short_to_transcribe(&vec![0.2f32; 20_000]));
+    }
+
+    #[test]
+    fn special_tokens_never_reach_the_transcript() {
+        assert_eq!(strip_special_tokens("<sil>"), "");
+        assert_eq!(strip_special_tokens("<sil>你好<sil>"), "你好");
+        assert_eq!(
+            strip_special_tokens("<unk><s>开始</s><|endoftext|>"),
+            "开始"
+        );
+        assert_eq!(strip_special_tokens("[sil] 你好"), "你好");
+        assert_eq!(strip_special_tokens("正常的一句话。"), "正常的一句话。");
+        // 不是控制标记的尖括号内容必须原样保留。
+        assert_eq!(strip_special_tokens("a < b"), "a < b");
+        assert_eq!(strip_special_tokens("价格<100元"), "价格<100元");
+    }
+
+    #[test]
+    fn only_near_silent_chunks_are_treated_as_silence() {
+        let quiet = vec![0.0f32; 16_000];
+        assert!(is_silent_chunk(&quiet));
+        assert!(is_silent_chunk(&vec![0.000_1f32; 16_000]));
+        assert!(is_silent_chunk(&[]));
+
+        // 一个 20 ms 的爆音不足以构成语音。
+        let mut click = vec![0.0f32; 16_000];
+        for sample in click.iter_mut().take(320) {
+            *sample = 0.5;
+        }
+        assert!(is_silent_chunk(&click));
+
+        // 0.1 秒的正常音量音频必须继续送去识别。
+        let mut tone = vec![0.0f32; 16_000];
+        for (index, sample) in tone.iter_mut().take(1_600).enumerate() {
+            *sample = 0.2 * (index as f32 * 0.05).sin();
+        }
+        assert!(!is_silent_chunk(&tone));
+        // 安静但持续的语音同样不能被误判为静音。
+        assert!(!is_silent_chunk(&vec![0.01f32; 16_000]));
+    }
 
     fn fixture(name: &str) -> PathBuf {
         let root =

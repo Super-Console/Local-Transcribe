@@ -217,10 +217,10 @@
         {:else}
           <div class="actions">
             <button type="button" class="act btn-secondary" onclick={() => onExport("txt")} disabled={segments.length === 0 || !transcript}>
-              <Icon name="download" size={13} />TXT
+              <Icon name="download" size={13} /><span class="label">TXT</span>
             </button>
             <button type="button" class="act btn-secondary" onclick={() => onExport("json")} disabled={segments.length === 0 || !transcript}>
-              <Icon name="download" size={13} />JSON
+              <Icon name="download" size={13} /><span class="label">JSON</span>
             </button>
           </div>
         {/if}
@@ -394,6 +394,17 @@
     align-items: center;
     gap: 10px;
     margin-top: 16px;
+  }
+
+  .actions button {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  @container (max-width: 560px) {
+    .actions .label {
+      display: none;
+    }
   }
 
   .sep {

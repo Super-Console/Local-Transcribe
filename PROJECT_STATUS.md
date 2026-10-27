@@ -1,5 +1,14 @@
 # Project Status
 
+## Maintenance release — 1.5.0-beta.4 (2026-10-27)
+
+- Crash root cause (reported on Windows, then reproduced on macOS with the same file): a 120.065 s clip yields four 30 s chunks plus a 65 ms tail. onnxruntime threw a C++ exception (`Invalid input shape: {1,39}` in Conv `/encoder_embed/conv/7/Conv`); Rust cannot catch foreign exceptions, so the process aborted with SIGABRT. Only files whose length modulo 30 s is a few tens of milliseconds crash — which is why "some videos crash and some do not".
+- Fix: tails shorter than 0.5 s are no longer sent to the model, and inputs between 0.5 s and 1 s are zero-padded to 1 s (timestamps still use the real sample count). The previously crashing 120 s file now completes on zipformer, paraformer and fire-red with no abort.
+- Found during the same investigation: model control tokens such as `<sil>` no longer leak into transcript text, and near-silent chunks are skipped instead of being "transcribed" into hallucinated sentences (paraformer produced "怎么了什么" on silence).
+- Reader toolbar: below 560 px of pane width it switches to icons only (container query) so labels never stack vertically in a small window; the find/AI buttons gained icons.
+- Gates: `cargo fmt --check`, `cargo test --workspace` (248 passed), `cargo clippy -D warnings`, `npm run check` (0/0), `npm test` (119 passed).
+
+
 ## Maintenance release — 1.5.0-beta.3 (2026-10-27)
 
 - Tester report on Windows: right-click → delete on the history page did nothing. Root cause: `delete_history_entry` resolved the Trash folder from `$HOME`, which Windows does not define, so the command failed before touching any file. Fixed by moving the trash implementation into `voice-to-text-core` (`trash::move_to_trash`): macOS keeps `~/.Trash`, Windows now hands the files to the real Recycle Bin (`SHFileOperationW` + `FOF_ALLOWUNDO`). The same change fixes the LAN node retention cleanup and the service retention, which had the same `$HOME` dependency.

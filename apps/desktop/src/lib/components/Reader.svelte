@@ -427,9 +427,15 @@
 
     <div class="reader-bar">
       {#if onBack}
-        <button type="button" class="back btn-secondary" onclick={onBack}>
+        <button
+          type="button"
+          class="back btn-secondary"
+          title={t("nav.home")}
+          aria-label={t("nav.home")}
+          onclick={onBack}
+        >
           <Icon name="chevronLeft" size={13} stroke={1.7} />
-          <span>{t("nav.home")}</span>
+          <span class="label">{t("nav.home")}</span>
         </button>
       {/if}
       <button
@@ -440,7 +446,8 @@
         aria-label={t("reader.findOpen")}
         onclick={() => void openFind()}
       >
-        <span>{t("reader.findOpen")}</span>
+        <Icon name="search" size={13} stroke={1.6} />
+        <span class="label">{t("reader.findOpen")}</span>
         <kbd>⌘F</kbd>
       </button>
       <button
@@ -452,7 +459,8 @@
         aria-pressed={aiOpen}
         onclick={toggleAi}
       >
-        <span>{t("reader.aiAsk")}</span>
+        <Icon name="sparkle" size={13} stroke={1.6} />
+        <span class="label">{t("reader.aiAsk")}</span>
         <kbd>⌘⇧A</kbd>
       </button>
       <span class="bar-spacer"></span>
@@ -482,6 +490,8 @@
   .reader-wrap {
     position: relative;
     flex: 1;
+    /* 工具栏按自身可用宽度决定是否只显示图标，而不是跟着窗口猜。 */
+    container-type: inline-size;
     min-height: 0;
     display: flex;
     flex-direction: column;
@@ -553,6 +563,24 @@
   .reader-bar :global(button),
   .reader-bar :global(input) {
     pointer-events: auto;
+  }
+
+  .reader-bar :global(button) {
+    white-space: nowrap;
+    flex: none;
+  }
+
+  /* 窗口太窄时只保留图标：文字竖排比丢字更糟，hover/focus 仍有 title 与 aria-label。 */
+  @container (max-width: 560px) {
+    .reader-bar :global(button) {
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+
+    .reader-bar .label,
+    .reader-bar kbd {
+      display: none;
+    }
   }
 
   .reader-fade {
