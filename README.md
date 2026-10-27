@@ -42,6 +42,14 @@ All three interfaces talk to the same file-backed service instance, so a job sta
 - **Interface languages**: 简体中文, English, Español, Français, Deutsch (follows macOS by default).
 - **Local language models (1.4.0-beta.1, experimental)**: download a Qwen3 GGUF model separately to summarize a transcript or ask questions in a local answer card. The model and transcript stay on-device; no cloud service is used. Models are not included in the installer, memory figures are estimates, and generated answers can be inaccurate—verify them against the transcript. See [model licenses](docs/model-licenses.md).
 
+### Media input and format support
+
+- Drop a file onto the window, or pick one with the file dialog. Batch import adds each file as its own record.
+- Decoding uses the bundled Symphonia readers and codecs: PCM/WAV, AIFF, CAF, MP3, AAC (M4A/MP4/MOV/3GP), FLAC, Vorbis (OGG/MKV), ALAC and ADPCM. Video containers are accepted — only their audio track is read; the video stream is never uploaded or re-encoded.
+- Containers or codecs the decoder does not support (for example AC-3/E-AC-3 audio, Opus in WebM, AVI, WMV, AMR) are rejected with a readable message. The app does not crash on them.
+- Media is decoded, resampled and recognized in 30-second chunks, so memory stays flat instead of growing with duration.
+- Near-silent chunks are skipped and model control tokens such as `<sil>` are stripped, so silence is not turned into invented text; a final partial chunk shorter than half a second is ignored.
+
 ## LAN compute (protocol V1.1)
 
 Optional, off by default: transcribe on another computer on your LAN.
@@ -143,6 +151,7 @@ Windows: the workspace compiles `x86_64-pc-windows-msvc` (verified via CI on `wi
 - MCP protocol, tool surface and the `--allow-root` file-access guard were exercised against the live service.
 - Windows: the full pipeline (fmt, tests, strict clippy, release build, npm check, MSI) is green on real `windows-2022` CI runners, and the workspace is cross-checked locally against `x86_64-pc-windows-msvc`. Real-machine install/launch acceptance is recorded in `docs/testing/`; runtime claims are limited to what that record actually verified. (Earlier blockers: Smart App Control rejected *compiling* on the test host; CI compilation and MSI install are separate paths.)
 - LAN compute: the automated suite covers the task state machine, persistence/crash recovery, no-authentication private-network access, resumable upload, collect path-traversal refusal, ZIP export with a sha256 manifest, CLI/MCP node management and the shared settings lock. Cross-device runtime verification is recorded in `docs/testing/`.
+- 1.5.0-beta.4 regression checks: a 120 s clip that used to abort the process (65 ms tail → onnxruntime C++ exception) now completes on zipformer, paraformer and fire-red; Windows record deletion moves files to the Recycle Bin; the reader toolbar collapses to icons below 560 px of pane width.
 - Release signing/notarization is unresolved (macOS ad-hoc, Windows unsigned; SmartScreen first-run warning applies). UI visuals may still change.
 
 See [`PROJECT_STATUS.md`](PROJECT_STATUS.md) for the full milestone log with verified facts separated from proposals and blockers, and [`docs/technical-validation.md`](docs/technical-validation.md) for reproducible checks.

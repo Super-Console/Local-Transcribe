@@ -42,6 +42,14 @@ crates/lan-compute/           局域网 Compute V1.1：任务存储、节点服�
 - **界面语言**：简体中文、English、Español、Français、Deutsch（默认跟随 macOS）。
 - **本地语言模型（1.4.0-beta.1，实验性）**：用户可单独下载 Qwen3 GGUF 模型，在答案卡中总结转写或提问。模型和转写内容留在本机，不使用云服务；安装包不含模型权重。内存数据为估算，模型回答可能不准确，请对照原文核验。许可证见[模型许可证说明](docs/model-licenses.md)。
 
+### 媒体输入与格式支持
+
+- 把文件拖进窗口，或用文件选择器挑选；批量导入时每个文件各成一条记录。
+- 解码使用内置的 Symphonia 读取器与解码器：PCM/WAV、AIFF、CAF、MP3、AAC（M4A/MP4/MOV/3GP）、FLAC、Vorbis（OGG/MKV）、ALAC 与 ADPCM。视频容器可直接导入——只读取其音轨，不重编码、不上传视频流。
+- 解码器不支持的容器或编码（例如 AC-3/E-AC-3 音轨、WebM 中的 Opus、AVI、WMV、AMR）会给出可读的报错，不会导致崩溃。
+- 媒体按 30 秒分块依次解码、重采样与识别，内存占用不随文件时长增长。
+- 接近静音的分块会被跳过，模型输出的 `<sil>` 等控制标记会被剔除，静音不会被"编"成文字；末尾短于半秒的碎片直接忽略。
+
 ## 局域网计算（协议 V1.1）
 
 可选、默认关闭：把转写放到局域网内的另一台电脑上执行。
@@ -139,6 +147,7 @@ Windows：workspace 可编译 `x86_64-pc-windows-msvc`（由 CI 在 `windows-202
 - MCP 协议、工具面与 `--allow-root` 文件访问防线已对真实服务实测。
 - Windows：完整管线（fmt、测试、严格 clippy、release 构建、npm check、MSI）已在真实 `windows-2022` CI runner 全绿，且本机对 `x86_64-pc-windows-msvc` 做交叉核对。真机安装/启动验收记录见 `docs/testing/`，运行时结论以该记录实际验证的范围为限。（历史阻塞：Smart App Control 拦截的是"在测试主机上编译"；CI 编译与 MSI 安装是另一条路径。）
 - 局域网：自动化测试覆盖任务状态机、持久化/崩溃恢复、无认证的私有网段访问、断点续传上传、收集 API 越界拒绝、带 sha256 清单的 ZIP 导出、CLI/MCP 节点管理与共享设置文件锁。跨设备运行时验证记录见 `docs/testing/`。
+- 1.5.0-beta.4 回归验证：此前会让进程 abort 的 120 秒素材（65 毫秒尾巴触发 onnxruntime C++ 异常）在 zipformer / paraformer / fire-red 三种模型上均正常完成；Windows 首页删除记录改走回收站；窗口变窄时阅读器工具栏只保留图标。
 - 发布签名/公证未解决（macOS 为 ad-hoc、Windows 未签名；SmartScreen 首次运行警告适用）。界面视觉仍可能调整。
 
 完整里程碑日志（已核实事实与提议/阻塞分开记录）见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)；可复现的核查步骤见 [`docs/technical-validation.md`](docs/technical-validation.md)。
