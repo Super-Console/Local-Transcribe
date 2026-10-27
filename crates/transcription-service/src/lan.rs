@@ -173,36 +173,13 @@ fn retire_state_file(data_dir: &Path) {
     if !path.exists() {
         return;
     }
-    match retire_to_trash(&path) {
+    match voice_to_text_core::move_to_trash(&path) {
         Ok(()) => {}
         Err(error) => eprintln!(
             "warning: stale node state left at {} ({error})",
             path.display()
         ),
     }
-}
-
-/// 移入废纸篓：`$HOME/.Trash/<name>.<时间戳>`。重命名跨设备失败时报错，不回退到删除。
-fn retire_to_trash(path: &Path) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("Moving entries to the Trash is only supported on macOS.".to_owned());
-    }
-    let home = std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?;
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("entry");
-    let target = std::path::PathBuf::from(home)
-        .join(".Trash")
-        .join(format!("{name}.{}", unix_now_ms()));
-    fs::rename(path, target).map_err(|_| "Could not move the entry to the Trash.".to_owned())
-}
-
-fn unix_now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis())
-        .unwrap_or(0)
 }
 
 /// 取日志文件末尾若干行，用于启动失败时给出真实原因。

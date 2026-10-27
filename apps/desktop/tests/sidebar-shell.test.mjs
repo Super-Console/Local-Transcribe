@@ -11,9 +11,9 @@ const desktopLockPattern = (version) =>
   new RegExp(`name = "voice-to-text-desktop"\\r?\\nversion = "${version.replaceAll('.', '\\.') }"`);
 
 test("release version check accepts LF and CRLF Cargo.lock checkouts", () => {
-  const pattern = desktopLockPattern("1.5.0-beta.2");
-  assert.match('name = "voice-to-text-desktop"\nversion = "1.5.0-beta.2"', pattern);
-  assert.match('name = "voice-to-text-desktop"\r\nversion = "1.5.0-beta.2"', pattern);
+  const pattern = desktopLockPattern("1.5.0-beta.3");
+  assert.match('name = "voice-to-text-desktop"\nversion = "1.5.0-beta.3"', pattern);
+  assert.match('name = "voice-to-text-desktop"\r\nversion = "1.5.0-beta.3"', pattern);
 });
 
 test("macOS content extends into the native title bar", () => {
@@ -29,7 +29,7 @@ test("desktop release versions stay in sync", () => {
   const cargo = read("../src-tauri/Cargo.toml");
   const cargoLock = read("../../../Cargo.lock");
   const npmLock = JSON.parse(read("../package-lock.json"));
-  assert.equal(packageJson.version, "1.5.0-beta.2");
+  assert.equal(packageJson.version, "1.5.0-beta.3");
   assert.equal(tauri.version, packageJson.version);
   assert.match(cargo, new RegExp(`version = "${packageJson.version.replaceAll('.', '\\.') }"`));
   assert.equal(npmLock.version, packageJson.version);

@@ -4,7 +4,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use voice_to_text_core::{decode_audio_file, inspect_model_directory, ModelFamily};
+use voice_to_text_core::{
+    decode_audio_file, decode_audio_file_streaming, inspect_model_directory,
+    probe_audio_duration_ms, ModelFamily,
+};
 
 fn scratch(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -99,4 +102,55 @@ fn refuses_model_directories_missing_tokens_instead_of_claiming_ready() {
     fs::write(model_dir.join("model.int8.onnx"), b"test-model-placeholder").unwrap();
 
     assert!(inspect_model_directory(&model_dir).is_err());
+}
+
+#[test]
+fn streams_the_same_samples_as_the_whole_file_decoder() {
+    let root = scratch("stream-decode");
+    let path = root.join("tone-8k.wav");
+    write_pcm_wav(&path, 8_000, 3);
+
+    let whole = decode_audio_file(&path, 16_000).unwrap();
+
+    let mut streamed = Vec::new();
+    let mut blocks = 0usize;
+    let meta = decode_audio_file_streaming(&path, 16_000, |block| {
+        blocks += 1;
+        streamed.extend_from_slice(block);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(streamed.len(), whole.samples.len());
+    assert_eq!(streamed, whole.samples);
+    assert_eq!(meta.duration_ms, whole.duration_ms);
+    assert_eq!(meta.sample_count, whole.samples.len() as u64);
+    assert!(blocks > 0, "the streaming decoder must hand over samples");
+}
+
+#[test]
+fn streams_downsampled_audio_exactly() {
+    let root = scratch("stream-downsample");
+    let path = root.join("tone-48k.wav");
+    write_pcm_wav(&path, 48_000, 2);
+
+    let whole = decode_audio_file(&path, 16_000).unwrap();
+    let mut streamed = Vec::new();
+    let meta = decode_audio_file_streaming(&path, 16_000, |block| {
+        streamed.extend_from_slice(block);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(streamed, whole.samples);
+    assert_eq!(meta.duration_ms, 2_000);
+}
+
+#[test]
+fn reports_the_duration_without_decoding_the_audio() {
+    let root = scratch("duration-probe");
+    let path = root.join("tone-16k.wav");
+    write_pcm_wav(&path, 16_000, 4);
+
+    assert_eq!(probe_audio_duration_ms(&path).unwrap(), Some(4_000));
 }

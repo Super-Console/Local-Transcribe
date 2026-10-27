@@ -61,7 +61,8 @@ test("the backend only moves the three record files and never the dispatch lock"
     tauri.indexOf("fn delete_history_entry("),
   );
   assert.doesNotMatch(body, /\.dispatch\.lock/);
-  assert.match(body, /fs::rename\(&path, &target\)/);
+  assert.match(body, /move_to_trash\(&path\)/);
+  assert.doesNotMatch(body, /remove_file|remove_dir_all/);
 });
 
 test("installed manifest models appear once; only extras get their own section", () => {

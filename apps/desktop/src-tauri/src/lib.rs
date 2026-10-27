@@ -18,7 +18,8 @@ use tauri::menu::{Menu, MenuItem, MenuItemKind};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use voice_to_text_core::{
     InputFile, JobState, JobStatus, JobStore, LocalModel, ModelFamily, ModelLibrary, Transcript,
-    TranscriptionOptions, inspect_model_directory, transcribe_file_streaming_with_options,
+    TranscriptionOptions, inspect_model_directory, move_to_trash,
+    transcribe_file_streaming_with_options,
 };
 use voice_to_text_lan::client::LanClient;
 use voice_to_text_lan::llm::LlmRuntime;
@@ -402,7 +403,7 @@ fn delete_history_entry_at(
     data_dir: &Path,
     jobs: &HashMap<String, JobStatus>,
     job_id: &str,
-    trash_dir: &Path,
+    move_to_trash: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Result<DeleteOutcome, String> {
     if !is_safe_job_id(job_id) {
         return Err("That task id cannot be used to delete a record.".to_owned());
@@ -425,7 +426,6 @@ fn delete_history_entry_at(
         data_dir.join("jobs").join(format!("{job_id}.json")),
         data_dir.join("jobs").join(format!("{job_id}.cancel")),
     ];
-    fs::create_dir_all(trash_dir).map_err(|_| "Could not prepare the Trash folder.".to_owned())?;
     let mut outcome = DeleteOutcome {
         removed: Vec::new(),
         skipped: Vec::new(),
@@ -435,18 +435,7 @@ fn delete_history_entry_at(
             outcome.skipped.push(path.to_string_lossy().into_owned());
             continue;
         }
-        let parent = path
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("entry");
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("entry");
-        // transcripts/ 与 jobs/ 下都有 `<id>.json`，目标名加上来源目录避免互相覆盖。
-        let target = trash_dir.join(format!("{parent}-{name}.{}", unix_now_ms()));
-        fs::rename(&path, &target)
+        move_to_trash(&path)
             .map_err(|error| format!("Could not move {} to the Trash: {error}", path.display()))?;
         outcome.removed.push(path.to_string_lossy().into_owned());
     }
@@ -466,10 +455,7 @@ fn delete_history_entry(
         .lock()
         .map_err(|_| "The local task state is unavailable.".to_owned())?
         .clone();
-    let trash_dir =
-        PathBuf::from(std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?)
-            .join(".Trash");
-    let outcome = delete_history_entry_at(&data_dir, &jobs, &job_id, &trash_dir)?;
+    let outcome = delete_history_entry_at(&data_dir, &jobs, &job_id, &move_to_trash)?;
     if let Ok(mut transcripts) = state.transcripts.lock() {
         transcripts.remove(&job_id);
     }
@@ -1286,24 +1272,6 @@ fn set_retention_policy(
 struct RetentionOutcome {
     removed: usize,
     bytes: u64,
-}
-
-/// 把文件移入废纸篓（本项目的删除约定：永不永久删除）。
-#[cfg(target_os = "macos")]
-pub(crate) fn move_to_trash(path: &Path) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?;
-    let trash = PathBuf::from(home).join(".Trash");
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("entry");
-    let target = trash.join(format!("{name}.{}", unix_now_ms()));
-    fs::rename(path, target).map_err(|_| "Could not move the entry to the Trash.".to_owned())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn move_to_trash(_path: &Path) -> Result<(), String> {
-    Err("Automatic cleanup currently supports macOS only.".to_owned())
 }
 
 /// 按策略清理历史结果与任务记录（不动模型库、不动用户原始文件）。
@@ -2589,11 +2557,28 @@ mod delete_history_tests {
 
     use std::collections::HashMap;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use voice_to_text_core::{JobState, JobStatus};
 
     use super::delete_history_entry_at;
+
+    /// 测试用“移入废纸篓”：写入临时目录，避免碰真实回收站。
+    fn move_into(trash: &Path) -> impl Fn(&Path) -> Result<(), String> + '_ {
+        move |path: &Path| {
+            let parent = path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                .unwrap_or("entry");
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("entry");
+            fs::rename(path, trash.join(format!("{parent}-{name}")))
+                .map_err(|error| error.to_string())
+        }
+    }
 
     fn scratch(name: &str) -> (PathBuf, PathBuf) {
         let now = std::time::SystemTime::now()
@@ -2633,7 +2618,8 @@ mod delete_history_tests {
     #[test]
     fn only_the_three_record_files_move_to_the_trash() {
         let (data, trash) = scratch("all");
-        let outcome = delete_history_entry_at(&data, &HashMap::new(), "job-1", &trash).unwrap();
+        let outcome =
+            delete_history_entry_at(&data, &HashMap::new(), "job-1", &move_into(&trash)).unwrap();
 
         assert_eq!(outcome.removed.len(), 3, "{outcome:?}");
         assert!(outcome.skipped.is_empty());
@@ -2652,7 +2638,8 @@ mod delete_history_tests {
     fn a_missing_file_is_reported_as_skipped_not_as_an_error() {
         let (data, trash) = scratch("partial");
         fs::remove_file(data.join("jobs/job-1.json")).unwrap();
-        let outcome = delete_history_entry_at(&data, &HashMap::new(), "job-1", &trash).unwrap();
+        let outcome =
+            delete_history_entry_at(&data, &HashMap::new(), "job-1", &move_into(&trash)).unwrap();
         assert_eq!(outcome.removed.len(), 2);
         assert_eq!(outcome.skipped.len(), 1);
         let _ = fs::remove_dir_all(data.parent().unwrap());
@@ -2664,7 +2651,7 @@ mod delete_history_tests {
         let mut jobs = HashMap::new();
         jobs.insert("job-1".to_owned(), running("job-1"));
 
-        let error = delete_history_entry_at(&data, &jobs, "job-1", &trash).unwrap_err();
+        let error = delete_history_entry_at(&data, &jobs, "job-1", &move_into(&trash)).unwrap_err();
         assert_eq!(error, "请先取消该任务");
         assert!(data.join("transcripts/job-1.json").exists());
         assert!(data.join("jobs/job-1.json").exists());
@@ -2675,8 +2662,8 @@ mod delete_history_tests {
     fn an_unsafe_job_id_is_refused_before_touching_anything() {
         let (data, trash) = scratch("unsafe");
         for job_id in ["../outside", "", "Job-1", "job-1/../../x"] {
-            let error =
-                delete_history_entry_at(&data, &HashMap::new(), job_id, &trash).unwrap_err();
+            let error = delete_history_entry_at(&data, &HashMap::new(), job_id, &move_into(&trash))
+                .unwrap_err();
             assert!(error.contains("cannot be used"), "{job_id}: {error}");
         }
         assert!(data.join("transcripts/job-1.json").exists());

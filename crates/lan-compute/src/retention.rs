@@ -7,12 +7,13 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime},
 };
 
 use serde::Deserialize;
 
 use crate::protocol::Task;
+use voice_to_text_core::move_to_trash;
 
 const GIB: u64 = 1_073_741_824;
 
@@ -145,21 +146,6 @@ fn trash_candidate(candidate: Candidate) -> Result<(), String> {
         move_to_trash(&candidate.json)?;
     }
     Ok(())
-}
-
-fn move_to_trash(path: &Path) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME is unavailable.".to_owned())?;
-    let trash = PathBuf::from(home).join(".Trash");
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("entry");
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_millis())
-        .unwrap_or(0);
-    fs::rename(path, trash.join(format!("{name}.{stamp}")))
-        .map_err(|error| format!("Cannot move to the Trash: {error}"))
 }
 
 #[cfg(test)]

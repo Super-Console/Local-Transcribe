@@ -5,6 +5,7 @@ mod jobs;
 mod library;
 mod media;
 mod punctuation;
+mod trash;
 
 pub use asr::{
     idle_unload_seconds, inspect_model_directory, loaded_model_id, set_idle_unload,
@@ -20,7 +21,11 @@ pub use compute_lock::{
 pub use input_file::{InputFile, InputFileError};
 pub use jobs::{JobLease, JobState, JobStatus, JobStore};
 pub use library::{default_trash_dir, LibraryModel, ModelLibrary};
-pub use media::{decode_audio_file, DecodedAudio};
+pub use media::{
+    decode_audio_file, decode_audio_file_streaming, probe_audio_duration_ms, DecodedAudio,
+    DecodedAudioMeta,
+};
+pub use trash::move_to_trash;
 
 use serde::{Deserialize, Serialize};
 

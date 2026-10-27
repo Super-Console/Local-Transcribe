@@ -16,7 +16,10 @@ use sherpa_onnx::{
     OfflineTransducerModelConfig, OfflineWhisperModelConfig, OfflineZipformerCtcModelConfig,
 };
 
-use crate::{decode_audio_file, punctuation, InputFile, Transcript, TranscriptSegment};
+use crate::{
+    decode_audio_file_streaming, probe_audio_duration_ms, punctuation, InputFile, Transcript,
+    TranscriptSegment,
+};
 
 const SAMPLE_RATE: u32 = 16_000;
 const CHUNK_SECONDS: usize = 30;
@@ -675,7 +678,6 @@ pub fn transcribe_file_streaming_with_options(
         );
     }
 
-    let audio = decode_audio_file(&input.path, SAMPLE_RATE)?;
     if is_cancelled() {
         return Err("Transcription was cancelled.".to_owned());
     }
@@ -684,11 +686,14 @@ pub fn transcribe_file_streaming_with_options(
         None => None,
     };
     let chunk_samples = SAMPLE_RATE as usize * chunk_seconds();
-    let chunks: Vec<&[f32]> = audio.samples.chunks(chunk_samples).collect();
-    if chunks.is_empty() {
-        return Err("The selected media contains no audio to transcribe.".to_owned());
-    }
-    let total_duration_ms = (audio.samples.len() * 1_000 / SAMPLE_RATE as usize) as u64;
+    // 容器给出时长时先估算总段数，界面才有进度；拿不到就报 0，界面会自动隐藏进度条。
+    let estimated_duration_ms = probe_audio_duration_ms(&input.path).ok().flatten();
+    let estimated_total_chunks = estimated_duration_ms
+        .map(|duration_ms| {
+            let samples = (duration_ms as u128 * SAMPLE_RATE as u128 / 1_000) as usize;
+            samples.div_ceil(chunk_samples).max(1)
+        })
+        .unwrap_or(0);
 
     let mut config = OfflineRecognizerConfig::default();
     config.model_config.num_threads = 2;
@@ -897,46 +902,71 @@ pub fn transcribe_file_streaming_with_options(
         return Err("Transcription was cancelled.".to_owned());
     }
 
-    let mut segments = Vec::with_capacity(chunks.len());
-    for (index, samples) in chunks.iter().enumerate() {
+    let mut segments: Vec<TranscriptSegment> = Vec::new();
+    let mut completed_chunks: usize = 0;
+    let mut buffer: Vec<f32> = Vec::with_capacity(chunk_samples);
+    let mut total_duration_ms = estimated_duration_ms.unwrap_or(0);
+
+    // 边解码边识别：内存里只保留一个分块，长视频不会再因为整段解码而耗尽内存。
+    let meta = decode_audio_file_streaming(&input.path, SAMPLE_RATE, |samples| {
+        for &sample in samples {
+            buffer.push(sample);
+            if buffer.len() < chunk_samples {
+                continue;
+            }
+            if is_cancelled() {
+                return Err("Transcription was cancelled.".to_owned());
+            }
+            completed_chunks += 1;
+            transcribe_chunk(
+                recognizer,
+                punctuator.as_ref(),
+                &buffer,
+                completed_chunks,
+                estimated_total_chunks,
+                total_duration_ms,
+                (completed_chunks as u64 - 1) * chunk_samples as u64,
+                completed_chunks as u64 * chunk_samples as u64,
+                &mut segments,
+                &mut on_progress,
+                &mut on_segment,
+            )?;
+            buffer.clear();
+        }
+        Ok(())
+    })?;
+    total_duration_ms = meta.duration_ms;
+
+    if !buffer.is_empty() {
         if is_cancelled() {
             return Err("Transcription was cancelled.".to_owned());
         }
-        let stream = recognizer.create_stream();
-        stream.accept_waveform(SAMPLE_RATE as i32, samples);
-        recognizer.decode(&stream);
-        let result = stream
-            .get_result()
-            .ok_or_else(|| "The speech engine returned no result for an audio chunk.".to_owned())?;
-        let text = collapse_degenerate_repetitions(result.text.trim());
-        if !text.is_empty() {
-            let text = match &punctuator {
-                Some(punctuator) => punctuator.punctuate(&text),
-                None => text,
-            };
-            let start_ms = (index * chunk_samples * 1_000 / SAMPLE_RATE as usize) as u64;
-            let end_sample = ((index + 1) * chunk_samples).min(audio.samples.len());
-            let end_ms = (end_sample * 1_000 / SAMPLE_RATE as usize) as u64;
-            let segment = TranscriptSegment {
-                start_ms,
-                end_ms,
-                text,
-            };
-            on_segment(TranscriptionSegmentUpdate {
-                index: segments.len(),
-                total_chunks: chunks.len(),
-                segment: segment.clone(),
-            });
-            segments.push(segment);
-        }
+        completed_chunks += 1;
+        transcribe_chunk(
+            recognizer,
+            punctuator.as_ref(),
+            &buffer,
+            completed_chunks,
+            estimated_total_chunks,
+            total_duration_ms,
+            (completed_chunks as u64 - 1) * chunk_samples as u64,
+            meta.sample_count,
+            &mut segments,
+            &mut on_progress,
+            &mut on_segment,
+        )?;
+        buffer.clear();
+    }
+    if completed_chunks == 0 {
+        return Err("The selected media contains no audio to transcribe.".to_owned());
+    }
+    // 估算可能和实际差一段，结束时把真实总数补一次，最终状态才准确。
+    if estimated_total_chunks != completed_chunks {
         on_progress(TranscriptionProgress {
-            completed_chunks: index + 1,
-            total_chunks: chunks.len(),
+            completed_chunks,
+            total_chunks: completed_chunks,
             total_duration_ms,
         });
-        if is_cancelled() {
-            return Err("Transcription was cancelled.".to_owned());
-        }
     }
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -975,10 +1005,57 @@ pub fn transcribe_file_streaming_with_options(
             | ModelFamily::FunAsrNano
             | ModelFamily::Transducer => None,
         },
-        duration_ms: Some(audio.duration_ms),
+        duration_ms: Some(meta.duration_ms),
         text,
         segments: Some(segments),
     })
+}
+
+/// 识别一个分块并派发进度/片段事件。
+#[allow(clippy::too_many_arguments)]
+fn transcribe_chunk(
+    recognizer: &OfflineRecognizer,
+    punctuator: Option<&punctuation::Punctuator>,
+    samples: &[f32],
+    completed_chunks: usize,
+    total_chunks: usize,
+    total_duration_ms: u64,
+    start_sample: u64,
+    end_sample: u64,
+    segments: &mut Vec<TranscriptSegment>,
+    on_progress: &mut impl FnMut(TranscriptionProgress),
+    on_segment: &mut impl FnMut(TranscriptionSegmentUpdate),
+) -> Result<(), String> {
+    let stream = recognizer.create_stream();
+    stream.accept_waveform(SAMPLE_RATE as i32, samples);
+    recognizer.decode(&stream);
+    let result = stream
+        .get_result()
+        .ok_or_else(|| "The speech engine returned no result for an audio chunk.".to_owned())?;
+    let text = collapse_degenerate_repetitions(result.text.trim());
+    if !text.is_empty() {
+        let text = match punctuator {
+            Some(punctuator) => punctuator.punctuate(&text),
+            None => text,
+        };
+        let segment = TranscriptSegment {
+            start_ms: start_sample * 1_000 / SAMPLE_RATE as u64,
+            end_ms: end_sample * 1_000 / SAMPLE_RATE as u64,
+            text,
+        };
+        on_segment(TranscriptionSegmentUpdate {
+            index: segments.len(),
+            total_chunks,
+            segment: segment.clone(),
+        });
+        segments.push(segment);
+    }
+    on_progress(TranscriptionProgress {
+        completed_chunks,
+        total_chunks,
+        total_duration_ms,
+    });
+    Ok(())
 }
 
 #[cfg(test)]
