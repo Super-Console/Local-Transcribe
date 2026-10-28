@@ -2399,6 +2399,10 @@ pub fn run() {
                 request_quit(app);
             }
             tauri::RunEvent::Exit => {
+                // tao 结束事件循环后直接 `std::process::exit`，Rust 托管状态
+                // 不会 drop；先释放 LLM（含 macOS Metal 资源），否则静态析构
+                // 会命中 ggml 的 rsets 断言而 abort。
+                llm::shutdown_for_exit(app);
                 let _ = app.state::<Arc<lan_host::HostState>>().stop();
             }
             _ => {}

@@ -1,5 +1,13 @@
 # Project Status
 
+## Maintenance release — 1.5.0-beta.5 (2026-10-28)
+
+- Timmy reported that quitting the app crashed it (two identical reports, 16:06:44 and 16:47:49, same crash UUID `4C64878C-D3DC-3E5D-9A33-F22FE8B3F8F4`). Root cause: Tauri's macOS event loop ends inside tao's `run()`, which then calls `std::process::exit(exit_code)`; Rust destructors are skipped, so a loaded `LlmRuntime` (llama model + Metal buffers) is never dropped. During `__cxa_finalize_ranges`, ggml's Metal device teardown hits `GGML_ASSERT([rsets->data count] == 0)` (`ggml-metal-device.m:1040`) and aborts the process. The crash therefore happens on quit whenever an LLM model is still resident, not while transcribing.
+- Fix: `RunEvent::Exit` (fired by tao before `std::process::exit`) now calls `llm::shutdown_for_exit`, which cancels the active generation and synchronously unloads the model, releasing the Metal residency sets before static destructors run. Windows uses the same handler (tao's Windows `run()` also exits through `std::process::exit`); its llama backend is CPU-only, so it never hit the Metal assertion, but the model is now released there too.
+- Reproduced and verified with a temporary probe against the real Qwen3-1.7B model: loaded model + `process::exit` (previous behaviour) aborts with exit 134 and the exact `ggml-metal-device.m:1040` assertion seen in both crash reports; `cancel_generation()` + `unload()` before `process::exit` exits with code 0, including a run that quit while a generation thread was still decoding tokens.
+- Gates: `cargo fmt --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -D warnings`, `npm run check` (0/0), `npm test` (119 passed).
+
+
 ## Maintenance release — 1.5.0-beta.4 (2026-10-27)
 
 - Crash root cause (reported on Windows, then reproduced on macOS with the same file): a 120.065 s clip yields four 30 s chunks plus a 65 ms tail. onnxruntime threw a C++ exception (`Invalid input shape: {1,39}` in Conv `/encoder_embed/conv/7/Conv`); Rust cannot catch foreign exceptions, so the process aborted with SIGABRT. Only files whose length modulo 30 s is a few tens of milliseconds crash — which is why "some videos crash and some do not".

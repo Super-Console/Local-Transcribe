@@ -1,6 +1,6 @@
 [package]
 name = "voice-to-text-desktop"
-version = "1.5.0-beta.4"
+version = "1.5.0-beta.5"
 description = "Local Transcribe — local-first desktop transcription."
 authors = ["TimmySheep"]
 edition = "2024"
@@ -44,6 +44,8 @@ sysinfo = "=0.39.6"
 # 断点续传测试：本地 HTTP 服务器模拟 206/Range 与中途断流（仅测试使用）。
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+# 退出清理测试需要 Tauri 的 MockRuntime；`test` feature 无额外依赖。
+tauri = { version = "2", features = ["test"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "=0.6.2"

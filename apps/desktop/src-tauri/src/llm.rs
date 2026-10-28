@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use voice_to_text_lan::llm::{LlmRuntime, LlmStatus, select_references, split_reference_segments};
 
 pub const EVENT: &str = "voice-to-text:llm-event";
@@ -195,6 +195,21 @@ pub fn start_generation(
     Ok(request_id)
 }
 
+/// 进程退出前必须执行的 LLM 清理。
+///
+/// tao 在事件循环结束后直接调用 `std::process::exit`，Rust 托管状态因此
+/// 不会被 drop。macOS 上残留的 llama/ggml Metal 资源会让 ggml 的静态析构
+/// 命中 `GGML_ASSERT([rsets->data count] == 0)`（`ggml-metal-device.m:1040`）
+/// 并 abort，所以退出路径必须显式取消生成并卸载模型。
+pub(crate) fn shutdown_for_exit<R: tauri::Runtime>(app: &AppHandle<R>) {
+    if let Some(runtime) = app.try_state::<Arc<LlmRuntime>>() {
+        // 先置取消位，让生成线程在当前 token 边界退出；unload 随后阻塞等待
+        // 它释放 operation 锁，再同步 drop 模型与 backend，Metal 资源即被释放。
+        runtime.cancel_generation();
+        runtime.unload();
+    }
+}
+
 fn emit(app: &AppHandle, request_id: &str, kind: &'static str, data: serde_json::Value) -> bool {
     app.emit(
         EVENT,
@@ -377,8 +392,36 @@ fn error_code(message: &str) -> &'static str {
 mod tests {
     use super::{
         AskTurn, GenerationRequest, build_prompt, merge_user_prompt, segment_user_prompt,
-        select_references, split_reference_segments, validate_request,
+        select_references, shutdown_for_exit, split_reference_segments, validate_request,
     };
+    use std::sync::Arc;
+    use tauri::Manager;
+    use voice_to_text_lan::llm::LlmRuntime;
+
+    #[test]
+    fn exit_shutdown_cancels_the_generation_and_unloads_the_model() {
+        let app = tauri::test::mock_app();
+        let runtime = Arc::new(
+            LlmRuntime::new(std::env::temp_dir().join("voice-to-text-exit-test"), 120)
+                .expect("runtime"),
+        );
+        assert!(app.manage(Arc::clone(&runtime)));
+        runtime.prepare_generation().expect("generation starts");
+        assert!(
+            runtime.status().busy,
+            "precondition: a generation is active"
+        );
+
+        shutdown_for_exit(app.handle());
+
+        let status = runtime.status();
+        assert!(!status.busy, "exit must cancel the active generation");
+        assert!(!status.loaded, "exit must leave no model loaded");
+        assert!(
+            !runtime.cancel_generation(),
+            "no generation may stay active after the exit cleanup"
+        );
+    }
 
     fn request(action: &str, text: &str) -> GenerationRequest {
         GenerationRequest {
