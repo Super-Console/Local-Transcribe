@@ -44,7 +44,12 @@ sysinfo = "=0.39.6"
 # 断点续传测试：本地 HTTP 服务器模拟 206/Range 与中途断流（仅测试使用）。
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+
 # 退出清理测试需要 Tauri 的 MockRuntime；`test` feature 无额外依赖。
+# 只在非 Windows 启用：Windows 上把 llama.cpp（/MT 静态 CRT）拉进测试可执行
+# 文件会与 Rust 默认的 /MD 运行库混用，进程在加载期即
+# STATUS_ENTRYPOINT_NOT_FOUND（0xc0000139）。Metal 退出断言本身也只存在于 macOS。
+[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 tauri = { version = "2", features = ["test"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

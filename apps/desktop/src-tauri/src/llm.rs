@@ -392,14 +392,18 @@ fn error_code(message: &str) -> &'static str {
 mod tests {
     use super::{
         AskTurn, GenerationRequest, build_prompt, merge_user_prompt, segment_user_prompt,
-        select_references, shutdown_for_exit, split_reference_segments, validate_request,
+        select_references, split_reference_segments, validate_request,
     };
-    use std::sync::Arc;
-    use tauri::Manager;
-    use voice_to_text_lan::llm::LlmRuntime;
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn exit_shutdown_cancels_the_generation_and_unloads_the_model() {
+        use std::sync::Arc;
+        use tauri::Manager;
+        use voice_to_text_lan::llm::LlmRuntime;
+
+        use super::shutdown_for_exit;
+
         let app = tauri::test::mock_app();
         let runtime = Arc::new(
             LlmRuntime::new(std::env::temp_dir().join("voice-to-text-exit-test"), 120)
