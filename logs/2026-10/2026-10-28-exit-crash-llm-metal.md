@@ -36,6 +36,20 @@
 - 版本升至 `1.5.0-beta.5`（WiX `1.5.0.5`）：`apps/desktop/package.json`、`package-lock.json`、`tauri.conf.json`、桌面与 LAN crate `Cargo.toml`、`Cargo.lock`、`apps/desktop/tests/sidebar-shell.test.mjs`。
 - macOS 27 / Xcode 27 / rustc 1.97.1 下 release 构建复现已知缺陷：proc-macro dylib 被 strip 后报 `mis-aligned LINKEDIT string pool`，以及链接缺 `___isPlatformVersionAtLeast`。沿用上次发布验证过的环境级参数（不改全局设置、不清缓存）：`CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=false` 与 `RUSTFLAGS="-C link-arg=-L<Xcode clang 21 darwin 目录> -C link-arg=-lclang_rt.osx"`。
 
+## Windows 真机验证（Tims-Gaming-PC）
+
+- 该机已有 rustc 1.99.1、Node 24、VS 2022 BuildTools（含 CMake）、sherpa-onnx 离线包 `C:\Users\TGP\lt-sherpa`；缺少 bindgen 需要的 `libclang`，经 Timmy 同意后用 `winget install LLVM.LLVM` 安装 LLVM 23.1.4（未改动其他全局设置）。
+- GitHub 在该机直连被重置，改用 `git archive` 源码包 scp 同步至 `C:\Users\TGP\lt-beta5-check`。
+- 首次运行在 `cargo test -p voice-to-text-desktop --lib` 前构建 sidecar 时失败：sherpa 下载被阻断、libclang 缺失；改用 `SHERPA_ONNX_ARCHIVE_DIR` 指向本地离线包并设置 `LIBCLANG_PATH` 后成功。
+- 结果：`cargo build -p voice-to-text-lan --release --bin local-transcribe-node` 成功（仅有既存的 LNK4098 CRT 混用警告）；`cargo test -p voice-to-text-desktop --lib` **68 passed / 0 failed，exit 0**，CI 上曾出现的 `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)` 未再出现。
+
 ## 发布与部署
 
-（本节在发布会话结束时追加。）
+- 发布提交 `e639bc7`（`main`），annotated tag `1.5.0-beta.5` 指向该提交，已推送。
+- Windows CI run `40677166209` 在该提交全绿（node sidecar、fmt、workspace tests、strict Clippy、release build、npm check、onboarding 测试、前端 build、MSI 构建与上传）。
+- GitHub Pre-release：<https://github.com/Super-Console/Local-Transcribe/releases/tag/1.5.0-beta.5>；资产为 macOS DMG、Windows MSI 与 `SHA256SUMS`。
+- 资产回下载校验：`shasum -a 256 -c SHA256SUMS` 两项 OK，`hdiutil verify` 通过。DMG `dc9bbaeee93f5edaf5d57ee02fe1246a76f4803be987cf3156620e8c70ed7850`；MSI `1a89bc1d767774e244e171289feef092b856c39af8ff877e15b3911692f2cbfe`。
+- MacBook Pro：从发布 DMG 安装 `~/Applications/Local Transcribe.app`，版本 `1.5.0-beta.5`；主程序 `b66c043190d73c4d068fcb4e77d8072600b602ea562698eeddb2efb7f2b4ff47`，node `f3260b66a4d0b389a0cc481bdd17e6b090179e730f88a5e8cdd43eae2d5dc466`；启动与退出正常，无新崩溃报告；`mdfind` 只返回安装路径。
+- MacBook Air：从同一 DMG 安装同一路径，版本与两个哈希均与 MBP 一致；旧 beta.4 安装移入 `~/.Trash/local-transcribe-1.5.0-beta.5-upgrade-20261028-203716/`；通过 AppleScript 在 GUI 会话启动成功（SSH 会话直接 `open` 无法进入 GUI 会话），退出干净、无崩溃报告；`mdfind` 返回本机安装路径与 SMB 挂载的 Pro 安装路径（同一新版本，非旧版）。
+- 清理：MBP 旧安装与构建副本移入 `~/.Trash/` 下 `local-transcribe-1.5.0-beta.5-upgrade-20261028-185931`、`local-transcribe-1.5.0-beta.5-rebuild-20261028-191022`、`local-transcribe-build-copy-20261028`、`local-transcribe-build-copy-20261028-2`；临时探针源码移入 `local-transcribe-exit-probe-20261028`。回收站未清空。
+- Windows 主机只做了源码构建与测试验证，未安装本次 MSI（Timmy 本次只要求两台 Mac 安装）；Windows 的 LLM 退出路径为 CPU 后端，未做 GUI 退出实测。
