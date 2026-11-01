@@ -60,3 +60,14 @@ GUI 内还实测：设置页显示真实路径与 13 工具描述；点“安装
 - 共享服务由第一个启动它的客户端确定 `--allow-root` 集合；后到的 MCP 客户端若请求别的目录，会复用已在运行的服务并被拒绝，需先结束该服务。
 - `punctuation-ct-transformer` 在数据目录里是 0 字节空目录，`list_models` 按结构校验不列出，属预期。
 - MacBook Air 上 `models list` 返回 `selection_error`：该机 `selected-model.json` 不存在、模型目录为空，是“尚未选模型”的真实状态，不是本次改动引入。
+
+## 清理（用户选择“彻底”）
+
+2026-11-01 13:52，移入 `~/.Trash/local-transcribe-cleanup-20261101-135233/`，未清空回收站，共约 48 GB：
+
+- `repo/target/debug`（13 GB）、`repo/target/release`（3.7 GB，含 bundle、DMG 与 sidecar 副本，均已上传 GitHub）
+- `repo/apps/desktop/src-tauri/binaries`（70 MB）、`build`（700 KB）、`.svelte-kit`（1.5 MB）、`node_modules`（93 MB）
+- `worktrees/VoiceToTextApp-mq`（11 GB）、`VoiceToTextApp-winrec`（9.5 GB）、`oobe-polish-release`（10 GB）、`menu-bar-logo-scale`（6.7 MB）、`oobe-onboarding`（7.4 MB）；随后 `git worktree prune`，`git worktree list` 只剩主工作区
+- `tmp/lt-win-parts`（121 MB）与临时分片文件
+
+保留：`target/sherpa-onnx-prebuilt`（112 MB，`docs/local-build.md` 要求的离线构建缓存）、源码、`logs/`、已安装 App、回收站。清理后仓库 218 MB；`mdfind` 只剩 `~/Applications/Local Transcribe.app`；已安装 App 与 `local-transcribe` 仍正常。
