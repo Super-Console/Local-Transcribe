@@ -58,21 +58,25 @@ jobs:
           npm --version
           rustup show active-toolchain
 
-      - name: Build and stage node sidecar (release)
+      - name: Build and stage sidecars (release)
         shell: pwsh
         run: |
           # tauri externalBin 在构建期就要求数字化 sidecar 存在（cargo test 阶段
           # tauri build script 无条件校验），否则 MSI 不含节点、7878 无法监听。
-          # 先用 release 构建节点并 stage 到 binaries/，后续 test/clippy/build 复用。
+          # 1.6.0 起同一份安装包还要带 MCP、CLI 与本地服务，安装后即可用。
+          # 先用 release 构建并 stage 到 binaries/，后续 test/clippy/build 复用。
           cargo build -p voice-to-text-lan --release --bin local-transcribe-node --locked
-          $src = Join-Path $env:GITHUB_WORKSPACE 'target/release/local-transcribe-node.exe'
-          if (-not (Test-Path -LiteralPath $src)) { throw "node sidecar missing at $src" }
+          cargo build -p voice-to-text-cli -p voice-to-text-mcp -p voice-to-text-service --release --locked
           $destDir = Join-Path $env:GITHUB_WORKSPACE 'apps/desktop/src-tauri/binaries'
           New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-          $dest = Join-Path $destDir 'local-transcribe-node-x86_64-pc-windows-msvc.exe'
-          Copy-Item -LiteralPath $src -Destination $dest -Force
-          $hash = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLowerInvariant()
-          "SIDECAR=$dest SIZE=$((Get-Item -LiteralPath $dest).Length) SHA256=$hash"
+          foreach ($name in @('local-transcribe-node', 'local-transcribe', 'voice-to-text-mcp', 'voice-to-text-service')) {
+            $src = Join-Path $env:GITHUB_WORKSPACE "target/release/$name.exe"
+            if (-not (Test-Path -LiteralPath $src)) { throw "sidecar missing at $src" }
+            $dest = Join-Path $destDir "$name-x86_64-pc-windows-msvc.exe"
+            Copy-Item -LiteralPath $src -Destination $dest -Force
+            $hash = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLowerInvariant()
+            "SIDECAR=$dest SIZE=$((Get-Item -LiteralPath $dest).Length) SHA256=$hash"
+          }
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -123,7 +127,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item -LiteralPath $packages[0].FullName -Destination $stage
           Copy-Item -LiteralPath $exe -Destination $stage
-          foreach ($name in @('local-transcribe-node.exe', 'local-transcribe.exe', 'voice-to-text-service.exe')) {
+          foreach ($name in @('local-transcribe-node.exe', 'local-transcribe.exe', 'voice-to-text-mcp.exe', 'voice-to-text-service.exe')) {
             $tool = Join-Path $env:GITHUB_WORKSPACE "target/release/$name"
             if (-not (Test-Path -LiteralPath $tool)) { throw "Windows executable missing at $tool" }
             Copy-Item -LiteralPath $tool -Destination $stage

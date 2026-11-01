@@ -126,13 +126,37 @@ local-transcribe mode local|prefer-lan
 
 `voice-to-text-mcp` 通过本地 stdio 说话 MCP 协议，恰好暴露十三个工具：`transcribe_file`、`get_job_status`、`get_job_result`、`cancel_job`、`retry_job`、`list_jobs`、`list_models`、`export_result`、`list_nodes`、`add_node`、`update_node`、`remove_node`、`node_status`。文件访问必须显式传 `--allow-root 目录`；不传任何 root 时全部文件读取被拒绝。`add_node` 是唯一能引入新地址的入口，其余节点工具只作用于 `lan-settings.json` 里已有的节点；任何工具都不接受命令、路径或 URL scheme。详见 [`docs/mcp.md`](docs/mcp.md)。
 
+### MCP 与 CLI 随 App 一起安装（1.6.0）
+
+装完桌面应用就够了：`Local Transcribe.app/Contents/MacOS/` 里除了 GUI，还带
+`voice-to-text-mcp`、`local-transcribe` 与 `voice-to-text-service`；Windows 的 MSI 把同样
+三个程序装在 `voice-to-text-desktop.exe` 旁边。首次启动不下载任何东西，也不需要第二个安装包。
+
+- **复制现成的 MCP 配置**：设置 → 集成 → *复制配置*，或运行 `local-transcribe mcp-config`。
+  两者输出同一段 JSON，`command` 是本机 App 包内的绝对路径。默认不授权任何目录；需要时按目录追加，
+  例如 `local-transcribe mcp-config --allow-root "$HOME/Movies"`。应用不会改写任何 MCP 客户端自己的配置。
+- **把 `local-transcribe` 加进 PATH**：设置 → 集成 → *命令行工具* → *安装*。它在
+  `~/.local/bin/local-transcribe` 建立链接（macOS 为软链、Windows 为 `.cmd` 垫片），不需要 sudo；
+  *卸载* 只删除这一条链接。终端找不到时，把 `export PATH="$HOME/.local/bin:$PATH"` 写进 `~/.zshrc`。
+- **同一份数据目录**：三个入口都用 `~/Library/Application Support/com.timmy.voicetotextapp`
+  （Windows 为 `%LOCALAPPDATA%\com.timmy.voicetotextapp`），所以 GUI 里选的模型就是 MCP 与 CLI 用的模型，
+  任务在三个入口之间互相可见。服务按需启动，只走本机 socket（Windows 为仅回环端口）；MCP 不开任何
+  TCP/HTTP 监听，也不上传数据。
+- **必须在同一台机器**：stdio MCP 会在客户端所在主机启动服务；客户端要装 App 的那台 Mac/PC 上运行，
+  其他电脑上的客户端看不到这份数据目录。
+- **从 1.5.x 升级**：旧版本只带 GUI 和局域网节点，重装 1.6.0 的 DMG/MSI 即可获得三个 sidecar，
+  不需要迁移，原有数据目录继续使用。
+
 ## 从源码构建（macOS，Apple Silicon）
 
 ```sh
-# 桌面应用（未签名的本地构建）
-cd apps/desktop && npm install && npm run tauri -- build --bundles app --no-sign
+# 桌面应用，连同 MCP / CLI / 服务三个 sidecar，ad-hoc 签名（本地未签名构建）
+cd apps/desktop && npm install && npm run bundle:mac
 
-# CLI + 服务 + MCP + 局域网 Node
+# 本机的 release 构建还需要 CARGO_PROFILE_RELEASE_STRIP=none 与 clang_rt 链接绕行，
+# 见 docs/local-build.md。
+
+# 只要独立二进制（不打包 App）
 cargo build --release -p voice-to-text-cli -p voice-to-text-service -p voice-to-text-mcp -p voice-to-text-lan
 ```
 

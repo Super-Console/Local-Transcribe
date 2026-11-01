@@ -130,13 +130,44 @@ an id starts the node on this Mac and shares the same settings as the GUI switch
 
 `voice-to-text-mcp` speaks the MCP protocol over local stdio and exposes exactly thirteen tools: `transcribe_file`, `get_job_status`, `get_job_result`, `cancel_job`, `retry_job`, `list_jobs`, `list_models`, `export_result`, `list_nodes`, `add_node`, `update_node`, `remove_node`, `node_status`. File access requires explicit `--allow-root DIR` arguments; without any root, all file reads are denied. `add_node` is the only tool that can introduce a new address; every other node tool works only on a node already in `lan-settings.json`, and no tool accepts a command, path or URL scheme. See [`docs/mcp.md`](docs/mcp.md).
 
+### MCP and CLI ship with the app (1.6.0)
+
+Installing the desktop app is the only step. `Local Transcribe.app/Contents/MacOS/` contains
+`voice-to-text-mcp`, `local-transcribe` and `voice-to-text-service` next to the GUI, and the
+Windows MSI installs the same three binaries beside `voice-to-text-desktop.exe`. Nothing is
+downloaded on first launch and there is no second installer.
+
+- **Copy a ready-made MCP config** — Settings → Integration → *Copy config*, or run
+  `local-transcribe mcp-config`. Both produce the same JSON with the absolute path of the
+  bundled server. No directory is authorized by default; add one pair per directory, e.g.
+  `local-transcribe mcp-config --allow-root "$HOME/Movies"`. The app never edits an MCP
+  client's own configuration file.
+- **Put `local-transcribe` on your PATH** — Settings → Integration → *Command-line tool* →
+  *Install*. It creates `~/.local/bin/local-transcribe` (a symlink on macOS, a `.cmd` shim on
+  Windows) without sudo; *Remove* deletes only that link. If the shell cannot find it, add
+  `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`.
+- **One data folder** — every entry point uses
+  `~/Library/Application Support/com.timmy.voicetotextapp` (Windows:
+  `%LOCALAPPDATA%\com.timmy.voicetotextapp`), so the model selected in the GUI is the model
+  MCP and the CLI use, and each job is visible from all three. The service starts on demand
+  over a single local socket (loopback-only port on Windows); MCP opens no TCP/HTTP listener
+  and nothing is uploaded.
+- **Same machine** — stdio MCP starts the server on the client's host. Run the client on the
+  Mac/PC where the app is installed; a client on another computer cannot see this data folder.
+- **Upgrading from 1.5.x** — those builds shipped only the GUI and the LAN node. Reinstall
+  the 1.6.0 DMG/MSI to get the three sidecars; no migration is needed and the existing data
+  folder is reused as-is.
+
 ## Build from source (macOS, Apple Silicon)
 
 ```sh
-# Desktop app (unsigned local build)
-cd apps/desktop && npm install && npm run tauri -- build --bundles app --no-sign
+# Desktop app with the MCP + CLI + service sidecars, ad-hoc signed (unsigned local build)
+cd apps/desktop && npm install && npm run bundle:mac
 
-# CLI + service + MCP + LAN node
+# On this Mac the release build also needs CARGO_PROFILE_RELEASE_STRIP=none and the
+# clang_rt link workaround documented in docs/local-build.md.
+
+# Standalone binaries without the app bundle
 cargo build --release -p voice-to-text-cli -p voice-to-text-service -p voice-to-text-mcp -p voice-to-text-lan
 ```
 

@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use voice_to_text_service::{default_data_dir, Request, Response, ServiceClient};
+use voice_to_text_service::{default_data_dir, sidecar, Request, Response, ServiceClient};
 
 const USAGE: &str = "Usage:
   local-transcribe status [--data-dir DIR]
@@ -38,6 +38,8 @@ const USAGE: &str = "Usage:
   local-transcribe jobs reorder <job-id> [--after ID] [--data-dir DIR]
   local-transcribe jobs remove <job-id> [--data-dir DIR]
   local-transcribe export <job-id> --format txt|json --output PATH [--data-dir DIR]
+  local-transcribe mcp-config [--allow-root DIR]...
+      (prints MCP client configuration; no root is authorized by default)
 
 <node> is a saved node id or its unique name. All commands print JSON. The
 service is started on demand and shared with the app. Remote start/stop runs
@@ -52,6 +54,7 @@ struct Parsed {
     model: Option<String>,
     language: Option<String>,
     roots: Vec<PathBuf>,
+    allow_roots: Vec<PathBuf>,
     after: Option<String>,
     format: Option<String>,
     output: Option<PathBuf>,
@@ -75,6 +78,7 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
         model: None,
         language: None,
         roots: Vec::new(),
+        allow_roots: Vec::new(),
         after: None,
         format: None,
         output: None,
@@ -112,6 +116,9 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--model" => parsed.model = Some(take("--model")?),
             "--language" => parsed.language = Some(take("--language")?),
             "--root" => parsed.roots.push(PathBuf::from(take("--root")?)),
+            "--allow-root" => parsed
+                .allow_roots
+                .push(sidecar::expand_home(&take("--allow-root")?)),
             "--after" => parsed.after = Some(take("--after")?),
             "--format" => parsed.format = Some(take("--format")?),
             "--output" => parsed.output = Some(PathBuf::from(take("--output")?)),
@@ -233,6 +240,36 @@ fn ensure_client(data_dir: &Path, roots: &[PathBuf]) -> Result<ServiceClient, St
     }
 }
 
+/// MCP 可执行文件：默认取与 CLI 同目录的 sidecar；开发时可用环境变量覆盖。
+fn mcp_binary() -> Result<PathBuf, String> {
+    if let Some(path) = std::env::var_os("LOCAL_TRANSCRIBE_MCP") {
+        return Ok(PathBuf::from(path));
+    }
+    sidecar::bundled_binary(sidecar::MCP_BINARY)
+}
+
+/// `mcp-config`：stdout 只输出可直接粘贴的 JSON，说明走 stderr。
+fn print_mcp_config(parsed: &Parsed) -> ExitCode {
+    let command = match mcp_binary() {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::from(2);
+        }
+    };
+    match sidecar::render_mcp_config(&command, &parsed.allow_roots) {
+        Ok(config) => {
+            println!("{config}");
+            eprintln!("{}", sidecar::mcp_config_note());
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn print_response(response: &Response) -> ExitCode {
     let payload = serde_json::to_value(response).unwrap_or(Value::Null);
     println!(
@@ -295,6 +332,11 @@ fn main() -> ExitCode {
         .or_else(|| default_data_dir().ok())
         .unwrap_or_else(|| std::env::temp_dir().join("local-transcribe"));
     let action = parsed.action.clone().unwrap_or_default();
+
+    // `mcp-config` 是纯本地命令：不连接、也不启动服务。
+    if parsed.group == "mcp-config" {
+        return print_mcp_config(&parsed);
+    }
 
     // 提交任务时把文件所在目录作为授权根，供按需启动的服务使用。
     let mut roots = parsed.roots.clone();

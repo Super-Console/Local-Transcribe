@@ -5,6 +5,40 @@ local service: the thirteen tools below submit, observe, cancel, retry, export t
 model ever loads inside the MCP process. See the 2026-10-22 update at the end of this file
 for the current contract and the verified end-to-end run.
 
+## Use the installed app (1.6.0+)
+
+The MCP server ships inside the app; there is nothing to build or download:
+
+- macOS: `/Applications/Local Transcribe.app/Contents/MacOS/voice-to-text-mcp`
+  (or `~/Applications/...` when installed there)
+- Windows: `voice-to-text-mcp.exe` next to `voice-to-text-desktop.exe`
+
+Get a ready-to-paste configuration from **Settings → Integration → Copy config**, or from the
+command line:
+
+```sh
+local-transcribe mcp-config
+local-transcribe mcp-config --allow-root "$HOME/Movies" --allow-root "$HOME/Recordings"
+```
+
+Both print the same JSON to stdout and the "how to authorize a directory" note to stderr, so
+the output stays valid JSON. No `--allow-root` is included by default, which means file reads
+are denied until you add one. The app never rewrites an MCP client's own configuration.
+
+The bundled `voice-to-text-service` must stay next to the MCP binary: the server starts it on
+demand over the shared local endpoint. Do not copy the MCP binary alone to another folder.
+
+Run the client on the same Mac/PC as the app. A stdio MCP client on another computer starts
+the server there and cannot see this machine's model selection, jobs or media paths.
+
+### Compatibility
+
+- 1.6.0 and later: the DMG/MSI installs `voice-to-text-mcp`, `local-transcribe` and
+  `voice-to-text-service`. Reinstalling is enough to gain the three sidecars.
+- 1.5.x and earlier: only the GUI and the LAN node were packaged, so `voice-to-text-mcp` had
+  to be built from source. Reinstall the 1.6.0 package instead; the data folder is reused and
+  no migration is needed.
+
 ## Build on macOS
 
 From the project root:

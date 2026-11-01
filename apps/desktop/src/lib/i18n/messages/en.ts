@@ -252,23 +252,28 @@ export const en: Record<MessageKey, Message> = {
   "settings.serviceRunning": "Running · pid {pid}",
   "settings.serviceStopped": "Not running: started automatically when the CLI or MCP calls it",
   "settings.refresh": "Refresh",
-  "settings.mcpDesc": "9 tools: models, submit, status, result, queue, cancel, retry, export",
+  "settings.mcpDesc":
+    "13 tools: models, submit, status, result, queue, cancel, retry, export and LAN nodes",
   "settings.copyConfig": "Copy config",
   "settings.copyExample": "Copy example",
   "settings.cliDesc": "Shares the same service and queue as MCP",
+  "settings.cliInstallName": "Command-line tool",
+  "settings.cliInstallDesc":
+    "Links local-transcribe into ~/.local/bin; no administrator access needed",
+  "settings.cliInstalledDesc": "Installed · points at {path}",
+  "settings.cliInstallAction": "Install",
+  "settings.cliUninstallAction": "Remove",
+  "settings.cliPathHint":
+    "If the terminal cannot find local-transcribe, add this to ~/.zshrc: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
     "Troubleshooting: the service listens only on a local Unix socket (mode 0600); file access requires authorization at startup via",
   "settings.troubleOutro":
     "; logs are written to the terminal and never include audio content.",
-  "settings.aboutDesc": "Local audio & video transcription · Preview {version}",
+  "settings.aboutDesc": "Local audio & video transcription · Version {version}",
   "settings.aboutBuild": "Unsigned development build",
   "settings.thirdParty": "Third-party notices",
   "settings.thirdPartyDesc": "MIT license and the components shipped with this build",
   "settings.openNotices": "Open notices",
-  "settings.mcpCommandPlaceholder": "<path to the voice-to-text-mcp executable>",
-  "settings.mcpPathPlaceholder": "/path/to/your/media/dir",
-  "settings.cliMediaPlaceholder": "<media file>",
-  "settings.cliModelPlaceholder": "<model id>",
 
   // Dialogs & errors
   "dialog.mediaFilter": "Audio or video",

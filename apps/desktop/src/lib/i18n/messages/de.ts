@@ -258,23 +258,27 @@ export const de: Record<MessageKey, Message> = {
     "Nicht aktiv: wird bei Aufruf durch CLI oder MCP automatisch gestartet",
   "settings.refresh": "Aktualisieren",
   "settings.mcpDesc":
-    "9 Tools: Modelle, senden, Status, Ergebnis, Warteschlange, abbrechen, erneut versuchen, exportieren",
+    "13 Tools: Modelle, senden, Status, Ergebnis, Warteschlange, abbrechen, erneut versuchen, exportieren und LAN-Knoten",
   "settings.copyConfig": "Konfiguration kopieren",
   "settings.copyExample": "Beispiel kopieren",
   "settings.cliDesc": "Nutzt denselben Dienst und dieselbe Warteschlange wie MCP",
+  "settings.cliInstallName": "Kommandozeilenwerkzeug",
+  "settings.cliInstallDesc":
+    "Verlinkt local-transcribe in ~/.local/bin; keine Administratorrechte nötig",
+  "settings.cliInstalledDesc": "Installiert · verweist auf {path}",
+  "settings.cliInstallAction": "Installieren",
+  "settings.cliUninstallAction": "Entfernen",
+  "settings.cliPathHint":
+    "Falls das Terminal local-transcribe nicht findet, füge dies in ~/.zshrc ein: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
     "Fehlerbehebung: Der Dienst lauscht nur auf einem lokalen Unix-Socket (Rechte 0600); Dateizugriff muss beim Start mit",
   "settings.troubleOutro":
     " autorisiert werden; Logs erscheinen im Terminal und enthalten keine Audioinhalte.",
-  "settings.aboutDesc": "Lokale Audio- und Video-Transkription · Vorschau {version}",
+  "settings.aboutDesc": "Lokale Audio- und Video-Transkription · Version {version}",
   "settings.aboutBuild": "Unsignierter Entwicklungsbau",
   "settings.thirdParty": "Drittanbieter-Hinweise",
   "settings.thirdPartyDesc": "MIT-Lizenz und die mitgelieferten Komponenten",
   "settings.openNotices": "Hinweise öffnen",
-  "settings.mcpCommandPlaceholder": "<Pfad zur voice-to-text-mcp-Executable>",
-  "settings.mcpPathPlaceholder": "/pfad/zu/deinen/medien",
-  "settings.cliMediaPlaceholder": "<Mediendatei>",
-  "settings.cliModelPlaceholder": "<Modell-id>",
 
   // Dialoge und Fehler
   "dialog.mediaFilter": "Audio oder Video",

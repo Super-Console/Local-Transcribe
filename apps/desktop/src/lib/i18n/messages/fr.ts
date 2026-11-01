@@ -259,23 +259,27 @@ export const fr: Record<MessageKey, Message> = {
     "Arrêté : démarré automatiquement quand la CLI ou MCP l’appelle",
   "settings.refresh": "Actualiser",
   "settings.mcpDesc":
-    "9 outils : modèles, soumettre, statut, résultat, file, annuler, réessayer, exporter",
+    "13 outils : modèles, soumettre, statut, résultat, file, annuler, réessayer, exporter et nœuds réseau local",
   "settings.copyConfig": "Copier la config",
   "settings.copyExample": "Copier l’exemple",
   "settings.cliDesc": "Partage le même service et la même file que MCP",
+  "settings.cliInstallName": "Outil en ligne de commande",
+  "settings.cliInstallDesc":
+    "Lie local-transcribe dans ~/.local/bin ; aucun droit administrateur requis",
+  "settings.cliInstalledDesc": "Installé · pointe vers {path}",
+  "settings.cliInstallAction": "Installer",
+  "settings.cliUninstallAction": "Désinstaller",
+  "settings.cliPathHint":
+    "Si le terminal ne trouve pas local-transcribe, ajoutez ceci à ~/.zshrc : export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
     "Dépannage : le service n’écoute que sur une socket Unix locale (permission 0600) ; l’accès aux fichiers doit être autorisé au lancement avec",
   "settings.troubleOutro":
     " ; les journaux restent dans le terminal et ne contiennent aucun contenu audio.",
-  "settings.aboutDesc": "Transcription audio et vidéo locale · Version préliminaire {version}",
+  "settings.aboutDesc": "Transcription audio et vidéo locale · Version {version}",
   "settings.aboutBuild": "Build de développement non signé",
   "settings.thirdParty": "Mentions des tiers",
   "settings.thirdPartyDesc": "Licence MIT et les composants fournis",
   "settings.openNotices": "Ouvrir les mentions",
-  "settings.mcpCommandPlaceholder": "<chemin vers l’exécutable voice-to-text-mcp>",
-  "settings.mcpPathPlaceholder": "/chemin/vers/vos/media",
-  "settings.cliMediaPlaceholder": "<fichier média>",
-  "settings.cliModelPlaceholder": "<id du modèle>",
 
   // Dialogues et erreurs
   "dialog.mediaFilter": "Audio ou vidéo",

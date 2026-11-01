@@ -257,22 +257,26 @@ export const es: Record<MessageKey, Message> = {
     "Sin ejecutar: se inicia automáticamente cuando lo llama la CLI o MCP",
   "settings.refresh": "Actualizar",
   "settings.mcpDesc":
-    "9 herramientas: modelos, enviar, estado, resultado, cola, cancelar, reintentar, exportar",
+    "13 herramientas: modelos, enviar, estado, resultado, cola, cancelar, reintentar, exportar y nodos de red local",
   "settings.copyConfig": "Copiar configuración",
   "settings.copyExample": "Copiar ejemplo",
   "settings.cliDesc": "Comparte el mismo servicio y la misma cola que MCP",
+  "settings.cliInstallName": "Herramienta de línea de comandos",
+  "settings.cliInstallDesc":
+    "Enlaza local-transcribe en ~/.local/bin; no requiere permisos de administrador",
+  "settings.cliInstalledDesc": "Instalada · apunta a {path}",
+  "settings.cliInstallAction": "Instalar",
+  "settings.cliUninstallAction": "Desinstalar",
+  "settings.cliPathHint":
+    "Si el terminal no encuentra local-transcribe, añade esto a ~/.zshrc: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
     "Solución de problemas: el servicio solo escucha en un socket Unix local (permisos 0600); el acceso a archivos requiere autorización al iniciar con",
   "settings.troubleOutro": "; los registros van a la terminal y no guardan contenido de audio.",
-  "settings.aboutDesc": "Transcripción local de audio y vídeo · Versión preliminar {version}",
+  "settings.aboutDesc": "Transcripción local de audio y vídeo · Versión {version}",
   "settings.aboutBuild": "Compilación de desarrollo sin firmar",
   "settings.thirdParty": "Avisos de terceros",
   "settings.thirdPartyDesc": "Licencia MIT y los componentes incluidos",
   "settings.openNotices": "Abrir avisos",
-  "settings.mcpCommandPlaceholder": "<ruta al ejecutable voice-to-text-mcp>",
-  "settings.mcpPathPlaceholder": "/ruta/a/tus/medios",
-  "settings.cliMediaPlaceholder": "<archivo multimedia>",
-  "settings.cliModelPlaceholder": "<id del modelo>",
 
   // Diálogos y errores
   "dialog.mediaFilter": "Audio o vídeo",

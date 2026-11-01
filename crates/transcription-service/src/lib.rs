@@ -39,6 +39,7 @@ use voice_to_text_lan::client::LanClient;
 use voice_to_text_lan::protocol::{TaskResult, TaskState};
 
 mod lan;
+pub mod sidecar;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SOCKET_FILE: &str = "service.sock";

@@ -28,6 +28,7 @@ use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, Ta
 mod lan;
 mod lan_host;
 mod llm;
+mod mcp_cli;
 mod model_download;
 mod node_supervisor;
 mod onboarding;
@@ -2337,6 +2338,10 @@ pub fn run() {
             set_sidebar_toggle_label,
             sync_window_theme,
             service_status,
+            mcp_cli::mcp_config,
+            mcp_cli::cli_tool_status,
+            mcp_cli::install_cli_tool,
+            mcp_cli::uninstall_cli_tool,
             get_job_status,
             get_job_result,
             list_history,

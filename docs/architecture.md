@@ -8,7 +8,9 @@ Timmy explicitly accepts Tauri 2 + Svelte for Local Transcribe (the product name
 
 ## Current implementation snapshot (2026-10-22)
 
-The desktop and MCP entry points now use the shared Rust core/task/result store. The store is JSON-file based with cross-process `fs2` locks; SQLite is deferred. The MCP control plane and five stdio tools are implemented and protocol-tested. The core contains an in-process sherpa-onnx path for Paraformer/SenseVoice layouts, but no approved model weights have been used for a real inference test. The CLI is not implemented.
+The desktop and MCP entry points now use the shared Rust core/task/result store. The store is JSON-file based with cross-process `fs2` locks; SQLite is deferred. The MCP control plane (13 stdio tools) is implemented and protocol-tested. The core contains an in-process sherpa-onnx path for Paraformer/SenseVoice layouts, but no approved model weights have been used for a real inference test.
+
+**Correction (2026-11-01):** the CLI *is* implemented. `crates/transcription-cli` ships the `local-transcribe` binary (status, models, jobs, export, lan, mode) as a thin client of the same service, covered by integration tests. The previous sentence here ("The CLI is not implemented") was a stale 2026-10-22 snapshot. Since 1.6.0 the GUI installer ships `voice-to-text-mcp`, `local-transcribe` and `voice-to-text-service` as sidecars, so the three entry points share one data folder out of the box.
 
 ## Local language-model runtime spike (2026-10-24)
 
@@ -25,7 +27,7 @@ flowchart TB
   end
 
   GUI --> CORE[Shared Rust core and task/result contract]
-  CLI -. planned .-> CORE
+  CLI --> CORE
   MCP --> CORE
 
   CORE --> STORE[(Shared JSON task/result files\nfs2 cross-process locks)]
@@ -47,7 +49,7 @@ flowchart TB
 
 - No source media upload and no cloud transcription.
 - MCP is launched over local stdio; no TCP/HTTP listener.
-- Tauri and MCP currently use the same Rust core/task/result contract; the CLI must join it when implemented.
+- Tauri, the CLI and MCP use the same Rust core/task/result contract and the same data folder; all three are shipped inside the installer since 1.6.0.
 - Models are loaded only for inference, not at GUI idle/startup.
 - Model weights and user media are outside Git and separate from the desktop binary.
 - TXT and JSON are the only V1 output formats.

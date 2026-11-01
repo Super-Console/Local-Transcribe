@@ -20,6 +20,8 @@
     RetentionPolicy,
     ServiceStatus,
     StorageSummary,
+    CliToolStatus,
+    McpConfigReply,
   } from "$lib/types";
 
   let {
@@ -119,21 +121,53 @@
   let showLanDiagnostics = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // 随包分发的 MCP / CLI：配置文本由后端按真实安装路径生成，前端不拼路径。
+  let mcpConfig = $state("");
+  let mcpCommand = $state("");
+  let mcpConfigError = $state<string | null>(null);
+  let cliStatus = $state<CliToolStatus | null>(null);
+  let cliBusy = $state(false);
+  let cliError = $state<string | null>(null);
+
+  $effect(() => {
+    void invoke<McpConfigReply>("mcp_config")
+      .then((reply) => {
+        mcpConfig = reply.config;
+        mcpCommand = reply.command;
+        mcpConfigError = null;
+      })
+      .catch((error) => {
+        mcpConfig = "";
+        mcpCommand = "";
+        mcpConfigError = String(error);
+      });
+    void invoke<CliToolStatus>("cli_tool_status")
+      .then((status) => { cliStatus = status; })
+      .catch(() => { cliStatus = null; });
+  });
+
+  async function toggleCliTool() {
+    if (!cliStatus || cliBusy) return;
+    cliBusy = true;
+    cliError = null;
+    try {
+      cliStatus = await invoke<CliToolStatus>(
+        cliStatus.installed ? "uninstall_cli_tool" : "install_cli_tool",
+      );
+    } catch (error) {
+      cliError = String(error);
+    } finally {
+      cliBusy = false;
+    }
+  }
+
   onDestroy(() => {
     if (copyTimer) clearTimeout(copyTimer);
   });
 
-  const mcpConfig = $derived(`{
-  "mcpServers": {
-    "local-transcribe": {
-      "command": "${t("settings.mcpCommandPlaceholder")}",
-      "args": ["--allow-root", "${storage?.libraryPath ? storage.libraryPath.replace(/\/models$/, "") : t("settings.mcpPathPlaceholder")}"]
-    }
-  }
-}`);
-
-  const cliExample = $derived(`local-transcribe models list
-local-transcribe jobs add "${t("settings.cliMediaPlaceholder")}" --model ${t("settings.cliModelPlaceholder")}
+  const cliExample = $derived(`local-transcribe status
+local-transcribe models list
+local-transcribe jobs add "/absolute/path/media.mp4"
 local-transcribe jobs show <job-id>
 local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
 
@@ -573,14 +607,51 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         <div class="grow">
           <div class="name">{t("settings.mcpName")}</div>
           <div class="desc">{t("settings.mcpDesc")}</div>
+          <div class="path" title={mcpCommand}>{mcpCommand || "—"}</div>
         </div>
         <div class="value">
-          <button type="button" class="link-action" onclick={() => copy(mcpConfig, "mcp")}>
+          <button
+            type="button"
+            class="link-action"
+            disabled={!mcpConfig}
+            onclick={() => copy(mcpConfig, "mcp")}
+          >
             {copied === "mcp" ? t("common.copied") : t("settings.copyConfig")}
           </button>
         </div>
       </div>
-      <pre class="snippet">{mcpConfig}</pre>
+      <pre class="snippet">{mcpConfig || mcpConfigError || ""}</pre>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.cliInstallName")}</div>
+          <div class="desc">
+            {cliStatus?.installed
+              ? t("settings.cliInstalledDesc", { path: cliStatus.target })
+              : t("settings.cliInstallDesc")}
+          </div>
+          <div class="path" title={cliStatus?.path ?? ""}>{cliStatus?.path ?? "—"}</div>
+        </div>
+        <div class="value">
+          <button
+            type="button"
+            class="link-action"
+            disabled={!cliStatus || cliBusy}
+            onclick={toggleCliTool}
+          >
+            {cliBusy
+              ? "…"
+              : cliStatus?.installed
+                ? t("settings.cliUninstallAction")
+                : t("settings.cliInstallAction")}
+          </button>
+        </div>
+      </div>
+      {#if cliStatus?.installed}
+        <p class="note">{t("settings.cliPathHint")}</p>
+      {/if}
+      {#if cliError}
+        <p class="note">{cliError}</p>
+      {/if}
       <div class="row">
         <div class="grow">
           <div class="name">CLI</div>

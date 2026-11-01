@@ -123,6 +123,21 @@ export type ServiceStatus = {
   protocolVersion: number;
 };
 
+/** MCP 客户端配置文本，以及它指向的 App 包内可执行文件。 */
+export type McpConfigReply = {
+  config: string;
+  command: string;
+};
+
+/** 命令行工具的安装状态（链接位置与 App 包内目标）。 */
+export type CliToolStatus = {
+  installed: boolean;
+  path: string;
+  target: string;
+  targetDir: string;
+  pathReady: boolean;
+};
+
 export type JobStatus = {
   jobId: string;
   state: "running" | "completed" | "failed" | "cancelled";
