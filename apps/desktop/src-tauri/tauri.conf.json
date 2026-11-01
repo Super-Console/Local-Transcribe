@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Local Transcribe",
-  "version": "1.6.0",
-  "identifier": "com.timmy.voicetotextapp",
+  "version": "1.7.0",
+  "identifier": "net.timhuang.localtranscribe",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -45,7 +45,7 @@
     },
     "windows": {
       "wix": {
-        "version": "1.6.0.0"
+        "version": "1.7.0.0"
       }
     },
     "externalBin": [

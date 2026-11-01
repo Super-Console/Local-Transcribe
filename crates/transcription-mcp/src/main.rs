@@ -21,13 +21,12 @@ use serde_json::Value;
 use voice_to_text_service::{default_data_dir, Request, Response, ServiceClient};
 
 const SERVICE_BINARY: &str = "voice-to-text-service";
-const PROTOCOL_NOTE: &str = "Tools talk to the shared local service over a Unix socket; inference never runs inside this MCP process.";
+const PROTOCOL_NOTE: &str = "Tools talk to the shared per-user local service over its local socket; inference never runs inside this MCP process.";
 
 #[derive(Debug, Clone)]
 struct VoiceToTextServer {
     tool_router: ToolRouter<Self>,
     data_dir: PathBuf,
-    allowed_roots: Vec<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -37,9 +36,7 @@ struct VoiceToTextServer {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct TranscribeArgs {
-    #[schemars(
-        description = "Absolute path of a local audio/video file under a configured --allow-root"
-    )]
+    #[schemars(description = "Absolute path of a local audio/video file")]
     path: String,
     #[serde(default)]
     #[schemars(
@@ -75,7 +72,7 @@ struct ExportArgs {
     job_id: String,
     #[schemars(description = "txt or json")]
     format: String,
-    #[schemars(description = "Absolute output path under a configured --allow-root")]
+    #[schemars(description = "Absolute output path")]
     path: String,
 }
 
@@ -264,23 +261,10 @@ fn validate_port_value(port: Option<u16>) -> Result<Option<u16>, String> {
 }
 
 impl VoiceToTextServer {
-    fn new(data_dir: PathBuf, roots: Vec<PathBuf>) -> Result<Self, String> {
-        let mut allowed = Vec::new();
-        for root in roots {
-            let canonical = fs::canonicalize(&root)
-                .map_err(|_| format!("--allow-root cannot be read: {}", root.display()))?;
-            if !canonical.is_dir() {
-                return Err(format!(
-                    "--allow-root must be a directory: {}",
-                    root.display()
-                ));
-            }
-            allowed.push(canonical);
-        }
+    fn new(data_dir: PathBuf) -> Result<Self, String> {
         Ok(VoiceToTextServer {
             tool_router: Self::tool_router(),
             data_dir,
-            allowed_roots: allowed,
         })
     }
 
@@ -327,9 +311,6 @@ impl VoiceToTextServer {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        for root in &self.allowed_roots {
-            command.arg("--allow-root").arg(root);
-        }
         command
             .spawn()
             .map_err(|error| format!("Cannot start the local service: {error}"))?;
@@ -347,38 +328,21 @@ impl VoiceToTextServer {
         }
     }
 
+    /// 只做路径规范化（绝对路径 + canonicalize）。
     fn authorize_input(&self, supplied: &str) -> Result<PathBuf, String> {
-        if self.allowed_roots.is_empty() {
-            return Err(
-                "MCP file access is disabled. Start the server with --allow-root directories."
-                    .to_owned(),
-            );
-        }
         let path = Path::new(supplied);
         if !path.is_absolute() {
             return Err("The input path must be absolute.".to_owned());
         }
         let canonical = fs::canonicalize(path)
             .map_err(|error| format!("The path cannot be accessed ({}).", error.kind()))?;
-        if !self
-            .allowed_roots
-            .iter()
-            .any(|root| canonical.starts_with(root))
-        {
-            return Err(
-                "The path is outside the directories authorized for this MCP server.".to_owned(),
-            );
+        if !canonical.is_file() {
+            return Err("The input path must point to a regular file.".to_owned());
         }
         Ok(canonical)
     }
 
     fn authorize_output(&self, supplied: &str) -> Result<PathBuf, String> {
-        if self.allowed_roots.is_empty() {
-            return Err(
-                "MCP file access is disabled. Start the server with --allow-root directories."
-                    .to_owned(),
-            );
-        }
         let path = Path::new(supplied);
         if !path.is_absolute() {
             return Err("The output path must be absolute.".to_owned());
@@ -392,13 +356,6 @@ impl VoiceToTextServer {
                 error.kind()
             )
         })?;
-        if !self
-            .allowed_roots
-            .iter()
-            .any(|root| canonical.starts_with(root))
-        {
-            return Err("The output directory is outside the authorized roots.".to_owned());
-        }
         canonical
             .join(path.file_name().unwrap_or_default())
             .into_os_string()
@@ -570,9 +527,8 @@ impl VoiceToTextServer {
         }
         let path = self.authorize_input(&args.path)?;
         let mut client = self.connect()?;
-        let response = client.request(&Request::Submit {
+        let response = client.request(&Request::SubmitAuthorized {
             path: path.to_string_lossy().into_owned(),
-            model_dir: None,
             model_id: args.model_id,
             owner: Some("mcp".to_owned()),
             node: args.node_id,
@@ -739,7 +695,7 @@ impl VoiceToTextServer {
     ) -> Result<Json<ExportReply>, String> {
         let target = self.authorize_output(&args.path)?;
         let mut client = self.connect()?;
-        let data = Self::data_of(client.request(&Request::Export {
+        let data = Self::data_of(client.request(&Request::ExportAuthorized {
             job_id: args.job_id,
             path: target.to_string_lossy().into_owned(),
             format: args.format,
@@ -764,7 +720,6 @@ impl ServerHandler for VoiceToTextServer {
 
 async fn serve() -> Result<(), String> {
     let mut data_dir = None;
-    let mut roots = Vec::new();
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -773,13 +728,8 @@ async fn serve() -> Result<(), String> {
                     args.next().ok_or("--data-dir needs a value")?,
                 ));
             }
-            "--allow-root" => {
-                roots.push(PathBuf::from(
-                    args.next().ok_or("--allow-root needs a value")?,
-                ));
-            }
             "--help" | "-h" => {
-                println!("local-transcribe-mcp [--data-dir DIR] [--allow-root DIR]...");
+                println!("local-transcribe-mcp [--data-dir DIR]");
                 return Ok(());
             }
             other => return Err(format!("unknown option: {other}")),
@@ -789,7 +739,7 @@ async fn serve() -> Result<(), String> {
         Some(dir) => dir,
         None => default_data_dir()?,
     };
-    let server = VoiceToTextServer::new(data_dir, roots)?;
+    let server = VoiceToTextServer::new(data_dir)?;
     let service = server
         .serve(rmcp::transport::stdio())
         .await
@@ -823,7 +773,7 @@ mod tests {
 
     #[test]
     fn exposes_the_documented_tool_set() {
-        let server = VoiceToTextServer::new(temp_root(), Vec::new()).unwrap();
+        let server = VoiceToTextServer::new(temp_root()).unwrap();
         let mut names = server
             .tool_router
             .list_all()
@@ -854,7 +804,7 @@ mod tests {
     /// 任务书 §8 测试 8：任何工具都不接受任意命令参数（schema 断言）。
     #[test]
     fn no_tool_accepts_an_arbitrary_command_parameter() {
-        let server = VoiceToTextServer::new(temp_root(), Vec::new()).unwrap();
+        let server = VoiceToTextServer::new(temp_root()).unwrap();
         // 这些名字一旦出现在参数里，就等于给模型开了「在本机执行任意东西」的口子。
         let forbidden = [
             "command",
@@ -927,7 +877,7 @@ mod tests {
     #[test]
     fn add_node_rejects_a_url_scheme_before_touching_the_service() {
         let data = temp_root();
-        let server = VoiceToTextServer::new(data.clone(), Vec::new()).unwrap();
+        let server = VoiceToTextServer::new(data.clone()).unwrap();
         let args = AddNodeArgs {
             name: "desk".to_owned(),
             host: "ssh://x".to_owned(),
@@ -978,7 +928,7 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let server = VoiceToTextServer::new(data.clone(), vec![allowed]).unwrap();
+        let server = VoiceToTextServer::new(data.clone()).unwrap();
         assert!(server.validate_node("known").is_ok());
         assert!(server.validate_node("missing").is_err());
         assert!(server.validate_node("off").is_err());
@@ -1021,7 +971,7 @@ mod tests {
         )
         .unwrap();
 
-        let server = VoiceToTextServer::new(data, vec![allowed]).unwrap();
+        let server = VoiceToTextServer::new(data).unwrap();
         let args = TranscribeArgs {
             path: media.to_string_lossy().into_owned(),
             model_id: None,
@@ -1043,32 +993,39 @@ mod tests {
     }
 
     #[test]
-    fn file_access_is_limited_to_canonical_authorized_directories() {
-        let base = temp_root();
-        let allowed = base.join("allowed");
-        let outside = base.join("outside");
-        fs::create_dir_all(&allowed).unwrap();
-        fs::create_dir_all(&outside).unwrap();
-        let permitted = allowed.join("voice.wav");
-        let denied = outside.join("voice.wav");
-        fs::write(&permitted, b"x").unwrap();
-        fs::write(&denied, b"x").unwrap();
-
-        let server = VoiceToTextServer::new(base.join("data"), vec![allowed]).unwrap();
-        assert!(server.authorize_input(permitted.to_str().unwrap()).is_ok());
-        assert!(server.authorize_input(denied.to_str().unwrap()).is_err());
-        assert!(server.authorize_output(denied.to_str().unwrap()).is_err());
-    }
-
-    #[test]
-    fn no_root_means_file_access_is_denied() {
+    fn input_paths_are_normalized_but_not_gated_here() {
         let base = temp_root();
         let media = base.join("voice.wav");
         fs::write(&media, b"x").unwrap();
-        let server = VoiceToTextServer::new(base.join("data"), Vec::new()).unwrap();
-        let error = server
+        let server = VoiceToTextServer::new(base.join("data")).unwrap();
+        let canonical = server
             .authorize_input(media.to_str().unwrap())
-            .expect_err("no roots must deny access");
-        assert!(error.contains("--allow-root"), "{error}");
+            .expect("absolute canonical paths are accepted");
+        assert_eq!(canonical, fs::canonicalize(&media).unwrap());
+        assert!(
+            server.authorize_input("relative.wav").is_err(),
+            "relative paths are rejected before any IPC"
+        );
+        assert!(
+            server
+                .authorize_input(base.join("missing.wav").to_str().unwrap())
+                .is_err(),
+            "missing files are rejected"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_input_is_resolved_to_its_target() {
+        let base = temp_root();
+        let real = base.join("real.wav");
+        fs::write(&real, b"x").unwrap();
+        let link = base.join("link.wav");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let server = VoiceToTextServer::new(base.join("data")).unwrap();
+        assert_eq!(
+            server.authorize_input(link.to_str().unwrap()).unwrap(),
+            fs::canonicalize(&real).unwrap()
+        );
     }
 }

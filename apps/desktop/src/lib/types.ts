@@ -129,6 +129,21 @@ export type McpConfigReply = {
   command: string;
 };
 
+/** 官网更新清单里的最新版本。 */
+export type UpdateInfo = {
+  version: string;
+  url: string;
+  notesUrl?: string | null;
+  releasedAt?: string | null;
+  notes?: string | null;
+};
+
+/** 更新检查偏好（默认开启）。 */
+export type UpdateSettings = {
+  autoCheck: boolean;
+  lastCheckAt?: string | null;
+};
+
 /** 命令行工具的安装状态（链接位置与 App 包内目标）。 */
 export type CliToolStatus = {
   installed: boolean;

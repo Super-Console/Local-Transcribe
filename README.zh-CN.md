@@ -23,7 +23,7 @@ apps/desktop/                 Tauri 2 + Svelte 桌面应用（macOS 优先）
 crates/transcription-core/    音频解码、模型布局校验、sherpa-onnx 推理、
                               可取消的流式转写、模型库、任务/结果存储
 crates/transcription-service/ 本地共享服务（macOS/Linux 为 Unix socket，
-                              Windows 为仅回环 TCP），GUI / CLI / MCP 共用
+                              均为按用户隔离的本地套接字），GUI / CLI / MCP 共用
 crates/transcription-cli/     `local-transcribe` 命令行客户端
 crates/transcription-mcp/     本地 stdio 的 MCP 服务（13 个工具）
 crates/lan-compute/           局域网 Compute V1.1：任务存储、节点服务、客户端、mDNS
@@ -63,7 +63,7 @@ crates/lan-compute/           局域网 Compute V1.1：任务存储、节点服�
 - **Tailscale / VPN**：节点可以在 tailnet 地址上监听，但**不会**在该地址注册 mDNS（多播不跨 tailnet），因此 tailnet 节点不会出现在局域网扫描结果里，需要手动填写地址与端口。后续手机版将通过 Tailscale 连接本机节点；这不改变「无鉴权、仅在私有网络内使用」的边界。
 - **节点进程**：开启共享会启动随包分发的 `local-transcribe-node` 子进程，GUI 自身不监听局域网端口。**本机没有运行 GUI 时节点仍可工作**：手动运行同一个二进制即可，数据目录与协议完全一致。停止共享或确认退出会结束子进程。有任务进行中时，退出前会先确认。关窗后是否继续共享由「关闭窗口后继续在后台共享」决定（仅在共享开启时生效），从菜单栏图标可重新打开窗口或退出。笔记本合盖或睡眠时节点不可达，客户端约 5 次轮询（约 10 秒）后报失联，这是预期行为。
 - **无头节点**：`local-transcribe-node --name 名称 --data-dir 目录 --listen 地址:端口 [--netmask 掩码] [--compute on --models-dir 应用数据目录]` 可在无 GUI 时运行同一节点。`--listen` 必填；普通局域网地址必须给 `--netmask`，`0.0.0.0`、回环与 Tailscale `100.64/10` 可省略。`--parent-pid` 让节点随父进程退出；`--idle-unload` 只接受 20/120/600/1800/7200 秒。
-- **数据与日志位置**：应用数据在 `~/Library/Application Support/com.timmy.voicetotextapp`（模型、历史、任务、`lan-host` 接收媒体、设置）；节点日志在 `~/Library/Logs/com.timmy.voicetotextapp/lan-node.log`（5 MB 轮转，保留 1 份）。
+- **数据与日志位置**：应用数据在 `~/Library/Application Support/net.timhuang.localtranscribe`（模型、历史、任务、`lan-host` 接收媒体、设置）；节点日志在 `~/Library/Logs/net.timhuang.localtranscribe/lan-node.log`（5 MB 轮转，保留 1 份）。旧标识目录中的数据会保留，不迁移。
 - **卸载残留**：把应用拖进废纸篓不会删除上述两个目录，不再需要数据时请手动清理。
 - Windows 安装包由 `windows-2022` CI 构建；设计评审见 `docs/architecture/windows-lan-review.md`。
 
@@ -124,7 +124,7 @@ local-transcribe mode local|prefer-lan
 
 ### MCP
 
-`voice-to-text-mcp` 通过本地 stdio 说话 MCP 协议，恰好暴露十三个工具：`transcribe_file`、`get_job_status`、`get_job_result`、`cancel_job`、`retry_job`、`list_jobs`、`list_models`、`export_result`、`list_nodes`、`add_node`、`update_node`、`remove_node`、`node_status`。文件访问必须显式传 `--allow-root 目录`；不传任何 root 时全部文件读取被拒绝。`add_node` 是唯一能引入新地址的入口，其余节点工具只作用于 `lan-settings.json` 里已有的节点；任何工具都不接受命令、路径或 URL scheme。详见 [`docs/mcp.md`](docs/mcp.md)。
+`voice-to-text-mcp` 通过本地 stdio 说话 MCP 协议，恰好暴露十三个工具：`transcribe_file`、`get_job_status`、`get_job_result`、`cancel_job`、`retry_job`、`list_jobs`、`list_models`、`export_result`、`list_nodes`、`add_node`、`update_node`、`remove_node`、`node_status`。文件访问没有目录白名单：只要当前用户能读到的绝对路径都可以提交，且只有当前用户能连上本地服务 socket。`add_node` 是唯一能引入新地址的入口，其余节点工具只作用于 `lan-settings.json` 里已有的节点；任何工具都不接受命令、路径或 URL scheme。详见 [`docs/mcp.md`](docs/mcp.md)。
 
 ### MCP 与 CLI 随 App 一起安装（1.6.0）
 
@@ -132,14 +132,17 @@ local-transcribe mode local|prefer-lan
 `voice-to-text-mcp`、`local-transcribe` 与 `voice-to-text-service`；Windows 的 MSI 把同样
 三个程序装在 `voice-to-text-desktop.exe` 旁边。首次启动不下载任何东西，也不需要第二个安装包。
 
+- **没有目录白名单**：2026-11-01 之后的 1.7.0 构建里，GUI、CLI 与 MCP 都能直接读取当前用户可访问的任意绝对路径。
+  不再有 `access.json`、设置页的目录列表，也没有 `roots` 命令；服务只监听当前用户的本地 socket，
+  其他账户或其他电脑连不上。
 - **复制现成的 MCP 配置**：设置 → 集成 → *复制配置*，或运行 `local-transcribe mcp-config`。
-  两者输出同一段 JSON，`command` 是本机 App 包内的绝对路径。默认不授权任何目录；需要时按目录追加，
-  例如 `local-transcribe mcp-config --allow-root "$HOME/Movies"`。应用不会改写任何 MCP 客户端自己的配置。
+  两者输出同一段 JSON，`command` 是本机 App 包内的绝对路径，不带额外参数。
+  应用不会改写任何 MCP 客户端自己的配置。
 - **把 `local-transcribe` 加进 PATH**：设置 → 集成 → *命令行工具* → *安装*。它在
   `~/.local/bin/local-transcribe` 建立链接（macOS 为软链、Windows 为 `.cmd` 垫片），不需要 sudo；
   *卸载* 只删除这一条链接。终端找不到时，把 `export PATH="$HOME/.local/bin:$PATH"` 写进 `~/.zshrc`。
-- **同一份数据目录**：三个入口都用 `~/Library/Application Support/com.timmy.voicetotextapp`
-  （Windows 为 `%LOCALAPPDATA%\com.timmy.voicetotextapp`），所以 GUI 里选的模型就是 MCP 与 CLI 用的模型，
+- **同一份数据目录**：三个入口都用 `~/Library/Application Support/net.timhuang.localtranscribe`
+  （Windows 为 `%LOCALAPPDATA%\net.timhuang.localtranscribe`），所以 GUI 里选的模型就是 MCP 与 CLI 用的模型，
   任务在三个入口之间互相可见。服务按需启动，只走本机 socket（Windows 为仅回环端口）；MCP 不开任何
   TCP/HTTP 监听，也不上传数据。
 - **必须在同一台机器**：stdio MCP 会在客户端所在主机启动服务；客户端要装 App 的那台 Mac/PC 上运行，
@@ -168,7 +171,7 @@ Windows：workspace 可编译 `x86_64-pc-windows-msvc`（由 CI 在 `windows-202
 
 - Rust workspace、CLI、服务与 MCP 在 Apple Silicon（macOS）上构建并通过测试。
 - macOS 上已用真实模型完成端到端转写验证（见上表），CLI 与 GUI 均已走通。
-- MCP 协议、工具面与 `--allow-root` 文件访问防线已对真实服务实测。
+- MCP 协议与工具面已对真实服务实测（白名单移除前还做过一次拒绝路径验证）。
 - Windows：完整管线（fmt、测试、严格 clippy、release 构建、npm check、MSI）已在真实 `windows-2022` CI runner 全绿，且本机对 `x86_64-pc-windows-msvc` 做交叉核对。真机安装/启动验收记录见 `docs/testing/`，运行时结论以该记录实际验证的范围为限。（历史阻塞：Smart App Control 拦截的是"在测试主机上编译"；CI 编译与 MSI 安装是另一条路径。）
 - 局域网：自动化测试覆盖任务状态机、持久化/崩溃恢复、无认证的私有网段访问、断点续传上传、收集 API 越界拒绝、带 sha256 清单的 ZIP 导出、CLI/MCP 节点管理与共享设置文件锁。跨设备运行时验证记录见 `docs/testing/`。
 - 1.5.0-beta.4 回归验证：此前会让进程 abort 的 120 秒素材（65 毫秒尾巴触发 onnxruntime C++ 异常）在 zipformer / paraformer / fire-red 三种模型上均正常完成；Windows 首页删除记录改走回收站；窗口变窄时阅读器工具栏只保留图标。

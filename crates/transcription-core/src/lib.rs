@@ -29,6 +29,43 @@ pub use trash::move_to_trash;
 
 use serde::{Deserialize, Serialize};
 
+/// Canonical desktop and local data-directory identifier.
+pub const APP_IDENTIFIER: &str = "net.timhuang.localtranscribe";
+
+/// Resolve the platform-local data directory shared by the service and LAN node.
+/// The desktop GUI uses Tauri's `app_local_data_dir`, configured with the same ID.
+pub fn default_app_data_dir() -> Result<std::path::PathBuf, String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .map(|home| {
+                home.join("Library/Application Support")
+                    .join(APP_IDENTIFIER)
+            })
+            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("LOCALAPPDATA")
+            .map(std::path::PathBuf::from)
+            .map(|local| local.join(APP_IDENTIFIER))
+            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .map(|path| path.join(APP_IDENTIFIER))
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .map(|home| home.join(".local/share").join(APP_IDENTIFIER))
+            })
+            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Transcript {
@@ -65,5 +102,26 @@ impl Transcript {
     /// Return only the recognized text, without metadata or formatting changes.
     pub fn to_txt(&self) -> String {
         self.text.clone()
+    }
+}
+
+#[cfg(test)]
+mod app_data_dir_tests {
+    use super::{default_app_data_dir, APP_IDENTIFIER};
+
+    #[test]
+    fn default_app_data_dir_uses_the_canonical_identifier() {
+        let directory = default_app_data_dir().expect("platform data directory should resolve");
+        assert_eq!(
+            directory.file_name().and_then(|name| name.to_str()),
+            Some(APP_IDENTIFIER)
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            directory,
+            std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME is set"))
+                .join("Library/Application Support")
+                .join(APP_IDENTIFIER)
+        );
     }
 }

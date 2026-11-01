@@ -263,6 +263,18 @@ export const fr: Record<MessageKey, Message> = {
   "settings.copyConfig": "Copier la config",
   "settings.copyExample": "Copier l’exemple",
   "settings.cliDesc": "Partage le même service et la même file que MCP",
+  "settings.updatesName": "Rechercher les mises à jour",
+  "settings.updatesDesc": "Au démarrage, consulte les versions sur le site. La requête inclut la version de l’app et expose votre IP, sans envoyer de transcription ni d’identifiant d’appareil.",
+  "settings.updatesAuto": "Vérifier automatiquement",
+  "settings.updatesCheck": "Vérifier maintenant",
+  "settings.updatesChecking": "Vérification…",
+  "settings.updatesLatest": "Vous êtes à jour",
+  "settings.updatesAvailable": "Nouvelle version {version}",
+  "settings.updatesOpen": "Voir la version",
+  "update.availableTitle": "Mise à jour disponible",
+  "update.availableBody": "Local Transcribe {version} est disponible. Ouvrir GitHub pour la télécharger ?",
+  "update.now": "Télécharger",
+  "update.later": "Plus tard",
   "settings.cliInstallName": "Outil en ligne de commande",
   "settings.cliInstallDesc":
     "Lie local-transcribe dans ~/.local/bin ; aucun droit administrateur requis",
@@ -273,8 +285,7 @@ export const fr: Record<MessageKey, Message> = {
     "Si le terminal ne trouve pas local-transcribe, ajoutez ceci à ~/.zshrc : export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
     "Dépannage : le service n’écoute que sur une socket Unix locale (permission 0600) ; l’accès aux fichiers doit être autorisé au lancement avec",
-  "settings.troubleOutro":
-    " ; les journaux restent dans le terminal et ne contiennent aucun contenu audio.",
+
   "settings.aboutDesc": "Transcription audio et vidéo locale · Version {version}",
   "settings.aboutBuild": "Build de développement non signé",
   "settings.thirdParty": "Mentions des tiers",

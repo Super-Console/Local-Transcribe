@@ -18,12 +18,15 @@ command line:
 
 ```sh
 local-transcribe mcp-config
-local-transcribe mcp-config --allow-root "$HOME/Movies" --allow-root "$HOME/Recordings"
 ```
 
-Both print the same JSON to stdout and the "how to authorize a directory" note to stderr, so
-the output stays valid JSON. No `--allow-root` is included by default, which means file reads
-are denied until you add one. The app never rewrites an MCP client's own configuration.
+It prints the JSON to stdout and a short note to stderr, so the output stays valid JSON.
+There is no directory allow-list and no extra argument to pass: the server accepts any
+absolute media path the current user can read, and the per-user local service socket is the
+only access boundary. The app never rewrites an MCP client's own configuration.
+
+The MCP server keeps no whitelist of its own; it only normalizes paths (absolute,
+canonicalized, regular file) and forwards the request to the service.
 
 The bundled `voice-to-text-service` must stay next to the MCP binary: the server starts it on
 demand over the shared local endpoint. Do not copy the MCP binary alone to another folder.
@@ -49,27 +52,22 @@ cargo build --release -p voice-to-text-mcp
 
 The executable is `target/release/voice-to-text-mcp`. `sherpa-onnx-sys` needs the matching platform static-library archive during the first build; by default its build script downloads the official release asset. If that download is unavailable, set `SHERPA_ONNX_ARCHIVE_DIR` to a directory containing the exact archive expected by the pinned crate. This is a native runtime library, not a speech model; the MCP server never downloads model weights.
 
-Configure the MCP client to launch the executable directly and authorize each input directory with a separate `--allow-root` argument. For clients whose configuration uses `command` and `args`, the shape is:
+Configure the MCP client to launch the executable directly. For clients whose configuration uses `command` and `args`, the shape is:
 
 ```json
 {
   "command": "/Users/REDACTED/AWS/VoiceToTextApp/target/release/voice-to-text-mcp",
-  "args": [
-    "--allow-root",
-    "/Users/REDACTED/Downloads",
-    "--allow-root",
-    "/Users/REDACTED/Documents/Recordings"
-  ]
+  "args": []
 }
 ```
 
-Adapt the wrapper to the actual MCP client's configuration. This example does not configure Hermes or any other client. With no `--allow-root`, transcription file access is denied; model listing and task/result lookups do not require a root. Paths must be absolute. The server canonicalizes both roots and input files, rejecting symlink/path escapes, and has no arbitrary output-path or shell-execution tool.
+Adapt the wrapper to the actual MCP client's configuration. This example does not configure Hermes or any other client. Input and output paths must be absolute; the server canonicalizes them and has no arbitrary output-path or shell-execution tool.
 
 **Host boundary:** stdio `command` normally starts the server on the MCP client's host. To share the desktop model selection, tasks and results, launch it on the same Mac as the Tauri app and local files. A client running on another computer will not automatically see Pro's app data or media paths.
 
 ## Shared data and jobs
 
-On macOS, the default data directory is `~/Library/Application Support/com.timmy.voicetotextapp`, matching the Tauri bundle identifier. Both entry points use `selected-model.json`, `jobs/` and `transcripts/` there. `--data-dir PATH` and `VOICE_TO_TEXT_APP_DATA_DIR` can override the MCP data directory for tests or an intentionally separate profile; an override will not share desktop state unless both entry points use the same exact directory.
+On macOS, the default data directory is `~/Library/Application Support/net.timhuang.localtranscribe`, matching the Tauri bundle identifier. Both entry points use `selected-model.json`, `jobs/` and `transcripts/` there. `--data-dir PATH` and `VOICE_TO_TEXT_APP_DATA_DIR` can override the MCP data directory for tests or an intentionally separate profile; an override will not share desktop state unless both entry points use the same exact directory. The previous `com.timmy.voicetotextapp` data directory is retained and is not migrated.
 
 Task statuses and results are JSON files guarded by `fs2` cross-process file locks; SQLite remains deferred. GUI and MCP enforce one active transcription task at a time. If a worker exits while marked running, the next status read marks it interrupted. Cancellation is cooperative: media decoding itself is not interruptible; the core checks after decoding and around recognition chunks.
 
@@ -88,7 +86,7 @@ network listener.
 - `list_jobs` — active/pending tasks plus only the most recent 200 terminal tasks.
 - `cancel_job` — request cooperative cancellation; a task may finish just before the request is observed.
 - `retry_job` — retry a failed or cancelled task under the same job id.
-- `export_result` — export a finished transcript to a path under an allow-root.
+- `export_result` — export a finished transcript to an absolute path whose directory exists.
 - `add_node` — add a LAN node (`name`, `host`, optional `port`), probe its `/api/v1/capabilities` and save the snapshot. This is the only tool that can introduce a new address; `host` must be a plain host string (no `://`, no whitespace or shell metacharacters).
 - `update_node` — change `enabled`, `host`, `port` or `modelId` of a saved node.
 - `remove_node` — remove a saved node from the local list only; nothing is sent to the other machine.
@@ -98,7 +96,7 @@ Supported model-folder layouts in the current code are Paraformer and SenseVoice
 
 ## Verification boundary
 
-On Pro (2026-10-22), the stdio initialize handshake and `tools/list` were exercised against the built executable; all five tools available at that time were listed. Tool calls verified that no root means deny, an outside file is rejected after canonicalization, and an authorized valid WAV reaches the explicit “no model selected” guard without fabricating a task or transcript. Rust tests also cover symlink escape and cross-process job locking/recovery. This validates protocol/control-plane behavior only—not real speech recognition, model licenses, accuracy, long media, or packaged-client configuration.
+On Pro (2026-10-22), the stdio initialize handshake and `tools/list` were exercised against the built executable; all five tools available at that time were listed. Tool calls verified that a valid WAV reaches the explicit “no model selected” guard without fabricating a task or transcript (the deny-path checks run in that revision were removed together with the allow-list). Rust tests also cover symlink escape and cross-process job locking/recovery. This validates protocol/control-plane behavior only—not real speech recognition, model licenses, accuracy, long media, or packaged-client configuration.
 
 ## 2026-10-22 update: MCP and CLI are service clients
 
@@ -115,12 +113,12 @@ loads a model by itself.
   `list_jobs` returns active/pending plus only the **most recent 200** terminal
   jobs (read from the same persisted statuses as `get_job_status`, so the two
   can never disagree). It is not a full history export.
-- File access stays fail-closed: inputs and export destinations must live under an
-  explicit `--allow-root`; a request without roots is denied.
+- File access has no directory allow-list: any absolute path the current user can open is
+  accepted. The previous `--allow-root` / `access.json` scheme was removed on 2026-11-01.
 - `transcribe_file` returns a job id immediately; use `get_job_status` / `list_jobs`
   to poll and `get_job_result` with `includeText` only when the full text is needed.
-- If no service is running, MCP/CLI start one (single-instance lock prevents a second
-  engine) and pass their `--allow-root` directories to it.
+- If no service is running, MCP/CLI start one; the single-instance lock prevents a second
+  engine.
 - CLI: `local-transcribe status | models list|info | jobs add|list|show|cancel|retry|reorder|remove | export`,
   `lan list|nodes|add|remove|enable|disable|set|scan|start|stop|status`, and `mode local|prefer-lan`.
   `jobs add` accepts `--node <id|name> [--lan-model ID] [--fallback-local]`;

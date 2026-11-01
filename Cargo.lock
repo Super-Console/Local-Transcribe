@@ -5572,7 +5572,7 @@ dependencies = [
 
 [[package]]
 name = "voice-to-text-desktop"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "arboard",
  "block2",
@@ -5606,7 +5606,7 @@ dependencies = [
 
 [[package]]
 name = "voice-to-text-lan"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "axum",
  "fs2",
@@ -5650,8 +5650,10 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uds_windows",
  "voice-to-text-core",
  "voice-to-text-lan",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

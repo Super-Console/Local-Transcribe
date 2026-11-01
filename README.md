@@ -23,7 +23,7 @@ apps/desktop/            Tauri 2 + Svelte desktop app (macOS first)
 crates/transcription-core/    audio decoding, model layout inspection, sherpa-onnx inference,
                        cancellable streaming transcription, model library, job/result store
 crates/transcription-service/ single local service (Unix socket on macOS/Linux,
-                       loopback-only TCP on Windows) shared by GUI / CLI / MCP
+                        a per-user local socket shared by GUI / CLI / MCP
 crates/transcription-cli/     `local-transcribe` command-line client
 crates/transcription-mcp/     MCP server over local stdio (13 tools)
 crates/lan-compute/           LAN Compute V1.1: task store, node server, client, mDNS
@@ -63,7 +63,7 @@ Optional, off by default: transcribe on another computer on your LAN.
 - **Tailscale / VPN**: the node can listen on a tailnet address, but it does **not** register mDNS there (multicast does not cross the tailnet), so tailnet nodes never appear in a LAN scan — add their address and port manually. The future mobile app will connect over Tailscale; this does not change the no-auth, private-network-only boundary.
 - **Node process**: sharing spawns the bundled `local-transcribe-node` sidecar; the GUI itself never opens the LAN port. The node keeps working when the GUI is closed (or never started) — run the same binary manually, it shares the same data folder and protocol. Stopping sharing (or confirming Quit) stops the child. If a task is running, quitting asks for confirmation first. Closing the window keeps the node alive only while "keep sharing after the window closes" is on and sharing is running; use the menu-bar icon to reopen or quit. A sleeping or lid-closed laptop is unreachable, and clients report it after about five polls (~10 s) — that is expected.
 - **Headless node**: `local-transcribe-node --name NAME --data-dir DIR --listen ADDRESS:PORT [--netmask MASK] [--compute on --models-dir APP_DATA]` runs the same node without the GUI. `--listen` is required; a normal LAN address needs `--netmask`, while `0.0.0.0`, loopback and Tailscale `100.64/10` may omit it. `--parent-pid` makes the node exit with its parent; `--idle-unload` accepts 20/120/600/1800/7200 seconds.
-- **Data and logs**: app data lives in `~/Library/Application Support/com.timmy.voicetotextapp` (models, history, jobs, `lan-host` received media, settings); node logs live in `~/Library/Logs/com.timmy.voicetotextapp/lan-node.log` (5 MB rotation, one generation).
+- **Data and logs**: app data lives in `~/Library/Application Support/net.timhuang.localtranscribe` (models, history, jobs, `lan-host` received media, settings); node logs live in `~/Library/Logs/net.timhuang.localtranscribe/lan-node.log` (5 MB rotation, one generation). Existing data under the old identifier is retained and is not migrated.
 - **Uninstall residue**: dragging the app to the Trash leaves those two directories behind. Remove them manually after you no longer need the data.
 - Windows packaging is built by CI on `windows-2022`; see `docs/architecture/windows-lan-review.md` for the design review.
 
@@ -128,7 +128,7 @@ an id starts the node on this Mac and shares the same settings as the GUI switch
 
 ### MCP
 
-`voice-to-text-mcp` speaks the MCP protocol over local stdio and exposes exactly thirteen tools: `transcribe_file`, `get_job_status`, `get_job_result`, `cancel_job`, `retry_job`, `list_jobs`, `list_models`, `export_result`, `list_nodes`, `add_node`, `update_node`, `remove_node`, `node_status`. File access requires explicit `--allow-root DIR` arguments; without any root, all file reads are denied. `add_node` is the only tool that can introduce a new address; every other node tool works only on a node already in `lan-settings.json`, and no tool accepts a command, path or URL scheme. See [`docs/mcp.md`](docs/mcp.md).
+`voice-to-text-mcp` speaks the MCP protocol over local stdio and exposes exactly thirteen tools: `transcribe_file`, `get_job_status`, `get_job_result`, `cancel_job`, `retry_job`, `list_jobs`, `list_models`, `export_result`, `list_nodes`, `add_node`, `update_node`, `remove_node`, `node_status`. File access has no directory allow-list: any absolute media path the current user can read is accepted, and only the current user can reach the local service socket. `add_node` is the only tool that can introduce a new address; every other node tool works only on a node already in `lan-settings.json`, and no tool accepts a command, path or URL scheme. See [`docs/mcp.md`](docs/mcp.md).
 
 ### MCP and CLI ship with the app (1.6.0)
 
@@ -137,26 +137,42 @@ Installing the desktop app is the only step. `Local Transcribe.app/Contents/MacO
 Windows MSI installs the same three binaries beside `voice-to-text-desktop.exe`. Nothing is
 downloaded on first launch and there is no second installer.
 
+- **No folder allow-list** — since 1.7.0 build after 2026-11-01 the app, CLI and MCP read any
+  absolute media path the current user can open. There is no `access.json`, no folder list in
+  Settings and no `roots` command. The service only listens on a per-user local socket, so
+  another account or computer cannot reach it.
 - **Copy a ready-made MCP config** — Settings → Integration → *Copy config*, or run
   `local-transcribe mcp-config`. Both produce the same JSON with the absolute path of the
-  bundled server. No directory is authorized by default; add one pair per directory, e.g.
-  `local-transcribe mcp-config --allow-root "$HOME/Movies"`. The app never edits an MCP
-  client's own configuration file.
+  bundled server and no extra arguments. The app never edits an MCP client's own
+  configuration file.
 - **Put `local-transcribe` on your PATH** — Settings → Integration → *Command-line tool* →
   *Install*. It creates `~/.local/bin/local-transcribe` (a symlink on macOS, a `.cmd` shim on
   Windows) without sudo; *Remove* deletes only that link. If the shell cannot find it, add
   `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`.
 - **One data folder** — every entry point uses
-  `~/Library/Application Support/com.timmy.voicetotextapp` (Windows:
-  `%LOCALAPPDATA%\com.timmy.voicetotextapp`), so the model selected in the GUI is the model
+  `~/Library/Application Support/net.timhuang.localtranscribe` (Windows:
+  `%LOCALAPPDATA%\net.timhuang.localtranscribe`), so the model selected in the GUI is the model
   MCP and the CLI use, and each job is visible from all three. The service starts on demand
-  over a single local socket (loopback-only port on Windows); MCP opens no TCP/HTTP listener
+   over a per-user local socket; MCP opens no TCP/HTTP listener
   and nothing is uploaded.
 - **Same machine** — stdio MCP starts the server on the client's host. Run the client on the
   Mac/PC where the app is installed; a client on another computer cannot see this data folder.
 - **Upgrading from 1.5.x** — those builds shipped only the GUI and the LAN node. Reinstall
   the 1.6.0 DMG/MSI to get the three sidecars; no migration is needed and the existing data
   folder is reused as-is.
+- **Upgrading from 1.6.x** — file access used to be a startup flag of the background
+  service, and briefly an `access.json` folder list. Both are gone: files are read directly,
+  and a leftover `access.json` from an earlier build is ignored.
+
+## Update checks (1.7.0)
+
+On launch (default on, switchable in Settings) the app sends one plain GET to
+`https://apps.timhuang.net/transcribe/updates.json`, compares the version, and — only if a
+newer one exists — offers a dialog whose button opens the GitHub release page in the
+browser. The product site is used instead of the GitHub API because GitHub is not reachable
+from every network. The request includes the app version and exposes the network IP address;
+it carries no device ID or transcript content, and the
+changelog is public at <https://apps.timhuang.net/transcribe/changelog.html>.
 
 ## Build from source (macOS, Apple Silicon)
 
@@ -179,7 +195,7 @@ Windows: the workspace compiles `x86_64-pc-windows-msvc` (verified via CI on `wi
 
 - Rust workspace, CLI, service and MCP build and pass tests on Apple Silicon (macOS).
 - End-to-end transcription verified on macOS with real models (see the table above) through both the CLI and the GUI.
-- MCP protocol, tool surface and the `--allow-root` file-access guard were exercised against the live service.
+- MCP protocol and tool surface were exercised against the live service, including a denial test before the allow-list was removed.
 - Windows: the full pipeline (fmt, tests, strict clippy, release build, npm check, MSI) is green on real `windows-2022` CI runners, and the workspace is cross-checked locally against `x86_64-pc-windows-msvc`. Real-machine install/launch acceptance is recorded in `docs/testing/`; runtime claims are limited to what that record actually verified. (Earlier blockers: Smart App Control rejected *compiling* on the test host; CI compilation and MSI install are separate paths.)
 - LAN compute: the automated suite covers the task state machine, persistence/crash recovery, no-authentication private-network access, resumable upload, collect path-traversal refusal, ZIP export with a sha256 manifest, CLI/MCP node management and the shared settings lock. Cross-device runtime verification is recorded in `docs/testing/`.
 - 1.5.0-beta.4 regression checks: a 120 s clip that used to abort the process (65 ms tail → onnxruntime C++ exception) now completes on zipformer, paraformer and fire-red; Windows record deletion moves files to the Recycle Bin; the reader toolbar collapses to icons below 560 px of pane width.

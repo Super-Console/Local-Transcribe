@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "latest": {
+    "version": "1.7.0",
+    "releasedAt": "2026-11-02",
+    "url": "https://github.com/Super-Console/Local-Transcribe/releases/tag/1.7.0",
+    "notesUrl": "https://apps.timhuang.net/transcribe/changelog.html",
+    "notes": "去掉文件访问白名单：GUI、CLI、MCP 都能直接读取当前用户可访问的任意路径；首页历史列表自动刷新；新增启动检查更新。"
+  }
+}

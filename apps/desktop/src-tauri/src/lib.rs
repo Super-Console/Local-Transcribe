@@ -25,6 +25,7 @@ use voice_to_text_lan::client::LanClient;
 use voice_to_text_lan::llm::LlmRuntime;
 use voice_to_text_lan::protocol::{CollectReport, NodeInfo, StorageInfo, Task, TaskResult};
 
+mod history_watch;
 mod lan;
 mod lan_host;
 mod llm;
@@ -37,6 +38,7 @@ mod recording;
 #[cfg(windows)]
 mod recording_windows;
 mod tray;
+mod updates;
 
 const JOB_EVENT: &str = "voice-to-text:job-status";
 
@@ -686,9 +688,9 @@ async fn start_transcription(
     state: State<'_, Arc<AppState>>,
     llm_runtime: State<'_, Arc<LlmRuntime>>,
 ) -> Result<JobStatus, String> {
-    let input = InputFile::inspect(&path).map_err(|error| error.to_string())?;
-    let selected_model = read_selected_model(&app)?;
     let data_dir = app_data_dir(&app)?;
+    let input = InputFile::inspect(path).map_err(|error| error.to_string())?;
+    let selected_model = read_selected_model(&app)?;
     let llm_runtime = Arc::clone(llm_runtime.inner());
     // 局域网派发：prefer_lan 且存在已启用、在线的节点时把任务交给节点执行；
     // 其余模式（以及节点不可达时）回退本机转写。
@@ -2213,6 +2215,10 @@ pub fn run() {
                 eprintln!("could not install the tray icon: {error}");
             }
             tray::spawn_status_loop(app.handle().clone());
+            // CLI/MCP 写完结果后让首页历史自动刷新（应用自己的任务另有事件）。
+            if let Ok(data_dir) = app_data_dir(app.handle()) {
+                history_watch::spawn(app.handle().clone(), data_dir.join("transcripts"));
+            }
             // 共享跨启动恢复：只在网卡仍然存在时重开；失败只写 notice，不阻塞启动。
             let auto_app = app.handle().clone();
             std::thread::spawn(move || {
@@ -2339,6 +2345,10 @@ pub fn run() {
             sync_window_theme,
             service_status,
             mcp_cli::mcp_config,
+            updates::update_settings,
+            updates::set_update_settings,
+            updates::check_for_update,
+            updates::open_external,
             mcp_cli::cli_tool_status,
             mcp_cli::install_cli_tool,
             mcp_cli::uninstall_cli_tool,

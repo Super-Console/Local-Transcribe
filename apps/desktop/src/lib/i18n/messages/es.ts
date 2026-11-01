@@ -261,6 +261,18 @@ export const es: Record<MessageKey, Message> = {
   "settings.copyConfig": "Copiar configuración",
   "settings.copyExample": "Copiar ejemplo",
   "settings.cliDesc": "Comparte el mismo servicio y la misma cola que MCP",
+  "settings.updatesName": "Buscar actualizaciones",
+  "settings.updatesDesc": "Al iniciar, consulta la versión en el sitio web. La solicitud incluye la versión de la app y revela tu IP; no envía transcripciones ni ID del dispositivo.",
+  "settings.updatesAuto": "Buscar automáticamente",
+  "settings.updatesCheck": "Buscar ahora",
+  "settings.updatesChecking": "Buscando…",
+  "settings.updatesLatest": "Ya tienes la última versión",
+  "settings.updatesAvailable": "Hay una versión nueva: {version}",
+  "settings.updatesOpen": "Ver la versión",
+  "update.availableTitle": "Actualización disponible",
+  "update.availableBody": "Se ha publicado Local Transcribe {version}. ¿Abrir GitHub para descargarla?",
+  "update.now": "Descargar",
+  "update.later": "Más tarde",
   "settings.cliInstallName": "Herramienta de línea de comandos",
   "settings.cliInstallDesc":
     "Enlaza local-transcribe en ~/.local/bin; no requiere permisos de administrador",
@@ -271,7 +283,7 @@ export const es: Record<MessageKey, Message> = {
     "Si el terminal no encuentra local-transcribe, añade esto a ~/.zshrc: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
     "Solución de problemas: el servicio solo escucha en un socket Unix local (permisos 0600); el acceso a archivos requiere autorización al iniciar con",
-  "settings.troubleOutro": "; los registros van a la terminal y no guardan contenido de audio.",
+
   "settings.aboutDesc": "Transcripción local de audio y vídeo · Versión {version}",
   "settings.aboutBuild": "Compilación de desarrollo sin firmar",
   "settings.thirdParty": "Avisos de terceros",

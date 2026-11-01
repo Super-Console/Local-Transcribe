@@ -359,31 +359,17 @@ pub fn default_data_dir() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("VOICE_TO_TEXT_APP_DATA_DIR") {
         return Ok(PathBuf::from(path));
     }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|home| home.join("Library/Application Support/com.timmy.voicetotextapp"))
-            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .map(|local| local.join("com.timmy.voicetotextapp"))
-            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .map(|path| path.join("com.timmy.voicetotextapp"))
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .map(|home| home.join(".local/share/com.timmy.voicetotextapp"))
-            })
-            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
+    voice_to_text_core::default_app_data_dir()
+}
+
+#[cfg(test)]
+mod default_data_dir_tests {
+    #[test]
+    fn lan_compute_uses_the_core_application_data_directory() {
+        assert_eq!(
+            super::default_data_dir().expect("LAN data directory should resolve"),
+            voice_to_text_core::default_app_data_dir().expect("core data directory should resolve")
+        );
     }
 }
 

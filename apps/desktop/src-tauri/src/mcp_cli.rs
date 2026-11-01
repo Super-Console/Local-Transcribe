@@ -140,7 +140,7 @@ fn status_for(dir: &Path, target: PathBuf) -> CliToolStatus {
 #[tauri::command]
 pub fn mcp_config() -> Result<McpConfigReply, String> {
     let command = sidecar::bundled_binary(sidecar::MCP_BINARY)?;
-    let config = sidecar::render_mcp_config(&command, &[])?;
+    let config = sidecar::render_mcp_config(&command)?;
     Ok(McpConfigReply {
         config,
         command: command.to_string_lossy().into_owned(),

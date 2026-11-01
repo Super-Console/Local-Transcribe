@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
 const root = new URL('../', import.meta.url);
@@ -83,7 +84,7 @@ test('8. short and bottom states reduce the bottom fade to 8px', () => {
 });
 
 test('9. only Reader and AppToolbar components declare backdrop-filter', () => {
-  const components = join(new URL('src/lib/components/', root).pathname);
+  const components = fileURLToPath(new URL('src/lib/components/', root));
   const users = readdirSync(components)
     .filter((file) => file.endsWith('.svelte'))
     .filter((file) => readFileSync(join(components, file), 'utf8').includes('backdrop-filter'));

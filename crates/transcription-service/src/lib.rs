@@ -3,10 +3,9 @@
 //! One process owns the inference queue for a single user:
 //!
 //! - single instance enforced by an exclusive `fs2` lock next to the endpoint file,
-//! - clients connect over a Unix domain socket created with mode `0600`
-//!   (same-user isolation comes from the file permissions); on Windows, where
-//!   std has no Unix socket, over a loopback-only TCP port (127.0.0.1) whose
-//!   number is written to `service.port` in the same data folder,
+//! - clients connect over a Unix domain socket created with mode `0600`; on
+//!   Windows an AF_UNIX socket has a DACL restricted to SYSTEM and the current
+//!   user,
 //! - newline-delimited JSON requests; no non-loopback network listener anywhere,
 //! - one worker thread executes jobs strictly one at a time; jobs whose model
 //!   is not bound yet stay visible as `waiting_for_model` and are skipped by
@@ -40,23 +39,23 @@ use voice_to_text_lan::protocol::{TaskResult, TaskState};
 
 mod lan;
 pub mod sidecar;
+mod windows_ipc;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const SOCKET_FILE: &str = "service.sock";
-pub const PORT_FILE: &str = "service.port";
 pub const LOCK_FILE: &str = "service.lock";
 
 /// The platform-local stream the newline-delimited JSON protocol runs over:
-/// a Unix socket stream on macOS/Linux, a loopback TCP stream on Windows.
+/// a Unix socket stream on macOS/Linux and Windows.
 #[cfg(unix)]
 pub type LocalStream = UnixStream;
 #[cfg(windows)]
-pub type LocalStream = std::net::TcpStream;
+pub type LocalStream = uds_windows::UnixStream;
 
 #[cfg(unix)]
 type LocalListener = UnixListener;
 #[cfg(windows)]
-type LocalListener = std::net::TcpListener;
+type LocalListener = uds_windows::UnixListener;
 
 /// How long the worker keeps retrying the cross-process dispatch lock before
 /// the queued job is marked failed with the real reason.
@@ -94,6 +93,20 @@ pub enum Request {
         #[serde(default)]
         fallback_local: bool,
     },
+    /// A caller-scoped submission used by the CLI and MCP clients.
+    SubmitAuthorized {
+        path: String,
+        #[serde(default)]
+        model_id: Option<String>,
+        #[serde(default)]
+        owner: Option<String>,
+        #[serde(default)]
+        node: Option<String>,
+        #[serde(default)]
+        lan_model: Option<String>,
+        #[serde(default)]
+        fallback_local: bool,
+    },
     Status {
         job_id: String,
     },
@@ -120,6 +133,12 @@ pub enum Request {
         after: Option<String>,
     },
     Export {
+        job_id: String,
+        path: String,
+        format: String,
+    },
+    /// Export requested by an external client (CLI/MCP).
+    ExportAuthorized {
         job_id: String,
         path: String,
         format: String,
@@ -279,31 +298,17 @@ pub fn default_data_dir() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("VOICE_TO_TEXT_APP_DATA_DIR") {
         return Ok(PathBuf::from(path));
     }
-    #[cfg(target_os = "macos")]
-    {
-        std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|home| home.join("Library/Application Support/com.timmy.voicetotextapp"))
-            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .map(|local| local.join("com.timmy.voicetotextapp"))
-            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .map(|path| path.join("com.timmy.voicetotextapp"))
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .map(|home| home.join(".local/share/com.timmy.voicetotextapp"))
-            })
-            .ok_or_else(|| "Could not locate the local app data folder.".to_owned())
+    voice_to_text_core::default_app_data_dir()
+}
+
+#[cfg(test)]
+mod default_data_dir_tests {
+    #[test]
+    fn service_uses_the_core_application_data_directory() {
+        assert_eq!(
+            super::default_data_dir().expect("service data directory should resolve"),
+            voice_to_text_core::default_app_data_dir().expect("core data directory should resolve")
+        );
     }
 }
 
@@ -311,22 +316,9 @@ pub fn socket_path(data_dir: &Path) -> PathBuf {
     data_dir.join(SOCKET_FILE)
 }
 
-/// Windows-only endpoint file: holds the loopback TCP port of a live service.
-#[cfg(windows)]
-pub fn port_path(data_dir: &Path) -> PathBuf {
-    data_dir.join(PORT_FILE)
-}
-
 /// The file a client checks to tell "service running" from "not started yet".
 pub fn endpoint_file(data_dir: &Path) -> PathBuf {
-    #[cfg(unix)]
-    {
-        socket_path(data_dir)
-    }
-    #[cfg(windows)]
-    {
-        port_path(data_dir)
-    }
+    socket_path(data_dir)
 }
 
 fn lock_path(data_dir: &Path) -> PathBuf {
@@ -342,10 +334,9 @@ fn unix_now_ms() -> u64 {
 // ---------------------------------------------------------------------------
 // Local IPC transport
 //
-// macOS/Linux keep the original Unix domain socket (0600). Windows binds a
-// loopback-only TCP port and records it in `service.port`; the `fs2` single
-// instance lock still guards the endpoint, so a stale port file can never be
-// mistaken for a live service. The wire protocol is identical everywhere.
+// macOS/Linux use the native Unix domain socket (0600). Windows uses AF_UNIX
+// and sets/read-verifies an explicit DACL before exposing the listener. The
+// wire protocol is identical everywhere.
 // ---------------------------------------------------------------------------
 
 fn bind_local(data_dir: &Path) -> Result<LocalListener, ServerStartError> {
@@ -370,26 +361,27 @@ fn bind_local(data_dir: &Path) -> Result<LocalListener, ServerStartError> {
     }
     #[cfg(windows)]
     {
-        let port_file = port_path(data_dir);
+        let socket = socket_path(data_dir);
         // The exclusive lock proves no live server owns this endpoint file, so
         // a leftover file is stale after a crash.
-        if port_file.exists() {
-            let _ = fs::remove_file(&port_file);
+        if socket.exists() {
+            fs::remove_file(&socket).map_err(|error| {
+                ServerStartError::Other(format!(
+                    "Cannot remove the stale local service socket: {error}"
+                ))
+            })?;
         }
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+        let listener = uds_windows::UnixListener::bind(&socket).map_err(|error| {
             ServerStartError::Other(format!(
-                "Cannot bind the loopback service port (127.0.0.1): {error}"
+                "Cannot bind the local service socket {}: {error}",
+                socket.display()
             ))
         })?;
-        let port = listener
-            .local_addr()
-            .map_err(|error| {
-                ServerStartError::Other(format!("Cannot read the bound service port: {error}"))
-            })?
-            .port();
-        fs::write(&port_file, port.to_string()).map_err(|error| {
-            ServerStartError::Other(format!("Cannot write the service port file: {error}"))
-        })?;
+        if let Err(error) = windows_ipc::secure_socket_path(&socket) {
+            drop(listener);
+            let _ = fs::remove_file(&socket);
+            return Err(ServerStartError::Other(error));
+        }
         Ok(listener)
     }
 }
@@ -407,20 +399,11 @@ fn connect_local(data_dir: &Path) -> Result<LocalStream, String> {
     }
     #[cfg(windows)]
     {
-        let port_file = port_path(data_dir);
-        let port: u16 = fs::read_to_string(&port_file)
-            .map_err(|error| {
-                format!(
-                    "Cannot read the service port file {}: {error}. Is the service running?",
-                    port_file.display()
-                )
-            })?
-            .trim()
-            .parse()
-            .map_err(|_| "The service port file is invalid. Is the service running?".to_owned())?;
-        std::net::TcpStream::connect(("127.0.0.1", port)).map_err(|error| {
+        let path = socket_path(data_dir);
+        uds_windows::UnixStream::connect(&path).map_err(|error| {
             format!(
-                "Cannot reach the local service on 127.0.0.1:{port}: {error}. Is the service running?"
+                "Cannot reach the local service socket {}: {error}. Is the service running?",
+                path.display()
             )
         })
     }
@@ -432,7 +415,6 @@ fn connect_local(data_dir: &Path) -> Result<LocalStream, String> {
 
 pub struct ServerOptions {
     pub data_dir: PathBuf,
-    pub allow_roots: Vec<PathBuf>,
 }
 
 /// Why the service refused to start.
@@ -504,7 +486,6 @@ struct QueueState {
 
 struct Shared {
     store: JobStore,
-    allow_roots: Vec<PathBuf>,
     queue: Mutex<QueueState>,
 }
 
@@ -546,7 +527,6 @@ pub fn run_server(options: ServerOptions) -> Result<(), ServerStartError> {
 
     let shared = Arc::new(Shared {
         store: JobStore::new(&data_dir),
-        allow_roots: canonical_roots(&options.allow_roots).map_err(ServerStartError::Other)?,
         queue: Mutex::new(QueueState {
             pending: VecDeque::new(),
             known: std::collections::HashMap::new(),
@@ -579,26 +559,6 @@ pub fn run_server(options: ServerOptions) -> Result<(), ServerStartError> {
         }
     }
     Ok(())
-}
-
-fn canonical_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
-    let mut canonical = Vec::with_capacity(roots.len());
-    for root in roots {
-        let path = fs::canonicalize(root).map_err(|_| {
-            format!(
-                "The authorized directory cannot be read: {}",
-                root.display()
-            )
-        })?;
-        if !path.is_dir() {
-            return Err(format!(
-                "An authorized root must be a directory: {}",
-                root.display()
-            ));
-        }
-        canonical.push(path);
-    }
-    Ok(canonical)
 }
 
 fn handle_connection(mut stream: LocalStream, shared: &Shared) -> Result<(), String> {
@@ -655,6 +615,23 @@ fn dispatch(request: Request, shared: &Shared) -> Response {
             fallback_local,
             shared,
         ),
+        Request::SubmitAuthorized {
+            path,
+            model_id,
+            owner,
+            node,
+            lan_model,
+            fallback_local,
+        } => submit_authorized(
+            path,
+            None,
+            model_id,
+            owner,
+            node,
+            lan_model,
+            fallback_local,
+            shared,
+        ),
         Request::Status { job_id } => status(&job_id, shared),
         Request::Cancel { job_id } => cancel(&job_id, shared),
         Request::Models => models(shared),
@@ -700,6 +677,11 @@ fn dispatch(request: Request, shared: &Shared) -> Response {
             path,
             format,
         } => export(&job_id, &path, &format, shared),
+        Request::ExportAuthorized {
+            job_id,
+            path,
+            format,
+        } => export_authorized(&job_id, &path, &format, shared),
         Request::JobResult { job_id, full } => job_result(&job_id, full, shared),
         Request::Runs => {
             let runs = shared
@@ -719,15 +701,11 @@ fn dispatch(request: Request, shared: &Shared) -> Response {
     }
 }
 
-/// Authorize the media path against the explicitly configured roots
-/// (fail closed, same contract as the MCP server).
-fn authorize_input(shared: &Shared, supplied: &str) -> Result<PathBuf, String> {
-    if shared.allow_roots.is_empty() {
-        return Err(
-            "Service file access is disabled. Start the service with at least one --allow-root directory."
-                .to_owned(),
-        );
-    }
+/// Validate the media path named by an explicit CLI/MCP request.
+///
+/// Any absolute path the current user can read is accepted: the service socket
+/// is per-user, so there is no separate directory allow-list to consult.
+fn authorize_input(supplied: &str) -> Result<PathBuf, String> {
     let path = Path::new(supplied);
     if !path.is_absolute() {
         return Err("The input file path must be absolute.".to_owned());
@@ -736,15 +714,6 @@ fn authorize_input(shared: &Shared, supplied: &str) -> Result<PathBuf, String> {
         fs::canonicalize(path).map_err(|_| "The input file could not be accessed.".to_owned())?;
     if !canonical.is_file() {
         return Err("The input path must point to a regular file.".to_owned());
-    }
-    if !shared
-        .allow_roots
-        .iter()
-        .any(|root| canonical.starts_with(root))
-    {
-        return Err(
-            "The input file is outside the directories authorized for this service.".to_owned(),
-        );
     }
     InputFile::inspect(&canonical)
         .map_err(|_| "The input file could not be validated.".to_owned())?;
@@ -762,7 +731,30 @@ fn submit(
     fallback_local: bool,
     shared: &Shared,
 ) -> Response {
-    let canonical = match authorize_input(shared, &path) {
+    submit_authorized(
+        path,
+        model_dir,
+        model_id,
+        owner,
+        node,
+        lan_model,
+        fallback_local,
+        shared,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_authorized(
+    path: String,
+    model_dir: Option<String>,
+    model_id: Option<String>,
+    owner: Option<String>,
+    node: Option<String>,
+    lan_model: Option<String>,
+    fallback_local: bool,
+    shared: &Shared,
+) -> Response {
+    let canonical = match authorize_input(&path) {
         Ok(value) => value,
         Err(message) => return Response::failure("unauthorized", message),
     };
@@ -1345,6 +1337,10 @@ fn job_result(job_id: &str, full: bool, shared: &Shared) -> Response {
 }
 
 fn export(job_id: &str, path: &str, format: &str, shared: &Shared) -> Response {
+    export_authorized(job_id, path, format, shared)
+}
+
+fn export_authorized(job_id: &str, path: &str, format: &str, shared: &Shared) -> Response {
     let transcript = match shared.store.transcript(job_id) {
         Ok(transcript) => transcript,
         Err(_) => return Response::failure("not_found", "这个任务还没有已保存的结果，无法导出。"),
@@ -1371,17 +1367,42 @@ fn export(job_id: &str, path: &str, format: &str, shared: &Shared) -> Response {
     if !target.parent().is_some_and(Path::is_dir) {
         return Response::failure("bad_path", "导出目录不存在。");
     }
+    if !target.is_absolute() {
+        return Response::failure("bad_path", "导出路径必须为绝对路径。");
+    }
+    let parent = match fs::canonicalize(target.parent().unwrap()) {
+        Ok(parent) => parent,
+        Err(error) => return Response::failure("bad_path", error.to_string()),
+    };
+    if target.is_symlink() {
+        return Response::failure("bad_path", "导出目标不能是符号链接。");
+    }
+    target = parent.join(target.file_name().unwrap());
     let temp = target.with_file_name(format!(
-        ".{}.{}.tmp",
+        ".{}.{}.{}.tmp",
         target
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "export".to_owned()),
-        std::process::id()
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
     ));
-    if let Err(error) = fs::write(&temp, content.as_bytes()) {
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(&temp) {
+        Ok(file) => file,
+        Err(error) => {
+            return Response::failure("export_failed", format!("无法创建导出临时文件：{error}"))
+        }
+    };
+    if let Err(error) = file
+        .write_all(content.as_bytes())
+        .and_then(|_| file.sync_all())
+    {
         return Response::failure("export_failed", format!("无法写入导出文件：{error}"));
     }
+    drop(file);
     if let Err(error) = fs::rename(&temp, &target) {
         return Response::failure("export_failed", format!("无法完成导出：{error}"));
     }
@@ -1945,7 +1966,6 @@ impl ServiceClient {
 #[cfg(test)]
 mod jobs_list_tests {
     use super::{export, job_result, jobs, status, Shared};
-    use std::path::PathBuf;
     use voice_to_text_core::{JobState, JobStatus, JobStore, Transcript};
 
     fn shared(name: &str) -> Shared {
@@ -1958,8 +1978,7 @@ mod jobs_list_tests {
                 .as_nanos()
         ));
         Shared {
-            store: JobStore::new(root),
-            allow_roots: Vec::<PathBuf>::new(),
+            store: JobStore::new(root.clone()),
             queue: std::sync::Mutex::new(super::QueueState {
                 pending: std::collections::VecDeque::new(),
                 known: std::collections::HashMap::new(),
@@ -2101,8 +2120,7 @@ mod lan_dispatch_tests {
         let media = root.join("voice.wav");
         std::fs::write(&media, b"RIFF").unwrap();
         let shared = Shared {
-            store: JobStore::new(&root),
-            allow_roots: vec![root.canonicalize().unwrap()],
+            store: JobStore::new(root.clone()),
             queue: std::sync::Mutex::new(super::QueueState {
                 pending: std::collections::VecDeque::new(),
                 known: std::collections::HashMap::new(),
@@ -2367,5 +2385,29 @@ mod lan_dispatch_tests {
         assert_eq!(queue.pending.len(), 1);
         assert!(queue.pending[0].remote.is_some());
         assert_eq!(queue.pending[0].lan_model.as_deref(), Some("remote-model"));
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use std::path::PathBuf;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "service-endpoint-{}-{}-{name}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn service_endpoint_is_a_filesystem_socket_on_every_platform() {
+        let dir = scratch("endpoint");
+        assert_eq!(super::endpoint_file(&dir), super::socket_path(&dir));
     }
 }

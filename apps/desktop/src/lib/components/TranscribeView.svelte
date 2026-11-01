@@ -38,6 +38,7 @@
     onCancel: () => void;
     onExport: (format: "txt" | "json") => void;
     onBack: () => void;
+    /** 读取被白名单拒绝时的一步修复入口（把所在目录加入允许列表并重试）。 */
   } = $props();
 
   /** 局域网任务的阶段文案是稳定 key（lan.phase.*），本机任务沿用后端原文。 */

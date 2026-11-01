@@ -6,6 +6,7 @@
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+  import type { UpdateInfo } from "$lib/types";
 
   import AppSidebar from "$lib/components/AppSidebar.svelte";
   import AppToolbar from "$lib/components/AppToolbar.svelte";
@@ -403,6 +404,22 @@
     }
   }
 
+  // 启动时检查更新（可在设置里关闭）：只请求官网的静态 manifest，点“更新”才去 GitHub。
+  async function checkForUpdateOnStart() {
+    try {
+      const found = await invoke<UpdateInfo | null>("check_for_update", { force: false });
+      if (!found) return;
+      const go = await confirm(t("update.availableBody", { version: found.version }), {
+        title: t("update.availableTitle"),
+        okLabel: t("update.now"),
+        cancelLabel: t("update.later"),
+      });
+      if (go) await invoke("open_external", { url: found.url });
+    } catch {
+      /* 离线或官网不可达时静默跳过，不打扰用户 */
+    }
+  }
+
   async function pickFile() {
     error = "";
     try {
@@ -416,6 +433,8 @@
       error = String(issue);
     }
   }
+
+  /** 白名单拒绝时记住被拒文件，供“添加该文件夹”一步修复。 */
 
   async function startTranscription(path: string) {
     error = "";
@@ -746,6 +765,8 @@
         /* 浏览器预览没有 Tauri 后端 */
       });
     void refreshRetention();
+    // 延迟几秒，避免和首屏渲染、模型库扫描抢资源。
+    setTimeout(() => void checkForUpdateOnStart(), 4000);
     void refreshLanSettings(false);
     void refreshLibrary();
     void refreshCatalog();
@@ -800,6 +821,10 @@
         listen(OPEN_EVENT, () => void pickFile()),
         // 原生标题栏按钮（红绿灯同一行）发出的折叠开关事件。
         listen("voice-to-text:toggle-sidebar", () => toggleSidebar()),
+        // CLI / MCP 写入结果后刷新首页与历史列表。
+        listen("local-transcribe:history-changed", () => {
+          if (view === "home") void loadHistory();
+        }),
       );
 
       if (view === "home") void loadHistory();

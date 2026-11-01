@@ -208,10 +208,10 @@ fn ssh_command(target: &str, remote: &str) -> Command {
 
 /// 远程 `lan-node.json` 的固定路径（远端机器用应用默认数据目录）。
 const REMOTE_STATE: &str =
-    "\"$HOME/Library/Application Support/com.timmy.voicetotextapp/lan-host/lan-node.json\"";
+    "\"$HOME/Library/Application Support/net.timhuang.localtranscribe/lan-host/lan-node.json\"";
 /// 远程节点日志的固定路径。
 const REMOTE_LOG: &str =
-    "\"$HOME/Library/Application Support/com.timmy.voicetotextapp/lan-host/lan-node.log\"";
+    "\"$HOME/Library/Application Support/net.timhuang.localtranscribe/lan-host/lan-node.log\"";
 
 // ---------------------------------------------------------------------------
 // Settings mutations

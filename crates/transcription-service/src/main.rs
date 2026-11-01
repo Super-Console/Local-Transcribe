@@ -16,7 +16,7 @@ use voice_to_text_service::{
 };
 
 fn usage() -> &'static str {
-    "Usage:\n  voice-to-text-service serve [--data-dir DIR] [--allow-root DIR]...\n  \
+    "Usage:\n  voice-to-text-service serve [--data-dir DIR]\n  \
      voice-to-text-service ping [--data-dir DIR]\n  \
      voice-to-text-service submit <absolute-media-path> [--model-dir DIR] [--data-dir DIR]\n  \
      voice-to-text-service status <job-id> [--data-dir DIR]\n  \
@@ -29,7 +29,6 @@ struct Parsed {
     positionals: Vec<String>,
     data_dir: Option<PathBuf>,
     model_dir: Option<PathBuf>,
-    allow_roots: Vec<PathBuf>,
 }
 
 fn parse(args: Vec<String>) -> Result<Parsed, String> {
@@ -40,7 +39,6 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
         positionals: Vec::new(),
         data_dir: None,
         model_dir: None,
-        allow_roots: Vec::new(),
     };
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -51,10 +49,6 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--model-dir" => {
                 let value = iter.next().ok_or("--model-dir needs a value")?;
                 parsed.model_dir = Some(PathBuf::from(value));
-            }
-            "--allow-root" => {
-                let value = iter.next().ok_or("--allow-root needs a value")?;
-                parsed.allow_roots.push(PathBuf::from(value));
             }
             "--help" | "-h" => return Err(usage().to_owned()),
             other if other.starts_with('-') => {
@@ -99,10 +93,7 @@ fn main() -> ExitCode {
     };
 
     match parsed.command.as_str() {
-        "serve" => match run_server(ServerOptions {
-            data_dir,
-            allow_roots: parsed.allow_roots,
-        }) {
+        "serve" => match run_server(ServerOptions { data_dir }) {
             Ok(()) => ExitCode::SUCCESS,
             Err(ServerStartError::AlreadyRunning(message)) => {
                 eprintln!("{message}");

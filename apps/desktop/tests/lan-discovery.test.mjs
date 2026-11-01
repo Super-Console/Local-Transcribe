@@ -20,7 +20,7 @@ test('empty scan result explains the local-network permission risk', () => {
 test('macOS bundle is re-signed with the stable bundle identifier', () => {
   const pkg = JSON.parse(read('../package.json'));
   const script = pkg.scripts['bundle:mac'] ?? '';
-  assert.match(script, /--identifier com\.timmy\.voicetotextapp/);
+  assert.match(script, /--identifier net\.timhuang\.localtranscribe/);
 });
 
 test('LAN page warns when the system never granted local network access', () => {

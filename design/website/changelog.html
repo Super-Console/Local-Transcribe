@@ -1,0 +1,87 @@
+<!-- 静态页面：应用启动时读取同目录的 updates.json；本页只给人看。 -->
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>更新记录 — Local Transcribe</title>
+<meta name="description" content="Local Transcribe 的版本更新记录，以及应用内更新检查的工作方式。">
+<link rel="canonical" href="https://apps.timhuang.net/transcribe/changelog.html">
+<link rel="icon" type="image/png" href="assets/img/app-icon.png">
+<link rel="stylesheet" href="assets/site-v2.css">
+<style>
+  .log { max-width: 760px; margin: 0 auto; padding: 32px 0 64px; }
+  .log h1 { font-size: 40px; line-height: 1.15; margin: 0 0 8px; }
+  .log h2 { font-size: 22px; margin: 40px 0 6px; }
+  .log .when { color: #555960; font-size: 13px; margin-bottom: 12px; }
+  .log ul { padding-left: 20px; }
+  .log li { margin: 6px 0; line-height: 1.65; }
+  .log p { line-height: 1.7; }
+  .log .en { border-top: 1px solid #d9d9d9; margin-top: 48px; padding-top: 32px; }
+  .log code { font-size: 13px; background: #f0f0f0; border-radius: 4px; padding: 1px 5px; }
+</style>
+</head>
+<body>
+<header class="site-head">
+  <div class="wrap head-inner">
+    <a class="brand" href="index.html"><img src="assets/img/app-icon.png" width="28" height="28" alt=""><span>Local Transcribe</span></a>
+    <nav class="nav" aria-label="主导航">
+      <a href="zh/index.html">中文首页</a>
+      <a href="en/index.html">English</a>
+      <a class="nav-source" href="https://github.com/Super-Console/Local-Transcribe/releases">Releases <span aria-hidden="true">↗</span></a>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+<div class="log">
+  <h1>更新记录</h1>
+  <p>应用启动时会读取本页同目录的 <code>updates.json</code>（纯静态文件，一次普通请求，不含任何标识或使用数据）。发现新版本时，应用会弹窗询问；点“去下载”才会打开 GitHub。可在 设置 → 自动检查更新 关闭。</p>
+
+  <h2>1.7.0</h2>
+  <div class="when">2026-11-02</div>
+  <ul>
+    <li><strong>去掉文件访问白名单。</strong>旧版本要求先把文件夹加进 <code>access.json</code>，否则拒绝读取；现在删掉了整套机制——GUI、命令行和 MCP 都能直接读取当前用户可访问的任意绝对路径，设置页不再有“允许访问的文件夹”，也没有 <code>roots</code> 命令。</li>
+    <li>边界仍然存在：服务只监听当前用户的本地 socket，其他账户或其他电脑连不上。</li>
+    <li>新增启动时检查更新（默认开启，可在设置里关闭），更新记录就在本页。</li>
+    <li>首页历史列表会在命令行或 MCP 写完结果后自动刷新，不用重启应用。</li>
+  </ul>
+
+  <h2>1.6.0</h2>
+  <div class="when">2026-11-01</div>
+  <ul>
+    <li>MCP 服务器与 <code>local-transcribe</code> 命令行随安装包一起分发，装完 GUI 即可使用，不再需要 <code>cargo build</code>。</li>
+    <li>设置页新增“复制 MCP 配置”和“安装命令行工具”（<code>~/.local/bin</code>，不需要 sudo）。</li>
+    <li>去掉 beta 标记，转为正式版；三个入口共用同一份数据目录。</li>
+  </ul>
+
+  <div class="en" lang="en">
+    <h1>Changelog</h1>
+    <p>On launch the app reads <code>updates.json</code> next to this page — a plain static request, with no identifiers or usage data. If a newer version exists, the app asks before opening GitHub. You can turn this off in Settings → Check for updates.</p>
+
+    <h2>1.7.0</h2>
+    <div class="when">2026-11-02</div>
+    <ul>
+      <li><strong>The file-access allow-list is gone.</strong> Earlier builds required adding a folder to <code>access.json</code> before anything could be read; that whole mechanism was removed. The GUI, CLI and MCP now read any absolute path the current user can open, Settings no longer lists folders, and there is no <code>roots</code> command.</li>
+      <li>The boundary that remains: the service only listens on the current user's local socket, so another account or computer cannot reach it.</li>
+      <li>New: check for updates on launch (on by default, can be turned off). The changelog is this page.</li>
+      <li>The home history list refreshes when a CLI or MCP job writes a result, without restarting the app.</li>
+    </ul>
+
+    <h2>1.6.0</h2>
+    <div class="when">2026-11-01</div>
+    <ul>
+      <li>The MCP server and the <code>local-transcribe</code> CLI ship with the app, so no <code>cargo build</code> is needed.</li>
+      <li>Settings can copy a ready-made MCP config and install the CLI into <code>~/.local/bin</code> without sudo.</li>
+      <li>Beta label dropped; GUI, CLI and MCP share one data folder.</li>
+    </ul>
+  </div>
+</div>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap"><p>Local Transcribe · <a href="privacy.html">隐私</a> · <a href="https://github.com/Super-Console/Local-Transcribe">GitHub</a></p></div>
+</footer>
+</body>
+</html>

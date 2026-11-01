@@ -262,6 +262,18 @@ export const de: Record<MessageKey, Message> = {
   "settings.copyConfig": "Konfiguration kopieren",
   "settings.copyExample": "Beispiel kopieren",
   "settings.cliDesc": "Nutzt denselben Dienst und dieselbe Warteschlange wie MCP",
+  "settings.updatesName": "Nach Updates suchen",
+  "settings.updatesDesc": "Beim Start wird die Versionsliste geladen. Die Anfrage enthält die App-Version und legt Ihre IP-Adresse offen; Transkripte und Geräte-ID werden nicht gesendet.",
+  "settings.updatesAuto": "Automatisch prüfen",
+  "settings.updatesCheck": "Jetzt prüfen",
+  "settings.updatesChecking": "Prüfe…",
+  "settings.updatesLatest": "Die aktuelle Version ist installiert",
+  "settings.updatesAvailable": "Neue Version {version}",
+  "settings.updatesOpen": "Version ansehen",
+  "update.availableTitle": "Update verfügbar",
+  "update.availableBody": "Local Transcribe {version} wurde veröffentlicht. Jetzt GitHub zum Herunterladen öffnen?",
+  "update.now": "Herunterladen",
+  "update.later": "Später",
   "settings.cliInstallName": "Kommandozeilenwerkzeug",
   "settings.cliInstallDesc":
     "Verlinkt local-transcribe in ~/.local/bin; keine Administratorrechte nötig",
@@ -272,8 +284,7 @@ export const de: Record<MessageKey, Message> = {
     "Falls das Terminal local-transcribe nicht findet, füge dies in ~/.zshrc ein: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
     "Fehlerbehebung: Der Dienst lauscht nur auf einem lokalen Unix-Socket (Rechte 0600); Dateizugriff muss beim Start mit",
-  "settings.troubleOutro":
-    " autorisiert werden; Logs erscheinen im Terminal und enthalten keine Audioinhalte.",
+
   "settings.aboutDesc": "Lokale Audio- und Video-Transkription · Version {version}",
   "settings.aboutBuild": "Unsignierter Entwicklungsbau",
   "settings.thirdParty": "Drittanbieter-Hinweise",

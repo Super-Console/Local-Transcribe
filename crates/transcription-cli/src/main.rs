@@ -29,7 +29,7 @@ const USAGE: &str = "Usage:
       (with a node it starts it over SSH; without it starts the local node)
   local-transcribe lan stop [<node>] [--data-dir DIR]
   local-transcribe lan status [--data-dir DIR]
-  local-transcribe jobs add <media> [--model ID] [--language LANG] [--root DIR] [--data-dir DIR]
+  local-transcribe jobs add <media> [--model ID] [--language LANG] [--data-dir DIR]
       [--node NODE] [--lan-model ID] [--fallback-local]
   local-transcribe jobs list [--data-dir DIR]
   local-transcribe jobs show <job-id> [--data-dir DIR]
@@ -38,8 +38,8 @@ const USAGE: &str = "Usage:
   local-transcribe jobs reorder <job-id> [--after ID] [--data-dir DIR]
   local-transcribe jobs remove <job-id> [--data-dir DIR]
   local-transcribe export <job-id> --format txt|json --output PATH [--data-dir DIR]
-  local-transcribe mcp-config [--allow-root DIR]...
-      (prints MCP client configuration; no root is authorized by default)
+  local-transcribe mcp-config
+      (prints MCP client configuration)
 
 <node> is a saved node id or its unique name. All commands print JSON. The
 service is started on demand and shared with the app. Remote start/stop runs
@@ -53,8 +53,6 @@ struct Parsed {
     data_dir: Option<PathBuf>,
     model: Option<String>,
     language: Option<String>,
-    roots: Vec<PathBuf>,
-    allow_roots: Vec<PathBuf>,
     after: Option<String>,
     format: Option<String>,
     output: Option<PathBuf>,
@@ -77,8 +75,7 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
         data_dir: None,
         model: None,
         language: None,
-        roots: Vec::new(),
-        allow_roots: Vec::new(),
+
         after: None,
         format: None,
         output: None,
@@ -115,10 +112,6 @@ fn parse(args: Vec<String>) -> Result<Parsed, String> {
             "--data-dir" => parsed.data_dir = Some(PathBuf::from(take("--data-dir")?)),
             "--model" => parsed.model = Some(take("--model")?),
             "--language" => parsed.language = Some(take("--language")?),
-            "--root" => parsed.roots.push(PathBuf::from(take("--root")?)),
-            "--allow-root" => parsed
-                .allow_roots
-                .push(sidecar::expand_home(&take("--allow-root")?)),
             "--after" => parsed.after = Some(take("--after")?),
             "--format" => parsed.format = Some(take("--format")?),
             "--output" => parsed.output = Some(PathBuf::from(take("--output")?)),
@@ -207,7 +200,7 @@ fn service_binary() -> Result<PathBuf, String> {
 }
 
 /// 连接已在运行的服务；没有时按需拉起一个（单实例锁保证不会双开）。
-fn ensure_client(data_dir: &Path, roots: &[PathBuf]) -> Result<ServiceClient, String> {
+fn ensure_client(data_dir: &Path) -> Result<ServiceClient, String> {
     if let Ok(client) = ServiceClient::connect(data_dir) {
         return Ok(client);
     }
@@ -220,9 +213,6 @@ fn ensure_client(data_dir: &Path, roots: &[PathBuf]) -> Result<ServiceClient, St
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    for root in roots {
-        command.arg("--allow-root").arg(root);
-    }
     command
         .spawn()
         .map_err(|error| format!("无法启动本地服务：{error}"))?;
@@ -249,7 +239,7 @@ fn mcp_binary() -> Result<PathBuf, String> {
 }
 
 /// `mcp-config`：stdout 只输出可直接粘贴的 JSON，说明走 stderr。
-fn print_mcp_config(parsed: &Parsed) -> ExitCode {
+fn print_mcp_config() -> ExitCode {
     let command = match mcp_binary() {
         Ok(path) => path,
         Err(message) => {
@@ -257,7 +247,7 @@ fn print_mcp_config(parsed: &Parsed) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match sidecar::render_mcp_config(&command, &parsed.allow_roots) {
+    match sidecar::render_mcp_config(&command) {
         Ok(config) => {
             println!("{config}");
             eprintln!("{}", sidecar::mcp_config_note());
@@ -335,22 +325,10 @@ fn main() -> ExitCode {
 
     // `mcp-config` 是纯本地命令：不连接、也不启动服务。
     if parsed.group == "mcp-config" {
-        return print_mcp_config(&parsed);
+        return print_mcp_config();
     }
 
-    // 提交任务时把文件所在目录作为授权根，供按需启动的服务使用。
-    let mut roots = parsed.roots.clone();
-    if parsed.group == "jobs" && action == "add" {
-        if let Some(media) = parsed.positional.first() {
-            if let Ok(canonical) = PathBuf::from(media).canonicalize() {
-                if let Some(parent) = canonical.parent() {
-                    roots.push(parent.to_path_buf());
-                }
-            }
-        }
-    }
-
-    let mut client = match ensure_client(&data_dir, &roots) {
+    let mut client = match ensure_client(&data_dir) {
         Ok(client) => client,
         Err(message) => {
             eprintln!("{message}");
@@ -468,9 +446,8 @@ fn main() -> ExitCode {
                 };
                 return print_response(&response);
             }
-            Request::Submit {
+            Request::SubmitAuthorized {
                 path: media.clone(),
-                model_dir: None,
                 model_id: parsed.model.clone(),
                 owner: Some("cli".to_owned()),
                 node: parsed.node.clone(),
@@ -527,7 +504,7 @@ fn main() -> ExitCode {
                 eprintln!("export needs --format txt|json and --output PATH\n{USAGE}");
                 return ExitCode::from(2);
             };
-            Request::Export {
+            Request::ExportAuthorized {
                 job_id: id.clone(),
                 path: output.to_string_lossy().into_owned(),
                 format,

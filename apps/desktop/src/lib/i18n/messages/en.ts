@@ -257,6 +257,18 @@ export const en: Record<MessageKey, Message> = {
   "settings.copyConfig": "Copy config",
   "settings.copyExample": "Copy example",
   "settings.cliDesc": "Shares the same service and queue as MCP",
+  "settings.updatesName": "Check for updates",
+  "settings.updatesDesc": "On launch, fetch the version list from the product site. The request includes the app version and exposes your IP address; no transcripts or device ID are sent.",
+  "settings.updatesAuto": "Check automatically",
+  "settings.updatesCheck": "Check now",
+  "settings.updatesChecking": "Checking…",
+  "settings.updatesLatest": "You are up to date",
+  "settings.updatesAvailable": "Version {version} is available",
+  "settings.updatesOpen": "View release",
+  "update.availableTitle": "Update available",
+  "update.availableBody": "Local Transcribe {version} has been released. Open GitHub to download it now?",
+  "update.now": "Download",
+  "update.later": "Later",
   "settings.cliInstallName": "Command-line tool",
   "settings.cliInstallDesc":
     "Links local-transcribe into ~/.local/bin; no administrator access needed",
@@ -267,8 +279,7 @@ export const en: Record<MessageKey, Message> = {
     "If the terminal cannot find local-transcribe, add this to ~/.zshrc: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
     "Troubleshooting: the service listens only on a local Unix socket (mode 0600); file access requires authorization at startup via",
-  "settings.troubleOutro":
-    "; logs are written to the terminal and never include audio content.",
+
   "settings.aboutDesc": "Local audio & video transcription · Version {version}",
   "settings.aboutBuild": "Unsigned development build",
   "settings.thirdParty": "Third-party notices",

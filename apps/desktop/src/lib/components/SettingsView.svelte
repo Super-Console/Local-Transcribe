@@ -9,7 +9,7 @@
     type LocalePreference,
   } from "$lib/i18n.svelte";
   import { invoke } from "@tauri-apps/api/core";
-  import { confirm } from "@tauri-apps/plugin-dialog";
+  import { confirm, open } from "@tauri-apps/plugin-dialog";
   import LanDiagnosticsPanel from "./LanDiagnosticsPanel.svelte";
   import type {
     LanHostRetention,
@@ -20,7 +20,9 @@
     RetentionPolicy,
     ServiceStatus,
     StorageSummary,
-    CliToolStatus,
+      CliToolStatus,
+    UpdateInfo,
+    UpdateSettings,
     McpConfigReply,
   } from "$lib/types";
 
@@ -145,6 +147,52 @@
       .then((status) => { cliStatus = status; })
       .catch(() => { cliStatus = null; });
   });
+
+  // 更新检查：启动时自动（可在设置里关掉），这里也提供手动检查。
+  let updateSettings = $state<UpdateSettings | null>(null);
+  let updateBusy = $state(false);
+  let updateInfo = $state<UpdateInfo | null>(null);
+  let updateMessage = $state<string | null>(null);
+
+  $effect(() => {
+    void invoke<UpdateSettings>("update_settings")
+      .then((value) => { updateSettings = value; })
+      .catch((error) => { updateSettings = null; updateMessage = String(error); });
+  });
+
+  async function toggleAutoCheck(enabled: boolean) {
+    try {
+      updateSettings = await invoke<UpdateSettings>("set_update_settings", { autoCheck: enabled });
+    } catch (error) {
+      updateMessage = String(error);
+    }
+  }
+
+  async function checkUpdate() {
+    if (updateBusy) return;
+    updateBusy = true;
+    updateMessage = null;
+    try {
+      const found = await invoke<UpdateInfo | null>("check_for_update", { force: true });
+      updateInfo = found;
+      updateMessage = found
+        ? t("settings.updatesAvailable", { version: found.version })
+        : t("settings.updatesLatest");
+    } catch (error) {
+      updateMessage = String(error);
+    } finally {
+      updateBusy = false;
+    }
+  }
+
+  async function openRelease() {
+    if (!updateInfo) return;
+    try {
+      await invoke("open_external", { url: updateInfo.url });
+    } catch (error) {
+      updateMessage = String(error);
+    }
+  }
 
   async function toggleCliTool() {
     if (!cliStatus || cliBusy) return;
@@ -664,10 +712,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         </div>
       </div>
       <pre class="snippet">{cliExample}</pre>
-      <p class="note">
-        {t("settings.troubleIntro")}
-        <code>--allow-root</code>{t("settings.troubleOutro")}
-      </p>
+      <p class="note">{t("settings.troubleIntro")}</p>
     </div>
 
     <div class="group">
@@ -696,6 +741,32 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           <div class="desc">{t("settings.aboutDesc", { version: appVersion })}</div>
         </div>
         <div class="value">{t("settings.aboutBuild")}</div>
+      </div>
+      <div class="row">
+        <div class="grow">
+          <div class="name">{t("settings.updatesName")}</div>
+          <div class="desc">{t("settings.updatesDesc")}</div>
+          {#if updateMessage}<div class="desc">{updateMessage}</div>{/if}
+        </div>
+        <div class="value">
+          <label class="inline-check">
+            <input
+              type="checkbox"
+              checked={updateSettings?.autoCheck ?? false}
+              disabled={!updateSettings}
+              onchange={(event) => void toggleAutoCheck(event.currentTarget.checked)}
+            />
+            {t("settings.updatesAuto")}
+          </label>
+          <button type="button" class="link-action" disabled={updateBusy} onclick={checkUpdate}>
+            {updateBusy ? t("settings.updatesChecking") : t("settings.updatesCheck")}
+          </button>
+          {#if updateInfo}
+            <button type="button" class="link-action" onclick={openRelease}>
+              {t("settings.updatesOpen")}
+            </button>
+          {/if}
+        </div>
       </div>
       <div class="row">
         <div>
@@ -890,4 +961,5 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
     line-height: 1.7;
     color: var(--text-3);
   }
+
 </style>

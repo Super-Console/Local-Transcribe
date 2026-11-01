@@ -13,17 +13,19 @@ fn scratch(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    // Unix socket paths are limited (SUN_LEN, 104 bytes on macOS) and the
-    // default temp folder is already long, so Unix keeps the short /tmp;
-    // Windows uses the normal temp directory (loopback TCP, no path limit).
+    // Unix socket paths are limited (SUN_LEN, 104 bytes on macOS), so Unix
+    // keeps the short /tmp. Windows AF_UNIX has a 108-byte limit; keep its
+    // endpoint short even when the user's temp directory is long.
     #[cfg(unix)]
-    let base = PathBuf::from("/tmp");
-    #[cfg(windows)]
-    let base = std::env::temp_dir();
-    let path = base.join(format!(
+    let path = PathBuf::from("/tmp").join(format!(
         "voice-to-text-{name}-{}-{nonce}",
         std::process::id()
     ));
+    #[cfg(windows)]
+    let path = {
+        let _ = name;
+        std::env::temp_dir().join(format!("lt-{}-{nonce}", std::process::id()))
+    };
     fs::create_dir_all(&path).unwrap();
     path
 }
@@ -32,24 +34,21 @@ fn server_bin() -> &'static str {
     env!("CARGO_BIN_EXE_voice-to-text-service")
 }
 
-fn spawn_server(data_dir: &Path, roots: &[&Path]) -> Child {
-    let mut command = Command::new(server_bin());
-    command
+fn spawn_server(data_dir: &Path) -> Child {
+    Command::new(server_bin())
         .arg("serve")
         .arg("--data-dir")
         .arg(data_dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for root in roots {
-        command.arg("--allow-root").arg(root);
-    }
-    command.spawn().expect("spawn service process")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn service process")
 }
 
 /// Spawn the service and wait until its socket exists; on failure the child's
 /// output is included so the real startup error is visible.
-fn spawn_ready_server(data_dir: &Path, roots: &[&Path]) -> Child {
-    let mut child = spawn_server(data_dir, roots);
+fn spawn_ready_server(data_dir: &Path) -> Child {
+    let mut child = spawn_server(data_dir);
     if wait_for_socket(data_dir, Duration::from_secs(10)) {
         return child;
     }
@@ -89,7 +88,7 @@ fn output_text(output: &Output) -> String {
 #[test]
 fn service_is_single_instance_and_its_socket_is_owner_only() {
     let data = scratch("service-single-instance");
-    let first = spawn_ready_server(&data, &[]);
+    let first = spawn_ready_server(&data);
 
     // Only the owner may connect: socket file permissions must be 0600.
     // (Windows relies on the per-user data folder ACL instead of a mode.)
@@ -132,37 +131,13 @@ fn service_is_single_instance_and_its_socket_is_owner_only() {
 }
 
 #[test]
-fn submit_fails_closed_without_an_authorized_root_and_outside_one() {
-    // Case 1: no --allow-root configured at all.
-    let data = scratch("service-fail-closed");
-    let media_dir = scratch("service-fail-closed-media");
+fn any_absolute_media_path_is_accepted_and_relative_paths_are_rejected() {
+    let data = scratch("service-any-path");
+    let media_dir = scratch("service-any-path-media");
     let media = media_dir.join("sample.wav");
     fs::write(&media, b"RIFF-not-really-checked-at-authorize-time").unwrap();
-    let server = spawn_ready_server(&data, &[]);
-    {
-        let mut client = ServiceClient::connect(&data).expect("connect");
-        let response = client
-            .request(&Request::Submit {
-                path: media.to_string_lossy().into_owned(),
-                model_dir: None,
-                model_id: None,
-                owner: Some("cli".to_owned()),
-                node: None,
-                lan_model: None,
-                fallback_local: false,
-            })
-            .expect("submit response");
-        assert!(!response.ok, "no roots must mean deny");
-        let error = response.error.expect("error body");
-        assert_eq!(error.code, "unauthorized");
-        assert!(error.message.contains("--allow-root"), "{}", error.message);
-    }
-    stop(server);
+    let server = spawn_ready_server(&data);
 
-    // Case 2: an authorized root exists, but the file lives outside it.
-    let data = scratch("service-outside-root");
-    let allowed = scratch("service-allowed-root");
-    let server = spawn_ready_server(&data, &[&allowed]);
     {
         let mut client = ServiceClient::connect(&data).expect("connect");
         let response = client
@@ -176,9 +151,30 @@ fn submit_fails_closed_without_an_authorized_root_and_outside_one() {
                 fallback_local: false,
             })
             .expect("submit response");
-        assert!(!response.ok, "outside-root must be denied");
-        assert_eq!(response.error.expect("error body").code, "unauthorized");
+        assert!(response.ok, "{:?}", response.error);
     }
+
+    {
+        let mut client = ServiceClient::connect(&data).expect("reconnect");
+        let response = client
+            .request(&Request::Submit {
+                path: "relative/sample.wav".to_owned(),
+                model_dir: None,
+                model_id: None,
+                owner: Some("cli".to_owned()),
+                node: None,
+                lan_model: None,
+                fallback_local: false,
+            })
+            .expect("submit response");
+        let error = response.error.expect("relative paths stay rejected");
+        assert_eq!(error.code, "unauthorized");
+    }
+
+    assert!(
+        !data.join("access.json").exists(),
+        "no allow-list file is written any more"
+    );
     stop(server);
 }
 
@@ -196,13 +192,8 @@ fn concurrent_clients_share_exactly_one_inference_worker() {
     );
     let media = PathBuf::from(std::env::var_os("VOICE_TO_TEXT_TEST_MEDIA").expect("set media"));
     let media = fs::canonicalize(&media).expect("canonical media path");
-    let root = media
-        .parent()
-        .expect("media has a parent directory")
-        .to_path_buf();
-
     let data = scratch("service-concurrent");
-    let server = spawn_ready_server(&data, &[&root]);
+    let server = spawn_ready_server(&data);
 
     // Three clients submit concurrently, each from its own connection.
     let mut handles = Vec::new();

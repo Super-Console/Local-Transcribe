@@ -64,30 +64,22 @@ pub fn expand_home(value: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
-/// 渲染可直接粘贴的 MCP 客户端配置。默认不授权任何目录。
-pub fn render_mcp_config(command: &Path, roots: &[PathBuf]) -> Result<String, String> {
+/// 渲染可直接粘贴的 MCP 客户端配置。
+///
+/// 这台机器上只有当前用户能连上服务的本地 socket，读取哪份媒体文件由请求
+/// 本身决定，没有额外的目录白名单需要在这里列出。
+pub fn render_mcp_config(command: &Path) -> Result<String, String> {
     if !command.is_absolute() {
         return Err(format!(
             "The MCP server path must be absolute: {}",
             command.display()
         ));
     }
-    let mut args: Vec<String> = Vec::new();
-    for root in roots {
-        if !root.is_absolute() {
-            return Err(format!(
-                "--allow-root needs an absolute directory: {}",
-                root.display()
-            ));
-        }
-        args.push("--allow-root".to_owned());
-        args.push(root.to_string_lossy().into_owned());
-    }
     let config = json!({
         "mcpServers": {
             "local-transcribe": {
                 "command": command.to_string_lossy(),
-                "args": args,
+                "args": Vec::<String>::new(),
             }
         }
     });
@@ -97,10 +89,8 @@ pub fn render_mcp_config(command: &Path, roots: &[PathBuf]) -> Result<String, St
 /// 配置之外的说明文字：stdout 保持纯 JSON，说明走 stderr。
 pub fn mcp_config_note() -> String {
     [
-        "With no --allow-root the server refuses to read any file.",
-        "To authorize a directory, add one --allow-root pair to \"args\", e.g.",
-        "  local-transcribe mcp-config --allow-root \"$HOME/Movies\"",
-        "Paths must be absolute; symlinks that escape an authorized root are rejected.",
+        "The server reads any absolute media path the caller names.",
+        "Only the current user can connect to the local service socket.",
     ]
     .join("\n")
 }
@@ -118,10 +108,10 @@ mod tests {
     }
 
     #[test]
-    fn config_without_roots_authorizes_nothing() {
+    fn config_lists_no_arguments() {
         let command =
             absolute("Applications/Local Transcribe.app/Contents/MacOS/voice-to-text-mcp");
-        let rendered = render_mcp_config(&command, &[]).unwrap();
+        let rendered = render_mcp_config(&command).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         let server = &parsed["mcpServers"]["local-transcribe"];
         assert_eq!(
@@ -132,46 +122,17 @@ mod tests {
     }
 
     #[test]
-    fn config_keeps_each_root_as_a_separate_argument_pair() {
-        let command = absolute("bin/voice-to-text-mcp");
-        let roots = vec![absolute("Movies"), absolute("Documents/Recordings")];
-        let rendered = render_mcp_config(&command, &roots).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-        let args = parsed["mcpServers"]["local-transcribe"]["args"]
-            .as_array()
-            .unwrap();
-        let expected: Vec<String> = roots
-            .iter()
-            .flat_map(|root| {
-                [
-                    "--allow-root".to_owned(),
-                    root.to_string_lossy().into_owned(),
-                ]
-            })
-            .collect();
-        let actual: Vec<String> = args
-            .iter()
-            .map(|value| value.as_str().unwrap().to_owned())
-            .collect();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
     fn relative_paths_are_refused() {
         let command = PathBuf::from("voice-to-text-mcp");
-        assert!(render_mcp_config(&command, &[]).is_err());
-        assert!(render_mcp_config(
-            &absolute("bin/voice-to-text-mcp"),
-            &[PathBuf::from("Movies")]
-        )
-        .is_err());
+        assert!(render_mcp_config(&command).is_err());
     }
 
     #[test]
-    fn the_note_explains_how_to_add_a_root() {
+    fn the_note_does_not_mention_a_directory_whitelist() {
         let note = mcp_config_note();
-        assert!(note.contains("--allow-root"));
-        assert!(note.contains("mcp-config"));
+        assert!(!note.contains("--allow-root"));
+        assert!(!note.contains("roots add"));
+        assert!(note.contains("absolute"));
     }
 
     #[test]

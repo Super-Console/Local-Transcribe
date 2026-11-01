@@ -1,5 +1,56 @@
 # Project Status
 
+## 1.7.0 "No folder allow-list + update check" (2026-11-01)
+
+**Not released yet.** The source is verified in this worktree; GitHub release, website deployment
+and the Windows product build from these exact sources are still open. Apple Developer ID
+signing, notarization and App Store submission are deferred at Timmy's direction; every local
+build is ad-hoc signed and must stay labelled that way.
+
+### What changed in this round
+
+- **File access allow-list removed entirely.** `access.json`, `RootsState`, the
+  `AccessRoots` / `SetRoots` / `AddRoot` / `RemoveRoot` / `AuthorizeInput` IPC requests,
+  `--allow-root`, the CLI `roots` subcommand, `src-tauri/src/access_settings.rs`, the
+  Settings → Allowed folders section and all five translations of its strings are gone.
+  GUI, CLI and MCP now read any absolute media path the current user can open; the service
+  still only listens on the per-user local socket. `authorize_input` keeps the
+  absolute-path / existing-file / supported-container checks.
+- **Home history refreshes by itself.** New `apps/desktop/src-tauri/src/history_watch.rs`
+  polls the `transcripts/` directory signature (newest mtime, file count, total bytes) every
+  1.5 s and emits `local-transcribe:history-changed`; the home view reloads on that event, so
+  a CLI or MCP job appears without restarting the app.
+- Docs updated to match: `README.md`, `README.zh-CN.md`, `docs/mcp.md`; the website carries a
+  rewritten 1.7.0 changelog entry and a `updates.json` note.
+
+### Verified on this worktree (2026-11-01)
+
+- `cargo fmt --all -- --check` clean; `cargo test --offline --workspace` 274 passed,
+  0 failed, 11 ignored (model/network/sidecar-dependent); `cargo clippy --offline
+  --workspace --all-targets -- -D warnings` clean; `npm run check` 0 errors / 0 warnings;
+  `npm test` 128 passed.
+- macOS app rebuilt with `bundle:mac` (ad-hoc, `CARGO_PROFILE_RELEASE_STRIP=none` plus the
+  documented `-lclang_rt.osx` workaround) and `codesign --verify --deep --strict` passes.
+- Installed on both Macs as `~/Applications/Local Transcribe.app`, 1.7.0,
+  `net.timhuang.localtranscribe`, five binaries present. The previous installations were moved
+  to each machine's Trash, not deleted. On the Pro, Settings no longer shows a folder section,
+  the MCP config renders with `"args": []`, and a synthetic transcript written while the app
+  was open appeared in the history list without a restart (and disappeared again when the file
+  was moved out).
+- Windows: a local MSI was built from a source snapshot taken **before** these two changes and
+  installed on Tims-Gaming-PC (`C:\Program Files\Local Transcribe`, five binaries, new data
+  folder, `local-transcribe status` works). That install is now stale; the Windows package has
+  to be rebuilt from the committed 1.7.0 sources.
+
+### Still open
+
+- GitHub: commit, push, CI Windows build, release assets, website deployment (`apps.timhuang.net`
+  currently serves 404 for `updates.json`; the origin host was unreachable during this round).
+- Windows product acceptance from the rebuilt package, upgrade-compatibility checks, and a
+  model-backed GUI transcription on the installed Mac build (no model ships with the app).
+- Cross-user Windows isolation is explicitly out of scope: Timmy accepted that the product does
+  not isolate different local Windows accounts.
+
 ## Release — 1.6.0 "MCP and CLI in the box" (2026-11-01)
 
 - Published as a stable GitHub release (not a pre-release): <https://github.com/Super-Console/Local-Transcribe/releases/tag/1.6.0>, tag `1.6.0` on `baa7c64`, assets `Local.Transcribe-1.6.0.dmg`, `Local.Transcribe_1.6.0_x64_en-US.msi` and `SHA256SUMS`; uploaded asset sizes match the local files byte for byte.
