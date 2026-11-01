@@ -239,7 +239,7 @@ fn verify_socket_acl(path: &Path, user_sid: &str) -> Result<(), String> {
     }
     if !private_dacl_matches(&actual, user_sid) {
         return Err(format!(
-            "Windows service-socket ACL readback did not match the current user's private ACL: {actual}"
+            "Windows service-socket ACL readback did not match the current user's private ACL: {actual} (expected trustee {user_sid})"
         ));
     }
     Ok(())
