@@ -239,7 +239,7 @@ fn verify_socket_acl(path: &Path, user_sid: &str) -> Result<(), String> {
     }
     if !private_dacl_matches(&actual, user_sid) {
         return Err(format!(
-            "Windows service-socket ACL readback did not match the current user's private ACL."
+            "Windows service-socket ACL readback did not match the current user's private ACL: {actual}"
         ));
     }
     Ok(())
@@ -274,18 +274,41 @@ fn private_dacl_matches(actual: &str, user_sid: &str) -> bool {
             || (fields[2] != "GA" && fields[2] != "FA")
             || !fields[3].is_empty()
             || !fields[4].is_empty()
-            || (fields[5] != "SY" && fields[5] != user_sid)
         {
+            return false;
+        }
+        // Windows may add an explicit OWNER RIGHTS entry; the owner is already
+        // the current user, so it cannot widen access beyond that account.
+        let trustee_is_allowed = fields[5] == "SY"
+            || fields[5] == user_sid
+            || fields[5] == "OW"
+            || fields[5] == "S-1-3-4";
+        if !trustee_is_allowed {
             return false;
         }
         trustees.push(fields[5]);
         rest = &ace[end + 1..];
     }
 
-    trustees.sort_unstable();
-    let mut expected = vec!["SY", user_sid];
-    expected.sort_unstable();
-    trustees == expected
+    trusts_system_and_user(&trustees, user_sid)
+}
+
+#[cfg(any(windows, test))]
+fn trusts_system_and_user(trustees: &[&str], user_sid: &str) -> bool {
+    let has_system = trustees.contains(&"SY");
+    let has_user = trustees.contains(&user_sid);
+    if !has_system || !has_user {
+        return false;
+    }
+    // Nothing beyond SYSTEM, the current user and the owner-rights entry.
+    let mut limit = 0usize;
+    for trustee in trustees {
+        if *trustee == "OW" || *trustee == "S-1-3-4" {
+            continue;
+        }
+        limit += 1;
+    }
+    limit == 2 && trustees.len() <= 3
 }
 
 #[cfg(test)]
@@ -305,6 +328,16 @@ mod tests {
     fn acl_readback_accepts_windows_canonical_full_access_encoding() {
         let actual = "O:BAG:S-1-5-21-1-2-3-513D:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-111-222-333-1001)";
         assert!(private_dacl_matches(actual, "S-1-5-21-111-222-333-1001"));
+        // Windows adds an explicit OWNER RIGHTS entry in some environments.
+        let with_owner_rights = "D:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-111-222-333-1001)(A;;FA;;;OW)";
+        assert!(private_dacl_matches(
+            with_owner_rights,
+            "S-1-5-21-111-222-333-1001"
+        ));
+        assert!(!private_dacl_matches(
+            "D:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-111-222-333-1001)(A;;FA;;;BA)",
+            "S-1-5-21-111-222-333-1001"
+        ));
         assert!(!private_dacl_matches(
             "D:(A;;FA;;;SY)(A;;FA;;;S-1-5-21-111-222-333-1001)",
             "S-1-5-21-111-222-333-1001"
