@@ -2,6 +2,8 @@
 
 ## Release — 1.6.0 "MCP and CLI in the box" (2026-11-01)
 
+- Published as a stable GitHub release (not a pre-release): <https://github.com/Super-Console/Local-Transcribe/releases/tag/1.6.0>, tag `1.6.0` on `baa7c64`, assets `Local.Transcribe-1.6.0.dmg`, `Local.Transcribe_1.6.0_x64_en-US.msi` and `SHA256SUMS`; uploaded asset sizes match the local files byte for byte.
+
 - Scope: installing the GUI is now the only step needed for the other two entry points. `tauri.conf.json` ships four sidecars (`local-transcribe-node`, `local-transcribe`, `voice-to-text-mcp`, `voice-to-text-service`); before this release only the LAN node was packaged, so `voice-to-text-mcp` had to be built from source.
 - Measured release sizes on Apple Silicon: `voice-to-text-service` 29 MB (the only sidecar that links sherpa-onnx), `voice-to-text-mcp` 2.1 MB, `local-transcribe` 598 KB — about +32 MB total. The app bundle grew from 63 MB to 114.62 MiB because this machine's release build needs `CARGO_PROFILE_RELEASE_STRIP=none` (see `docs/local-build.md`); the shipped DMG is 40 MB.
 - New behavior: `local-transcribe mcp-config [--allow-root DIR]...` prints pasteable MCP client JSON (absolute bundled path, no root by default, note on stderr); Settings → Integration now shows the real generated config with a copy button and an install/remove toggle for `~/.local/bin/local-transcribe` (symlink on macOS, `.cmd` shim on Windows, no sudo, uninstall moves only that link to the Trash). The app never rewrites an MCP client's own configuration.

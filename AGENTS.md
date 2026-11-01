@@ -15,7 +15,7 @@
 
 ## Release process
 
-- Releases are GitHub pre-releases on `TimmySheep/Local-Transcribe`: a macOS DMG built locally with `npm run bundle:mac` plus `hdiutil`, and a Windows MSI built by CI (`.github/workflows/windows-validation.yml`) from the same commit.
+- Releases are GitHub releases on `Super-Console/Local-Transcribe`: a macOS DMG built locally with `npm run bundle:mac` plus `hdiutil`, and a Windows MSI built by CI (`.github/workflows/windows-validation.yml`) from the same commit. Stable since 1.6.0; earlier builds were pre-releases. Every installer ships four sidecars (`local-transcribe-node`, `local-transcribe`, `voice-to-text-mcp`, `voice-to-text-service`).
 - Before publishing: bump every version file (`apps/desktop/package.json`, `package-lock.json`, `tauri.conf.json` including the four-part WiX version, the desktop and LAN crate `Cargo.toml`, `Cargo.lock`, and the version test fixture), then run `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, `npm run check`, `npm test`, and wait for the Windows CI run to pass.
 - Never ship binaries built from uncommitted sources. Do not overwrite published assets: either rebuild and publish a new version, or state plainly that the published binary does not contain the newer commits.
 - Never fabricate signing/notarization or validation status. Keep secrets, `GPT聊天记录/`, `.DS_Store`, personal recordings, model weights and generated transcripts out of releases and Git.
