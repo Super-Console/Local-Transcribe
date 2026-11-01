@@ -37,6 +37,7 @@ mod permissions;
 mod recording;
 #[cfg(windows)]
 mod recording_windows;
+mod signature;
 mod tray;
 mod updates;
 
@@ -1596,6 +1597,12 @@ fn search_history(query: String, app: AppHandle) -> Result<Vec<SearchHit>, Strin
     Ok(hits)
 }
 
+/// 设置 → 关于 的构建标签：运行时读取自身签名状态，不写死文案。
+#[tauri::command]
+fn signature_status() -> signature::SignatureInfo {
+    signature::current()
+}
+
 #[tauri::command]
 fn list_history(app: AppHandle) -> Result<Vec<HistoryEntry>, String> {
     let directory = app_data_dir(&app)?.join("transcripts");
@@ -2355,6 +2362,7 @@ pub fn run() {
             get_job_status,
             get_job_result,
             list_history,
+            signature_status,
             search_history,
             export_transcript,
             get_lan_settings,

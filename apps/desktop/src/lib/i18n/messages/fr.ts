@@ -176,7 +176,7 @@ export const fr: Record<MessageKey, Message> = {
   "model.punctuationTag": "Ponctuation",
   "model.emptyTitle": "Aucun modèle téléchargé pour l’instant",
   "model.emptyBody":
-    "Téléchargez ci-dessus l’un des modèles vérifiés. Ils sont adaptés à cette app et prêts à l’emploi ; l’app n’exécute que les modèles de cette liste et n’importe plus de dossier arbitraire.",
+    "Téléchargez ci-dessus l’un des modèles vérifiés. Ils sont adaptés à cette app et prêts à l’emploi.",
   "model.defaultTag": "Par défaut",
   "model.installedNotLoaded": "Installé, non chargé",
   "model.setDefault": "Définir par défaut",
@@ -284,10 +284,12 @@ export const fr: Record<MessageKey, Message> = {
   "settings.cliPathHint":
     "Si le terminal ne trouve pas local-transcribe, ajoutez ceci à ~/.zshrc : export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
-    "Dépannage : le service n’écoute que sur une socket Unix locale (permission 0600) ; l’accès aux fichiers doit être autorisé au lancement avec",
+    "Dépannage : le service n’écoute que sur une socket Unix locale (permission 0600) et lit les fichiers par leur chemin ; les journaux vont au terminal et ne contiennent pas d’audio.",
 
   "settings.aboutDesc": "Transcription audio et vidéo locale · Version {version}",
-  "settings.aboutBuild": "Build de développement non signé",
+  "settings.buildUnsigned": "Build de développement non signé",
+  "settings.buildSigned": "Signé avec Developer ID",
+  "settings.buildNotarized": "Signé et notarisé",
   "settings.thirdParty": "Mentions des tiers",
   "settings.thirdPartyDesc": "Licence MIT et les composants fournis",
   "settings.openNotices": "Ouvrir les mentions",

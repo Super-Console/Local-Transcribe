@@ -8,6 +8,7 @@
     LOCALE_NAMES,
     type LocalePreference,
   } from "$lib/i18n.svelte";
+  import type { MessageKey } from "$lib/i18n/messages/zh";
   import { invoke } from "@tauri-apps/api/core";
   import { confirm, open } from "@tauri-apps/plugin-dialog";
   import LanDiagnosticsPanel from "./LanDiagnosticsPanel.svelte";
@@ -146,6 +147,27 @@
     void invoke<CliToolStatus>("cli_tool_status")
       .then((status) => { cliStatus = status; })
       .catch(() => { cliStatus = null; });
+  });
+
+  // 构建标签来自运行时的签名检查（Security 框架读自身 .app），不写死文案。
+  // 读取失败时降级为未签名措辞，不做任何猜测。
+  type BuildState = "none" | "adhoc" | "signed" | "notarized";
+  let buildState = $state<BuildState>("none");
+
+  function buildKey(state: BuildState): MessageKey {
+    if (state === "notarized") return "settings.buildNotarized";
+    if (state === "signed") return "settings.buildSigned";
+    return "settings.buildUnsigned";
+  }
+
+  $effect(() => {
+    void invoke<{ state: BuildState }>("signature_status")
+      .then((info) => {
+        buildState = info.state;
+      })
+      .catch(() => {
+        buildState = "none";
+      });
   });
 
   // 更新检查：启动时自动（可在设置里关掉），这里也提供手动检查。
@@ -740,7 +762,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
           <div class="name">Local Transcribe</div>
           <div class="desc">{t("settings.aboutDesc", { version: appVersion })}</div>
         </div>
-        <div class="value">{t("settings.aboutBuild")}</div>
+        <div class="value">{t(buildKey(buildState))}</div>
       </div>
       <div class="row">
         <div class="grow">
@@ -769,7 +791,7 @@ local-transcribe export <job-id> --format txt --output ~/Desktop/result.txt`);
         </div>
       </div>
       <div class="row">
-        <div>
+        <div class="grow">
           <div class="name">{t("settings.thirdParty")}</div>
           <div class="desc">{t("settings.thirdPartyDesc")}</div>
         </div>

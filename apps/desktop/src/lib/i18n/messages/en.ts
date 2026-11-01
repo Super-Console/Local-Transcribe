@@ -174,7 +174,7 @@ export const en: Record<MessageKey, Message> = {
   "model.punctuationTag": "Punctuation",
   "model.emptyTitle": "No models downloaded yet",
   "model.emptyBody":
-    "Download one of the verified models above. They are adapted for this app and ready to use; the app only runs models from this list and no longer imports arbitrary folders.",
+    "Download one of the verified models above. They are adapted for this app and ready to use.",
   "model.defaultTag": "Default",
   "model.installedNotLoaded": "Installed, not loaded",
   "model.setDefault": "Set as default",
@@ -278,10 +278,12 @@ export const en: Record<MessageKey, Message> = {
   "settings.cliPathHint":
     "If the terminal cannot find local-transcribe, add this to ~/.zshrc: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
-    "Troubleshooting: the service listens only on a local Unix socket (mode 0600); file access requires authorization at startup via",
+    "Troubleshooting: the service listens only on a local Unix socket (mode 0600) and reads files by path; logs go to the terminal and never contain audio.",
 
   "settings.aboutDesc": "Local audio & video transcription · Version {version}",
-  "settings.aboutBuild": "Unsigned development build",
+  "settings.buildUnsigned": "Unsigned development build",
+  "settings.buildSigned": "Signed with Developer ID",
+  "settings.buildNotarized": "Signed and notarized",
   "settings.thirdParty": "Third-party notices",
   "settings.thirdPartyDesc": "MIT license and the components shipped with this build",
   "settings.openNotices": "Open notices",

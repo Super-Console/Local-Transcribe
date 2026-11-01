@@ -177,7 +177,7 @@ export const zh = {
   "model.punctuationTag": "标点",
   "model.emptyTitle": "还没有下载模型",
   "model.emptyBody":
-    "从上方列表下载经过验证的模型：它们已适配本应用，可以直接使用。应用只运行这份清单里的模型，不接受任意导入。",
+    "从上方列表下载经过验证的模型：它们已适配本应用，可以直接使用。",
   "model.defaultTag": "默认",
   "model.installedNotLoaded": "已安装，未加载",
   "model.setDefault": "设为默认",
@@ -270,10 +270,12 @@ export const zh = {
   "settings.cliUninstallAction": "卸载",
   "settings.cliPathHint": "如果终端提示找不到 local-transcribe，在 ~/.zshrc 里加入：export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
-    "故障排查：服务只监听本机 Unix socket（权限 0600）；文件访问需在启动时用",
+    "故障排查：服务只监听本机 Unix socket（权限 0600），文件直接按路径读取；日志输出到终端，不记录音频内容。",
 
   "settings.aboutDesc": "本地音视频转写 · 版本 {version}",
-  "settings.aboutBuild": "未签名开发构建",
+  "settings.buildUnsigned": "未签名开发构建",
+  "settings.buildSigned": "已签名（开发者 ID）",
+  "settings.buildNotarized": "已签名并公证",
   "settings.thirdParty": "第三方声明",
   "settings.thirdPartyDesc": "MIT 许可与随安装包附带的组件清单",
   "settings.openNotices": "打开声明",

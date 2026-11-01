@@ -246,9 +246,23 @@
     if (stepIndex > 0) stepIndex -= 1;
   }
 
+  // OOBE 是整窗视图：除正文与可交互控件外，留白区域都可以拖动窗口。
+  // 只绑在顶部 44px 的 header 上时，用户拖中间大片空白是拖不动的。
   function dragWindow(event: MouseEvent) {
     if (event.button !== 0 || event.detail > 1 || !(event.target instanceof Element)) return;
-    if (event.target.closest('button, a, input, select, textarea, label, [contenteditable], [role="button"]')) return;
+    const target = event.target;
+    if (
+      target.closest(
+        'button, a, input, select, textarea, label, summary, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="link"], [role="tab"], [role="switch"], [tabindex]:not([tabindex="-1"])',
+      )
+    ) {
+      return;
+    }
+    // 正文保留原生文本选择；它周围的留白才用来移动窗口。
+    if (target.closest(".step-content")) return;
+    // 可滚动区域右侧是滚动条，交给浏览器，避免拖滚动条时把窗口带走。
+    const stage = target.closest(".stage");
+    if (stage && event.clientX > stage.getBoundingClientRect().right - 16) return;
     event.preventDefault();
     try { void getCurrentWindow().startDragging().catch(() => {}); } catch { /* browser preview */ }
   }
@@ -288,8 +302,8 @@
   </div>
 {/snippet}
 
-<section class="onboarding-screen" aria-label="Local Transcribe onboarding">
-  <header class="topbar" onmousedown={dragWindow} role="presentation">
+<section class="onboarding-screen" role="presentation" onmousedown={dragWindow}>
+  <header class="topbar" role="presentation">
     <button type="button" class="btn-secondary skip" onclick={() => void finish(false)}>
       {t("onboarding.skip")}
     </button>

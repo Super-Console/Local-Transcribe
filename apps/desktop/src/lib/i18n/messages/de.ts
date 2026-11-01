@@ -175,7 +175,7 @@ export const de: Record<MessageKey, Message> = {
   "model.punctuationTag": "Zeichensetzung",
   "model.emptyTitle": "Noch keine Modelle heruntergeladen",
   "model.emptyBody":
-    "Lade oben eines der geprüften Modelle herunter. Sie sind für diese App angepasst und sofort nutzbar; die App führt nur Modelle aus dieser Liste aus und importiert keine beliebigen Ordner mehr.",
+    "Lade oben eines der geprüften Modelle herunter. Sie sind für diese App angepasst und sofort nutzbar.",
   "model.defaultTag": "Standard",
   "model.installedNotLoaded": "Installiert, nicht geladen",
   "model.setDefault": "Als Standard festlegen",
@@ -283,10 +283,12 @@ export const de: Record<MessageKey, Message> = {
   "settings.cliPathHint":
     "Falls das Terminal local-transcribe nicht findet, füge dies in ~/.zshrc ein: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
-    "Fehlerbehebung: Der Dienst lauscht nur auf einem lokalen Unix-Socket (Rechte 0600); Dateizugriff muss beim Start mit",
+    "Fehlerbehebung: Der Dienst lauscht nur auf einem lokalen Unix-Socket (Rechte 0600) und liest Dateien direkt über ihren Pfad; Protokolle gehen ins Terminal und enthalten kein Audio.",
 
   "settings.aboutDesc": "Lokale Audio- und Video-Transkription · Version {version}",
-  "settings.aboutBuild": "Unsignierter Entwicklungsbau",
+  "settings.buildUnsigned": "Unsignierter Entwicklungsbau",
+  "settings.buildSigned": "Mit Developer ID signiert",
+  "settings.buildNotarized": "Signiert und notarisiert",
   "settings.thirdParty": "Drittanbieter-Hinweise",
   "settings.thirdPartyDesc": "MIT-Lizenz und die mitgelieferten Komponenten",
   "settings.openNotices": "Hinweise öffnen",

@@ -174,7 +174,7 @@ export const es: Record<MessageKey, Message> = {
   "model.punctuationTag": "Puntuación",
   "model.emptyTitle": "Aún no has descargado modelos",
   "model.emptyBody":
-    "Descarga arriba uno de los modelos verificados. Están adaptados a esta app y listos para usar; la app solo ejecuta modelos de esta lista y ya no importa carpetas arbitrarias.",
+    "Descarga arriba uno de los modelos verificados. Están adaptados a esta app y listos para usar.",
   "model.defaultTag": "Predeterminado",
   "model.installedNotLoaded": "Instalado, no cargado",
   "model.setDefault": "Establecer como predeterminado",
@@ -282,10 +282,12 @@ export const es: Record<MessageKey, Message> = {
   "settings.cliPathHint":
     "Si el terminal no encuentra local-transcribe, añade esto a ~/.zshrc: export PATH=\"$HOME/.local/bin:$PATH\"",
   "settings.troubleIntro":
-    "Solución de problemas: el servicio solo escucha en un socket Unix local (permisos 0600); el acceso a archivos requiere autorización al iniciar con",
+    "Solución de problemas: el servicio solo escucha en un socket Unix local (permisos 0600) y lee los archivos por su ruta; los registros van a la terminal y no guardan audio.",
 
   "settings.aboutDesc": "Transcripción local de audio y vídeo · Versión {version}",
-  "settings.aboutBuild": "Compilación de desarrollo sin firmar",
+  "settings.buildUnsigned": "Compilación de desarrollo sin firmar",
+  "settings.buildSigned": "Firmada con Developer ID",
+  "settings.buildNotarized": "Firmada y notarizada",
   "settings.thirdParty": "Avisos de terceros",
   "settings.thirdPartyDesc": "Licencia MIT y los componentes incluidos",
   "settings.openNotices": "Abrir avisos",
