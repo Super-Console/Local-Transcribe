@@ -279,14 +279,13 @@ fn private_dacl_matches(actual: &str, user_sid: &str) -> bool {
         }
         // Windows may add an explicit OWNER RIGHTS entry; the owner is already
         // the current user, so it cannot widen access beyond that account.
-        let trustee_is_allowed = fields[5] == "SY"
-            || fields[5] == user_sid
-            || fields[5] == "OW"
-            || fields[5] == "S-1-3-4";
+        let trustee = normalize_trustee(fields[5], user_sid);
+        let trustee_is_allowed =
+            trustee == "S-1-5-18" || trustee == user_sid || trustee == "S-1-3-4";
         if !trustee_is_allowed {
             return false;
         }
-        trustees.push(fields[5]);
+        trustees.push(trustee);
         rest = &ace[end + 1..];
     }
 
@@ -294,16 +293,48 @@ fn private_dacl_matches(actual: &str, user_sid: &str) -> bool {
 }
 
 #[cfg(any(windows, test))]
-fn trusts_system_and_user(trustees: &[&str], user_sid: &str) -> bool {
-    let has_system = trustees.contains(&"SY");
-    let has_user = trustees.contains(&user_sid);
+fn normalize_trustee(trustee: &str, user_sid: &str) -> String {
+    match trustee {
+        // Fixed well-known SIDs are accepted in either SDDL alias or SID form.
+        "SY" | "S-1-5-18" => "S-1-5-18".to_owned(),
+        "BA" | "S-1-5-32-544" => "S-1-5-32-544".to_owned(),
+        "BU" | "S-1-5-32-545" => "S-1-5-32-545".to_owned(),
+        "WD" | "S-1-1-0" => "S-1-1-0".to_owned(),
+        "OW" | "S-1-3-4" => "S-1-3-4".to_owned(),
+        "AN" | "S-1-5-7" => "S-1-5-7".to_owned(),
+        "AU" | "S-1-5-11" => "S-1-5-11".to_owned(),
+        "BG" | "S-1-5-32-546" => "S-1-5-32-546".to_owned(),
+        "CG" | "S-1-3-1" => "S-1-3-1".to_owned(),
+        "CO" | "S-1-3-0" => "S-1-3-0".to_owned(),
+        "IU" | "S-1-5-4" => "S-1-5-4".to_owned(),
+        "LS" | "S-1-5-19" => "S-1-5-19".to_owned(),
+        "NS" | "S-1-5-20" => "S-1-5-20".to_owned(),
+        "NU" | "S-1-5-2" => "S-1-5-2".to_owned(),
+        "PU" | "S-1-5-32-547" => "S-1-5-32-547".to_owned(),
+        "RC" | "S-1-5-12" => "S-1-5-12".to_owned(),
+        "RD" | "S-1-5-32-555" => "S-1-5-32-555".to_owned(),
+        "RE" | "S-1-5-32-552" => "S-1-5-32-552".to_owned(),
+        "RU" | "S-1-5-32-554" => "S-1-5-32-554".to_owned(),
+        // SDDL's LA expands to the machine's built-in Administrator SID. Its
+        // domain prefix is not available in the serialized ACL, so it is
+        // equivalent to this process's SID only when that SID ends in RID 500.
+        "LA" if user_sid.ends_with("-500") => user_sid.to_owned(),
+        "LA" => "LA".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+#[cfg(any(windows, test))]
+fn trusts_system_and_user(trustees: &[String], user_sid: &str) -> bool {
+    let has_system = trustees.iter().any(|trustee| trustee == "S-1-5-18");
+    let has_user = trustees.iter().any(|trustee| trustee == user_sid);
     if !has_system || !has_user {
         return false;
     }
     // Nothing beyond SYSTEM, the current user and the owner-rights entry.
     let mut limit = 0usize;
     for trustee in trustees {
-        if *trustee == "OW" || *trustee == "S-1-3-4" {
+        if trustee == "S-1-3-4" {
             continue;
         }
         limit += 1;
@@ -346,6 +377,36 @@ mod tests {
             "D:P(A;;FA;;;SY)(A;;FA;;;S-1-5-21-111-222-333-1001)(A;;FA;;;BU)",
             "S-1-5-21-111-222-333-1001"
         ));
+    }
+
+    #[test]
+    fn acl_readback_normalizes_local_administrator_only_for_the_current_minus_500_sid() {
+        let acl = "D:PAI(A;;FA;;;SY)(A;;FA;;;LA)";
+        assert!(private_dacl_matches(
+            acl,
+            "S-1-5-21-1280602335-643053282-3184619455-500"
+        ));
+
+        assert!(!private_dacl_matches(
+            "D:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1280602335-643053282-3184619455-1001)",
+            "S-1-5-21-1280602335-643053282-3184619455-500"
+        ));
+        assert!(!private_dacl_matches(
+            acl,
+            "S-1-5-21-1280602335-643053282-3184619455-1001"
+        ));
+    }
+
+    #[test]
+    fn acl_readback_never_admits_common_broad_group_aliases() {
+        let user_sid = "S-1-5-21-111-222-333-500";
+        for alias in ["BA", "BU", "WD"] {
+            let acl = format!("D:PAI(A;;FA;;;SY)(A;;FA;;;LA)(A;;FA;;;{alias})");
+            assert!(
+                !private_dacl_matches(&acl, user_sid),
+                "{alias} must not be admitted as a trustee"
+            );
+        }
     }
 }
 

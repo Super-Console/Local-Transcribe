@@ -1,5 +1,20 @@
 # Project Status
 
+## Windows service-socket ACL alias normalization (2026-11-16)
+
+- Fixed ACL readback comparison in `crates/transcription-service/src/windows_ipc.rs`:
+  normalize common SDDL trustee aliases to their well-known SID before checking the strict
+  allowlist. `LA` maps to the current user only when that SID ends in RID `-500`; otherwise it
+  remains untrusted. Only SYSTEM, the exact current user and the existing OWNER RIGHTS entry
+  are accepted. `BA`, `BU`, `WD` and unrelated account SIDs remain rejected.
+- Regression tests are pure string tests and run on macOS. Red/green evidence: the new `LA`
+  case failed before the fix; after the fix, the complete service crate reports 32 passed,
+  0 failed, 1 ignored. `cargo clippy -p voice-to-text-service --all-targets -- -D warnings`
+  and `cargo fmt --all -- --check` both pass.
+- The triggering Windows 2022 CI failure was reported by Timmy; Windows CI was not run locally
+  in this task. The pushed commit is intended to unblock the next Windows CI/MSI run, which
+  remains the platform-level confirmation.
+
 ## 1.8.0 release preparation (2026-11-15)
 
 - Merged the fifth-round model evaluation branch, retaining the selected Zipformer CTC zh
