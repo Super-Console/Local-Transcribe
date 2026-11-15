@@ -1,0 +1,40 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { shouldShowWhatsNew, markWhatsNewRead } from "../src/lib/whats-new.js";
+
+const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+
+function storage(initial = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+}
+
+test("a fresh install without a previously read version does not show What's New", () => {
+  assert.equal(shouldShowWhatsNew(null, "1.8.0"), false);
+});
+
+test("an upgrade shows What's New once and closing records the current version", () => {
+  const state = storage({ "lt.whats-new.read-version": "1.7.0" });
+  assert.equal(shouldShowWhatsNew(state.getItem("lt.whats-new.read-version"), "1.8.0"), true);
+  markWhatsNewRead(state, "1.8.0");
+  assert.equal(shouldShowWhatsNew(state.getItem("lt.whats-new.read-version"), "1.8.0"), false);
+});
+
+test("the current version is not repeated after it has been read", () => {
+  assert.equal(shouldShowWhatsNew("1.8.0", "1.8.0"), false);
+});
+
+test("all What's New keys exist in every supported locale", () => {
+  const keys = [
+    "whatsNew.title", "whatsNew.close", "whatsNew.windowsTitle", "whatsNew.windowsBody",
+    "whatsNew.modelsTitle", "whatsNew.modelsBody", "whatsNew.cardTitle", "whatsNew.cardBody",
+  ];
+  for (const locale of ["zh", "en", "de", "es", "fr"]) {
+    const messages = read(`../src/lib/i18n/messages/${locale}.ts`);
+    for (const key of keys) assert.ok(messages.includes(`"${key}"`), `${locale} missing ${key}`);
+  }
+});

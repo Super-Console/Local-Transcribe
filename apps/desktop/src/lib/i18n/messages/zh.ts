@@ -495,6 +495,14 @@ export const zh = {
   "onboarding.error": "保存引导设置失败：{message}",
   "onboarding.rerun": "重新运行引导",
   "onboarding.rerunDesc": "随时重新查看首次设置与权限说明。",
+  "whatsNew.title": "本次更新",
+  "whatsNew.close": "关闭本次更新",
+  "whatsNew.windowsTitle": "Windows 顶部布局更紧凑",
+  "whatsNew.windowsBody": "修复侧栏顶部多余留白，让工作区内容更靠上。",
+  "whatsNew.modelsTitle": "新增语音识别模型",
+  "whatsNew.modelsBody": "准确优先与速度优先各新增一款；具体名单稍后补充。",
+  "whatsNew.cardTitle": "新增 What's New 更新卡片",
+  "whatsNew.cardBody": "升级后可在这里快速了解版本变化。",
 };
 
 /** 所有语言目录共用的 key 集合（由中文源导出）。 */

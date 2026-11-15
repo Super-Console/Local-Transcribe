@@ -512,4 +512,12 @@ export const fr: Record<MessageKey, Message> = {
   "onboarding.error": "Impossible d’enregistrer la configuration : {message}",
   "onboarding.rerun": "Relancer la configuration",
   "onboarding.rerunDesc": "Revoir à tout moment les choix initiaux et les explications des autorisations.",
+  "whatsNew.title": "Nouveautés",
+  "whatsNew.close": "Fermer les nouveautés",
+  "whatsNew.windowsTitle": "Interface Windows plus compacte",
+  "whatsNew.windowsBody": "L’espace superflu au-dessus de la barre latérale est supprimé pour remonter le contenu.",
+  "whatsNew.modelsTitle": "Nouveaux modèles de reconnaissance vocale",
+  "whatsNew.modelsBody": "Un modèle privilégiant la précision et un autre la vitesse ; leurs noms seront ajoutés au prochain tour.",
+  "whatsNew.cardTitle": "Nouvelle carte des nouveautés",
+  "whatsNew.cardBody": "Après une mise à jour, consultez ici un résumé rapide des changements.",
 };

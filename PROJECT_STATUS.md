@@ -1,5 +1,24 @@
 # Project Status
 
+## 1.8.0 UI work (2026-11-15)
+
+- Windows-only sidebar positioning now lifts the sidebar by the existing 52 px header reserve;
+  the toolbar row and its 52 px height remain unchanged. The platform class is gated by the
+  runtime `get_onboarding_platform` result (`windows`). The macOS header and sidebar CSS values
+  were not changed. Dragging remains programmatic and is also wired on the Windows workspace
+  region so the translated sidebar's blank top area can still drag the window.
+- Added static, version-keyed What's New content for 1.8.0 and a dismissible, non-modal card.
+  It appears only when a prior read version exists and is older than the running version;
+  dismissal stores the current version. Fresh installs do not show it. All eight UI keys are
+  present in zh/en/de/es/fr.
+- Verified: `cargo fmt --all -- --check`; sidebar source regression test 10/10; What's New
+  behavior/locale tests 4/4; `git diff --check` clean. `npm run check` could not start because
+  this worktree has no `node_modules` (`svelte-kit: command not found`). `npm test` ran 138
+  tests: 136 passed and 2 reader test files failed to load because `vite` is absent. Dependencies
+  were not installed.
+- Not verified: Windows real-device visual behavior and dragging; macOS GUI rendering (not
+  launched by task constraint); full Svelte check / browser-backed test files.
+
 ## 1.7.0 "No folder allow-list + update check" (2026-11-01)
 
 **Not released yet.** The source is verified in this worktree; GitHub release, website deployment

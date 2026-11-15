@@ -505,4 +505,12 @@ export const en: Record<MessageKey, Message> = {
   "onboarding.error": "Could not save setup: {message}",
   "onboarding.rerun": "Run setup again",
   "onboarding.rerunDesc": "Review the first-run choices and permission explanations anytime.",
+  "whatsNew.title": "What’s new",
+  "whatsNew.close": "Close What’s New",
+  "whatsNew.windowsTitle": "Tighter Windows layout",
+  "whatsNew.windowsBody": "Removed extra space above the sidebar to bring workspace content higher.",
+  "whatsNew.modelsTitle": "New speech recognition models",
+  "whatsNew.modelsBody": "One accuracy-first and one speed-first model; names to be added next round.",
+  "whatsNew.cardTitle": "A new What’s New card",
+  "whatsNew.cardBody": "See a quick summary of version changes after upgrading.",
 };

@@ -511,4 +511,12 @@ export const de: Record<MessageKey, Message> = {
   "onboarding.error": "Einrichtung konnte nicht gespeichert werden: {message}",
   "onboarding.rerun": "Einrichtung erneut starten",
   "onboarding.rerunDesc": "Ersteinrichtung und Berechtigungshinweise jederzeit erneut ansehen.",
+  "whatsNew.title": "Neu in dieser Version",
+  "whatsNew.close": "Neuigkeiten schließen",
+  "whatsNew.windowsTitle": "Kompakteres Windows-Layout",
+  "whatsNew.windowsBody": "Der zusätzliche Abstand über der Seitenleiste entfällt; der Arbeitsbereich rückt nach oben.",
+  "whatsNew.modelsTitle": "Neue Spracherkennungsmodelle",
+  "whatsNew.modelsBody": "Je ein neues Modell für Genauigkeit und Geschwindigkeit; Namen folgen in der nächsten Runde.",
+  "whatsNew.cardTitle": "Neue Neuigkeiten-Karte",
+  "whatsNew.cardBody": "Nach einem Upgrade siehst du hier eine kurze Zusammenfassung der Änderungen.",
 };

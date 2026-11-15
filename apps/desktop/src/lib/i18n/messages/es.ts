@@ -509,4 +509,12 @@ export const es: Record<MessageKey, Message> = {
   "onboarding.error": "No se pudo guardar la configuración: {message}",
   "onboarding.rerun": "Repetir la configuración",
   "onboarding.rerunDesc": "Vuelve a consultar cuando quieras la configuración inicial y los permisos.",
+  "whatsNew.title": "Novedades",
+  "whatsNew.close": "Cerrar novedades",
+  "whatsNew.windowsTitle": "Diseño más compacto en Windows",
+  "whatsNew.windowsBody": "Se elimina el espacio sobrante sobre la barra lateral para acercar el contenido al borde superior.",
+  "whatsNew.modelsTitle": "Nuevos modelos de reconocimiento de voz",
+  "whatsNew.modelsBody": "Se añade un modelo prioritario en precisión y otro en velocidad; los nombres llegarán en la próxima ronda.",
+  "whatsNew.cardTitle": "Nueva tarjeta de novedades",
+  "whatsNew.cardBody": "Consulta un resumen de los cambios después de actualizar.",
 };

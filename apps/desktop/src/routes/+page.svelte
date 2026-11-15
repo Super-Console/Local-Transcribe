@@ -17,6 +17,12 @@
   import RecordView from "$lib/components/RecordView.svelte";
   import LanView from "$lib/components/LanView.svelte";
   import OnboardingView from "$lib/components/OnboardingView.svelte";
+  import WhatsNewCard from "$lib/components/WhatsNewCard.svelte";
+  import {
+    markWhatsNewRead,
+    shouldShowWhatsNew,
+    WHATS_NEW_READ_VERSION_KEY,
+  } from "$lib/whats-new.js";
   import { t } from "$lib/i18n.svelte";
   import { ensureModelNames, prettyName } from "$lib/model-names.svelte";
   import type {
@@ -118,6 +124,7 @@
 
   let sidebarCollapsed = $state(false);
   let appVersion = $state("0.2.0");
+  let showWhatsNew = $state(false);
   let loadedModelId = $state<string | null>(null);
   // 录音结束后按轨道依次转写（两条音轨分别成记录）。
   let pendingTracks = $state<string[]>([]);
@@ -248,6 +255,15 @@
       localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "collapsed" : "expanded");
     } catch {
       /* ignore storage errors */
+    }
+  }
+
+  function closeWhatsNew() {
+    showWhatsNew = false;
+    try {
+      markWhatsNewRead(localStorage, appVersion);
+    } catch {
+      /* The card still closes if browser storage is unavailable. */
     }
   }
 
@@ -760,7 +776,17 @@
     }
 
     void getVersion()
-      .then((value) => (appVersion = value))
+      .then((value) => {
+        appVersion = value;
+        try {
+          showWhatsNew = shouldShowWhatsNew(
+            localStorage.getItem(WHATS_NEW_READ_VERSION_KEY),
+            value,
+          );
+        } catch {
+          showWhatsNew = false;
+        }
+      })
       .catch(() => {
         /* 浏览器预览没有 Tauri 后端 */
       });
@@ -794,6 +820,7 @@
         return;
       }
       if (event.key === "Escape" && error) error = "";
+      else if (event.key === "Escape" && showWhatsNew) closeWhatsNew();
     };
     window.addEventListener("keydown", onKeydown);
 
@@ -1027,6 +1054,9 @@
     {/if}
   </main>
   </div>
+  {#if showWhatsNew}
+    <WhatsNewCard version={appVersion} onClose={closeWhatsNew} />
+  {/if}
 </div>
 {/if}
 
