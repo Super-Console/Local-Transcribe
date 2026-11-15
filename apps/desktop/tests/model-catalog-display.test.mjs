@@ -41,6 +41,8 @@ test("every ASR catalog model carries its own distinct suggestion label", () => 
     ["sensevoice-small", "model.profileSenseVoice"],
     ["paraformer-zh", "model.profileParaformer"],
     ["zipformer-ctc-small-zh", "model.profileZipformerCtc"],
+    ["zipformer-ctc-zh", "model.profileZipformerCtc2025"],
+    ["qwen3-asr-1.7b", "model.profileQwen3Asr17b"],
   ]) {
     assert.match(modelView, new RegExp(`case "${id}"[\\s\\S]*?return "${key}"`), id);
   }
@@ -72,6 +74,8 @@ test("model recommendations are localized and license labels are removed in ever
     "model.profileSenseVoice",
     "model.profileParaformer",
     "model.profileZipformerCtc",
+    "model.profileZipformerCtc2025",
+    "model.profileQwen3Asr17b",
   ];
   for (const language of locales) {
     const messages = read(`../src/lib/i18n/messages/${language}.ts`);
@@ -91,6 +95,8 @@ test("model recommendations are localized and license labels are removed in ever
     ["model.profileSenseVoice", "五语速转"],
     ["model.profileParaformer", "中文速转"],
     ["model.profileZipformerCtc", "轻量极速"],
+    ["model.profileZipformerCtc2025", "CER 12.32%，优于小型版但不及 X-ASR；速度约为小型版 35%"],
+    ["model.profileQwen3Asr17b", "CER 12.82%，不及 X-ASR；约 1.40× 实时，峰值内存 3.90 GB"],
   ]) {
     assert.match(chinese, new RegExp(`"${key}": "${copy}"`), key);
   }

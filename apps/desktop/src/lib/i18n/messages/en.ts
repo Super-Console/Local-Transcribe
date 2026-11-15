@@ -163,6 +163,8 @@ export const en: Record<MessageKey, Message> = {
   "model.profileSenseVoice": "Fast, five languages",
   "model.profileParaformer": "Fast Chinese",
   "model.profileZipformerCtc": "Lightest and fastest",
+  "model.profileZipformerCtc2025": "12.32% CER, better than small but below X-ASR; about 35% of its speed",
+  "model.profileQwen3Asr17b": "12.82% CER, below X-ASR; 1.40× real-time, 3.90 GB peak RSS",
   "model.profileLanguageGeneral": "General language model",
   "model.otherInstalled": "Other installed",
   "model.downloadTitle": "Downloadable models",

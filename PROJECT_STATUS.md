@@ -1,5 +1,15 @@
 # Project Status
 
+## Fifth-round ASR model evaluation (2026-11-15)
+
+**Source milestone verified in this worktree; not released.** No version files were changed.
+
+- Evaluated X-ASR, Zipformer CTC small, Zipformer CTC 2025-07-03, FireRedASR2 and Qwen3-ASR 1.7B against the same six-clip, 375.403877-second Chinese corpus on macOS CPU with two threads. CER uses whitespace/punctuation removal and Chinese-number normalization. These scores are not comparable with the October 2026 MiMo TTS corpus.
+- Both new candidates passed the stated local availability gate (six non-empty outputs, recognizer created without panic, overall CER below 15%, pinned download URLs returned HTTP 200 with exact file sizes). Added Zipformer CTC 2025-07-03 (CER 12.3199%, RTF 20.72×, peak RSS 1,332,903,936 B) and Qwen3-ASR 1.7B int8 (CER 12.8242%, RTF 1.40×, peak RSS 3,895,771,136 B). The latter is slower and less accurate than X-ASR on this corpus; UI recommendations disclose the trade-off.
+- Added immutable source revisions, per-file sizes/SHA-256, catalog license metadata, measured memory estimates, five-language recommendations, layout/catalog/license tests and detailed results in `docs/model-download-and-quality.md` and `docs/model-licenses.md`. The first incomplete FireRed run was rerun successfully; its six-clip CER was 6.5562%.
+- Verified: `cargo fmt --all -- --check`; `cargo test --locked --workspace` (277 passed, 0 failed, 11 ignored); `cargo clippy --locked --workspace --all-targets -- -D warnings`; `npm test` (133 passed); `npm run check` (0 errors, 0 warnings). `npm ci` used the existing lockfile and installed 62 project-local packages; npm reported 5 audit findings (3 low, 2 moderate), not auto-fixed.
+- Model weights, corpus and evaluation outputs remain under `~/lt-model-eval/` and are not part of the source changes. No Windows runtime/package validation was performed in this evaluation.
+
 ## 1.7.0 "No folder allow-list + update check" (2026-11-01)
 
 **Not released yet.** The source is verified in this worktree; GitHub release, website deployment

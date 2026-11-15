@@ -58,10 +58,10 @@ test("both READMEs keep the name and icon out of the MIT grant", () => {
   assert.match(zh, /名称与应用图标不在该许可证范围内/);
 });
 
-test("all seven catalog models were checked against their model cards", () => {
+test("all nine catalog models were checked against their model cards", () => {
   const asrLicenses = modelLicenses.split("## 本地语言模型候选")[0];
   const rows = asrLicenses.split("\n").filter((line) => line.startsWith("| ") && line.includes("huggingface.co"));
-  assert.equal(rows.length, 7, "one row per catalog model");
+  assert.equal(rows.length, 8, "one row per Hugging Face catalog model");
   assert.match(modelLicenses, /未标注/);
   assert.match(modelLicenses, /apache-2\.0/i);
   assert.match(modelLicenses, /2026-10-24/);
@@ -72,10 +72,13 @@ test("all seven catalog models were checked against their model cards", () => {
     "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09",
     "csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14",
     "csukuangfj/sherpa-onnx-zipformer-ctc-small-zh-int8-2025-07-16",
+    "csukuangfj/sherpa-onnx-zipformer-ctc-zh-int8-2025-07-03",
     "csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12",
   ]) {
     assert.match(modelLicenses, new RegExp(repository.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.match(modelLicenses, /zengshuishui\/Qwen3-ASR-onnx/);
+  assert.match(modelLicenses, /modelscope\.cn/i);
   const languageRows = modelLicenses
     .split("## 本地语言模型候选")[1]
     .split("\n")

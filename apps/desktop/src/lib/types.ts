@@ -44,6 +44,7 @@ export type CatalogModel = {
   bytes: number;
   installed: boolean;
   estimatedMemoryBytes: number;
+  license?: string | null;
 };
 
 export type ModelDownloadEvent = {

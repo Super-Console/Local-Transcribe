@@ -57,6 +57,10 @@
         return "model.profileParaformer";
       case "zipformer-ctc-small-zh":
         return "model.profileZipformerCtc";
+      case "zipformer-ctc-zh":
+        return "model.profileZipformerCtc2025";
+      case "qwen3-asr-1.7b":
+        return "model.profileQwen3Asr17b";
       default:
         break;
     }

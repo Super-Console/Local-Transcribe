@@ -166,6 +166,8 @@ export const zh = {
   "model.profileSenseVoice": "五语速转",
   "model.profileParaformer": "中文速转",
   "model.profileZipformerCtc": "轻量极速",
+  "model.profileZipformerCtc2025": "CER 12.32%，优于小型版但不及 X-ASR；速度约为小型版 35%",
+  "model.profileQwen3Asr17b": "CER 12.82%，不及 X-ASR；约 1.40× 实时，峰值内存 3.90 GB",
   "model.profileLanguageGeneral": "通用语言模型",
   "model.otherInstalled": "其它已安装",
   "model.downloadTitle": "可下载的模型",
