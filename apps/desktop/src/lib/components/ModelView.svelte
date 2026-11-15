@@ -57,6 +57,8 @@
         return "model.profileParaformer";
       case "zipformer-ctc-small-zh":
         return "model.profileZipformerCtc";
+      case "zipformer-ctc-zh":
+        return "model.profileZipformerCtc2025";
       default:
         break;
     }

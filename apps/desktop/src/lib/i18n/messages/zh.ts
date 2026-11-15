@@ -166,6 +166,7 @@ export const zh = {
   "model.profileSenseVoice": "五语速转",
   "model.profileParaformer": "中文速转",
   "model.profileZipformerCtc": "轻量极速",
+  "model.profileZipformerCtc2025": "比 CTC small 准（CER 12.32%），但慢约 2.9 倍",
   "model.profileLanguageGeneral": "通用语言模型",
   "model.otherInstalled": "其它已安装",
   "model.downloadTitle": "可下载的模型",

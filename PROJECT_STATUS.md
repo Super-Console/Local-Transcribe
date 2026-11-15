@@ -22,7 +22,16 @@
   workspace has no mousedown handler. `git diff --check` is clean.
 - Not verified: Windows real-device visual behavior and dragging; macOS GUI rendering (not
   launched by task constraint). No real GUI drag/text-selection test was performed.
+## Fifth-round ASR model evaluation (2026-11-15)
 
+**Source milestone verified in this worktree; not released.** No version files were changed.
+
+- Evaluated X-ASR, Zipformer CTC small, Zipformer CTC 2025-07-03, FireRedASR2 and Qwen3-ASR 1.7B against the same six-clip, 375.403877-second Chinese corpus on macOS CPU with two threads. CER uses whitespace/punctuation removal and Chinese-number normalization. These scores are not comparable with the October 2026 MiMo TTS corpus.
+- The two candidates passed the original local availability gate, but the final product decision includes **only Zipformer CTC zh 2025-07-03** (CER 12.3199%, RTF 20.72×, peak RSS 1,332,903,936 B; total weight 367,342,902 B). It is more accurate than Zipformer CTC small on this corpus but about 2.9× slower.
+- Qwen3-ASR 1.7B is **not in the catalog and is not distributed**: despite passing the original CER <15% gate, its overall CER is 12.8242% versus X-ASR 6.2680%, one clip is 40.1544%, RTF is 1.40×, peak RSS 3,895,771,136 B and weight size 2,404,222,421 B. Its measurements remain documented as an evaluation-only rejected candidate; its license source record is marked “仅评估、未分发”.
+- Added the selected Zipformer's immutable source revision, exact per-file bytes/SHA-256, catalog license metadata and measured memory estimate; updated five-language recommendation, model layout/catalog/license tests and detailed comparison docs. The first incomplete FireRed run was rerun successfully; its six-clip CER was 6.5562%.
+- After the final catalog selection: `cargo fmt --all -- --check`; `cargo test --locked --workspace` (277 passed, 0 failed, 11 ignored); `cargo clippy --locked --workspace --all-targets -- -D warnings`; `npm test` (133 passed, 0 failed); `npm run check` (0 errors, 0 warnings). `npm ci` used the existing lockfile and installed 62 project-local packages; npm reported 5 audit findings (3 low, 2 moderate), not auto-fixed.
+- Model weights, corpus and evaluation outputs remain under `~/lt-model-eval/` and are not part of the source changes. No Windows runtime/package validation was performed in this evaluation.
 ## 1.7.0 "No folder allow-list + update check" (2026-11-01)
 
 **Not released yet.** The source is verified in this worktree; GitHub release, website deployment

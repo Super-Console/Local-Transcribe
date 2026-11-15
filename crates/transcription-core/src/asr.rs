@@ -1278,6 +1278,10 @@ mod tests {
                 ModelFamily::ZipformerCtc,
             ),
             (
+                "sherpa-onnx-zipformer-ctc-zh-int8-2025-07-03",
+                ModelFamily::ZipformerCtc,
+            ),
+            (
                 "sherpa-onnx-dolphin-base-ctc-multi-lang-int8",
                 ModelFamily::Dolphin,
             ),

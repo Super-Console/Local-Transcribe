@@ -17,15 +17,17 @@
 | Paraformer · 2023-09-14 | https://huggingface.co/csukuangfj/sherpa-onnx-paraformer-zh-2023-09-14 | Apache-2.0 | 2026-10-24 | 模型卡 frontmatter：`license: apache-2.0` |
 | Zipformer CTC small（体积最小） | https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-ctc-small-zh-int8-2025-07-16 | 未标注 | 2026-10-24 | 无 license 字段 |
 | CT-Transformer punctuation | https://huggingface.co/csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12 | 未标注 | 2026-10-24 | 无 license 字段 |
+| Zipformer CTC zh（2025-07-03） | https://huggingface.co/csukuangfj/sherpa-onnx-zipformer-ctc-zh-int8-2025-07-03/tree/824c678e9b80f301110e3ea8cee9819a7994c049 | Apache-2.0 | 2026-11-15 | 固定 revision；模型卡 frontmatter 声明 `license: apache-2.0` |
+| Qwen3-ASR 1.7B (int8，仅评估、未分发) | https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx/tree/cb045ad80b8970c9d411d463e5b78991a566596c | Apache-2.0 | 2026-11-15 | README frontmatter 原文：`license: apache-2.0`；仅作为本机评测来源记录，不进入产品目录、不由应用下载 |
 
 ## 结论与影响
 
-- 7 个仓库中只有 Paraformer 明确标注 Apache-2.0；其余 6 个**未标注**。
+- 原始 7 个仓库中只有 Paraformer 明确标注 Apache-2.0；其余 6 个**未标注**。
+- 第五轮两个评测来源的固定 revision 卡片均声明 Apache-2.0；其中 Zipformer 进入产品目录，Qwen3-ASR 1.7B 仅评估、未分发。共 9 个来源记录中，3 个有明确 Apache-2.0 卡片声明、6 个未标注；以上卡片声明不代表对上游权重另作法律判断。
 - 没有发现“非商业”或其它限制性许可的文字；但“未标注”也**不代表**可以自由再分发。
-  安装包本身不包含模型权重（应用只在用户操作时从 Hugging Face 下载到本机），
+  安装包本身不包含模型权重（应用只在用户操作时从对应模型源下载到本机），
   因此当前不涉及把权重打进安装包；如果将来要随包分发或商用，需要先向上游确认授权。
-- 本轮按要求**没有删除或修改**任何清单条目；是否继续提供这 6 个未标注模型，由
-  Timmy 决定。
+- 产品目录不包含未通过产品取舍的评估候选；许可证表仍保留其来源和卡片声明，避免把评估记录误当作分发许可结论。
 
 ## 本地语言模型候选（2026-10-24）
 

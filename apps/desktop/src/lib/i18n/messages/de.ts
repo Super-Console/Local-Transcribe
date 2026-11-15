@@ -164,6 +164,7 @@ export const de: Record<MessageKey, Message> = {
   "model.profileSenseVoice": "Schnell, fünf Sprachen",
   "model.profileParaformer": "Schnell für Chinesisch",
   "model.profileZipformerCtc": "Leichtestes und schnellstes",
+  "model.profileZipformerCtc2025": "Genauer als CTC Small (12,32 % CER), aber etwa 2,9× langsamer",
   "model.profileLanguageGeneral": "Allgemeines Sprachmodell",
   "model.otherInstalled": "Weitere installierte",
   "model.downloadTitle": "Herunterladbare Modelle",

@@ -35,12 +35,16 @@ const catalog = [
     name: "Zipformer CTC small（体积最小）",
   },
   {
+    directory: "sherpa-onnx-zipformer-ctc-zh-int8-2025-07-03",
+    name: "Zipformer CTC zh（2025-07-03）",
+  },
+  {
     directory: "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12",
     name: "CT-Transformer punctuation",
   },
 ];
 
-test("the seven catalog models resolve from folder names and ids", () => {
+test("the eight catalog models resolve from folder names and ids", () => {
   for (const entry of catalog) {
     assert.equal(prettyNameFrom(entry.directory, catalog), entry.name);
     assert.equal(prettyNameFrom(`paraformer-${entry.directory}`, catalog), entry.name);

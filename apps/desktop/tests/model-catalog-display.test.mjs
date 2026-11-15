@@ -41,6 +41,7 @@ test("every ASR catalog model carries its own distinct suggestion label", () => 
     ["sensevoice-small", "model.profileSenseVoice"],
     ["paraformer-zh", "model.profileParaformer"],
     ["zipformer-ctc-small-zh", "model.profileZipformerCtc"],
+    ["zipformer-ctc-zh", "model.profileZipformerCtc2025"],
   ]) {
     assert.match(modelView, new RegExp(`case "${id}"[\\s\\S]*?return "${key}"`), id);
   }
@@ -72,6 +73,7 @@ test("model recommendations are localized and license labels are removed in ever
     "model.profileSenseVoice",
     "model.profileParaformer",
     "model.profileZipformerCtc",
+    "model.profileZipformerCtc2025",
   ];
   for (const language of locales) {
     const messages = read(`../src/lib/i18n/messages/${language}.ts`);
@@ -91,6 +93,7 @@ test("model recommendations are localized and license labels are removed in ever
     ["model.profileSenseVoice", "五语速转"],
     ["model.profileParaformer", "中文速转"],
     ["model.profileZipformerCtc", "轻量极速"],
+    ["model.profileZipformerCtc2025", "比 CTC small 准（CER 12.32%），但慢约 2.9 倍"],
   ]) {
     assert.match(chinese, new RegExp(`"${key}": "${copy}"`), key);
   }
