@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { isWithinSidebarDragStrip } from "../src/lib/sidebar-drag.js";
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../src/routes/+page.svelte");
@@ -90,11 +91,22 @@ test("window header starts dragging programmatically for non-interactive targets
 
 test("only Windows shifts the sidebar to the top without moving the toolbar", () => {
   assert.match(page, /class:windows-sidebar-up=\{onboardingPlatform === "windows"\}/);
-  assert.match(page, /<div class="workspace" onmousedown=\{onboardingPlatform === "windows" \? headerPointerDown : undefined\}>/);
+  assert.doesNotMatch(page, /class="workspace" onmousedown=/);
+  assert.match(page, /sidebarPointerDown[\s\S]*?isWithinSidebarDragStrip\(event\.clientY\)/);
+  assert.match(page, /onSidebarPointerDown=\{onboardingPlatform === "windows" \? sidebarPointerDown : undefined\}/);
+  assert.match(sidebar, /use:sidebarDragRegion=\{onSidebarPointerDown\}/);
   assert.match(page, /\.app\.windows-sidebar-up \.workspace :global\(\.sidebar\)\s*\{[^}]*margin-top:\s*-52px;[^}]*height:\s*calc\(100% \+ 52px\)/s);
   assert.match(page, /\.window-header\s*\{[^}]*height:\s*52px/s);
   assert.match(page, /\.sidebar-header\s*\{[^}]*padding:\s*0 10px 0 80px/s);
+  assert.match(page, /\.collapsed \.sidebar-header\s*\{[^}]*width:\s*126px/s);
+  assert.match(page, /<header class="window-header" role="presentation" onmousedown=\{headerPointerDown\}>/);
   assert.match(sidebar, /padding:\s*14px 10px 14px/);
+});
+
+test("the Windows sidebar drag strip ends at viewport y=52", () => {
+  assert.equal(isWithinSidebarDragStrip(0), true);
+  assert.equal(isWithinSidebarDragStrip(52), true);
+  assert.equal(isWithinSidebarDragStrip(52.01), false);
 });
 
 test("navigation preserves all existing destinations", () => {

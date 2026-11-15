@@ -5,19 +5,23 @@
 - Windows-only sidebar positioning now lifts the sidebar by the existing 52 px header reserve;
   the toolbar row and its 52 px height remain unchanged. The platform class is gated by the
   runtime `get_onboarding_platform` result (`windows`). The macOS header and sidebar CSS values
-  were not changed. Dragging remains programmatic and is also wired on the Windows workspace
-  region so the translated sidebar's blank top area can still drag the window.
+  were not changed. Windows drag handling is attached to the `.sidebar` subtree only, with a
+  `clientY <= 52` guard; the workspace and reader/content area have no drag listener. The
+  existing interactive-element filter in `headerPointerDown` is retained. In collapsed mode,
+  the existing 126 px header segment remains draggable through the unchanged header handler.
 - Added static, version-keyed What's New content for 1.8.0 and a dismissible, non-modal card.
   It appears only when a prior read version exists and is older than the running version;
   dismissal stores the current version. Fresh installs do not show it. All eight UI keys are
   present in zh/en/de/es/fr.
-- Verified: `cargo fmt --all -- --check`; sidebar source regression test 10/10; What's New
-  behavior/locale tests 4/4; `git diff --check` clean. `npm run check` could not start because
-  this worktree has no `node_modules` (`svelte-kit: command not found`). `npm test` ran 138
-  tests: 136 passed and 2 reader test files failed to load because `vite` is absent. Dependencies
-  were not installed.
+- Verified after Timmy provisioned existing `node_modules` (no dependency installation):
+  `npm run check` exits 0 with 0 errors and 1 existing Svelte warning in
+  `WhatsNewCard.svelte:6:35` (`state_referenced_locally`); `npm test` 139 passed / 0 failed /
+  0 skipped, including the reader browser geometry test; `cargo fmt --all -- --check` exits 0
+  with no output. The new drag-strip geometry test checks y=0 and y=52 are inside and y=52.01
+  is outside; the sidebar-shell test verifies only the sidebar action is wired and the
+  workspace has no mousedown handler. `git diff --check` is clean.
 - Not verified: Windows real-device visual behavior and dragging; macOS GUI rendering (not
-  launched by task constraint); full Svelte check / browser-backed test files.
+  launched by task constraint). No real GUI drag/text-selection test was performed.
 
 ## 1.7.0 "No folder allow-list + update check" (2026-11-01)
 

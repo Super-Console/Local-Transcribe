@@ -18,6 +18,7 @@
   import LanView from "$lib/components/LanView.svelte";
   import OnboardingView from "$lib/components/OnboardingView.svelte";
   import WhatsNewCard from "$lib/components/WhatsNewCard.svelte";
+  import { isWithinSidebarDragStrip } from "$lib/sidebar-drag.js";
   import {
     markWhatsNewRead,
     shouldShowWhatsNew,
@@ -289,6 +290,11 @@
     } catch {
       /* 非 Tauri 环境没有窗口对象 */
     }
+  }
+
+  function sidebarPointerDown(event: MouseEvent) {
+    if (!isWithinSidebarDragStrip(event.clientY)) return;
+    headerPointerDown(event);
   }
 
   async function refreshRetention() {
@@ -948,8 +954,13 @@
     />
     </div>
   </header>
-  <div class="workspace" onmousedown={onboardingPlatform === "windows" ? headerPointerDown : undefined}>
-  <AppSidebar {view} collapsed={sidebarCollapsed} onNavigate={navigate} />
+  <div class="workspace">
+  <AppSidebar
+    {view}
+    collapsed={sidebarCollapsed}
+    onNavigate={navigate}
+    onSidebarPointerDown={onboardingPlatform === "windows" ? sidebarPointerDown : undefined}
+  />
   <main class="main">
 
     {#if view === "home"}

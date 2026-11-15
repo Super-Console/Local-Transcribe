@@ -7,15 +7,39 @@
     view,
     collapsed,
     onNavigate,
+    onSidebarPointerDown,
   }: {
     view: View;
     collapsed: boolean;
     onNavigate: (next: View) => void;
+    onSidebarPointerDown?: (event: MouseEvent) => void;
   } = $props();
+
+  function sidebarDragRegion(node: HTMLElement, onPointerDown?: (event: MouseEvent) => void) {
+    let currentHandler = onPointerDown;
+    if (currentHandler) node.addEventListener("mousedown", currentHandler);
+    return {
+      update(nextHandler?: (event: MouseEvent) => void) {
+        if (currentHandler) node.removeEventListener("mousedown", currentHandler);
+        currentHandler = nextHandler;
+        if (currentHandler) node.addEventListener("mousedown", currentHandler);
+      },
+      destroy() {
+        if (currentHandler) node.removeEventListener("mousedown", currentHandler);
+      },
+    };
+  }
 
 </script>
 
-<aside id="app-sidebar" class="sidebar" class:collapsed inert={collapsed} aria-label={t("nav.mainLabel")}>
+<aside
+  id="app-sidebar"
+  class="sidebar"
+  class:collapsed
+  inert={collapsed}
+  aria-label={t("nav.mainLabel")}
+  use:sidebarDragRegion={onSidebarPointerDown}
+>
   <div class="section">{t("nav.workspace")}</div>
   <nav class="nav">
     <button
