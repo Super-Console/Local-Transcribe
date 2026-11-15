@@ -58,7 +58,7 @@ test("both READMEs keep the name and icon out of the MIT grant", () => {
   assert.match(zh, /名称与应用图标不在该许可证范围内/);
 });
 
-test("all nine catalog models were checked against their model cards", () => {
+test("all eight catalog models were checked against their model cards", () => {
   const asrLicenses = modelLicenses.split("## 本地语言模型候选")[0];
   const rows = asrLicenses.split("\n").filter((line) => line.startsWith("| ") && line.includes("huggingface.co"));
   assert.equal(rows.length, 8, "one row per Hugging Face catalog model");
@@ -77,8 +77,6 @@ test("all nine catalog models were checked against their model cards", () => {
   ]) {
     assert.match(modelLicenses, new RegExp(repository.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.match(modelLicenses, /zengshuishui\/Qwen3-ASR-onnx/);
-  assert.match(modelLicenses, /modelscope\.cn/i);
   const languageRows = modelLicenses
     .split("## 本地语言模型候选")[1]
     .split("\n")

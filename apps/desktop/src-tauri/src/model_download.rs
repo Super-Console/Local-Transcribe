@@ -83,15 +83,8 @@ pub struct CatalogEntry {
     pub release: Option<CatalogRelease>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DownloadSource {
-    HuggingFace,
-    ModelScope,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct CatalogRelease {
-    pub source: DownloadSource,
     pub revision: &'static str,
     pub license: &'static str,
     /// (repository path, SHA-256)
@@ -159,56 +152,6 @@ const QWEN3_FILES: &[(&str, &str, u64)] = &[
         "tokenizer/tokenizer_config.json",
         "tokenizer/tokenizer_config.json",
         12_487,
-    ),
-];
-const QWEN3_17B_FILES: &[(&str, &str, u64)] = &[
-    (
-        "model_1.7B/conv_frontend.onnx",
-        "conv_frontend.onnx",
-        48_080_441,
-    ),
-    (
-        "model_1.7B/encoder.int8.onnx",
-        "encoder.int8.onnx",
-        314_222_162,
-    ),
-    (
-        "model_1.7B/decoder.int8.onnx",
-        "decoder.int8.onnx",
-        2_037_458_645,
-    ),
-    ("tokenizer/vocab.json", "tokenizer/vocab.json", 2_776_833),
-    ("tokenizer/merges.txt", "tokenizer/merges.txt", 1_671_853),
-    (
-        "tokenizer/tokenizer_config.json",
-        "tokenizer/tokenizer_config.json",
-        12_487,
-    ),
-];
-const QWEN3_17B_SHA256: &[(&str, &str)] = &[
-    (
-        "model_1.7B/conv_frontend.onnx",
-        "fa894a4ba53da6a4238f2a6ca0b09362e505d39cecbd646051b033e2e8d7e2fb",
-    ),
-    (
-        "model_1.7B/encoder.int8.onnx",
-        "436fbd910a0c8914851e5ac1354e807be9f283d08a5da728adaa609731c41469",
-    ),
-    (
-        "model_1.7B/decoder.int8.onnx",
-        "c43c853fa6e97d08365cb8a5502b360b595cd43c00dc60e4d8ca7cc18cad460b",
-    ),
-    (
-        "tokenizer/vocab.json",
-        "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
-    ),
-    (
-        "tokenizer/merges.txt",
-        "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
-    ),
-    (
-        "tokenizer/tokenizer_config.json",
-        "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
     ),
 ];
 const FIRERED_FILES: &[(&str, &str, u64)] = &[
@@ -312,30 +255,10 @@ pub const CATALOG: &[CatalogEntry] = &[
         bytes: 367_342_902,
         files: ZIPFORMER_CTC_2025_FILES,
         release: Some(CatalogRelease {
-            source: DownloadSource::HuggingFace,
             revision: "824c678e9b80f301110e3ea8cee9819a7994c049",
             license: "Apache-2.0",
             sha256: ZIPFORMER_CTC_2025_SHA256,
             measured_peak_rss_bytes: 1_332_903_936,
-        }),
-    },
-    CatalogEntry {
-        id: "qwen3-asr-1.7b",
-        name: "Qwen3-ASR 1.7B (int8)",
-        family: "Qwen3-ASR",
-        languages: "zh",
-        directory: "qwen3-asr-1.7b-int8",
-        repository: "zengshuishui/Qwen3-ASR-onnx",
-        kind: CatalogKind::Asr,
-        tier: CatalogTier::Quality,
-        bytes: 2_404_222_421,
-        files: QWEN3_17B_FILES,
-        release: Some(CatalogRelease {
-            source: DownloadSource::ModelScope,
-            revision: "cb045ad80b8970c9d411d463e5b78991a566596c",
-            license: "Apache-2.0",
-            sha256: QWEN3_17B_SHA256,
-            measured_peak_rss_bytes: 3_895_771_136,
         }),
     },
     // ---- 辅助 ----
@@ -759,23 +682,17 @@ async fn run(
 }
 
 fn catalog_download_urls(entry: &CatalogEntry, remote: &str) -> Vec<String> {
-    let (source, revision) = entry
+    let revision = entry
         .release
-        .map(|release| (release.source, release.revision))
-        .unwrap_or((DownloadSource::HuggingFace, "main"));
-    match source {
-        DownloadSource::HuggingFace => vec![
-            format!("{HF_BASE}/{}/resolve/{revision}/{remote}", entry.repository),
-            format!(
-                "{HF_MIRROR}/{}/resolve/{revision}/{remote}",
-                entry.repository
-            ),
-        ],
-        DownloadSource::ModelScope => vec![format!(
-            "https://modelscope.cn/models/{}/resolve/{revision}/{remote}",
+        .map(|release| release.revision)
+        .unwrap_or("main");
+    vec![
+        format!("{HF_BASE}/{}/resolve/{revision}/{remote}", entry.repository),
+        format!(
+            "{HF_MIRROR}/{}/resolve/{revision}/{remote}",
             entry.repository
-        )],
-    }
+        ),
+    ]
 }
 
 fn catalog_sha256(entry: &CatalogEntry, remote: &str) -> Option<&'static str> {
@@ -1087,13 +1004,11 @@ mod tests {
     }
 
     #[test]
-    fn fifth_round_asr_candidates_are_listed_only_after_they_pass_device_gates() {
+    fn fifth_round_catalog_keeps_only_the_selected_zipformer_candidate() {
         let zipformer = entry_by_id("zipformer-ctc-zh").expect("verified Zipformer CTC row");
-        let qwen = entry_by_id("qwen3-asr-1.7b").expect("verified Qwen3-ASR 1.7B row");
+        assert!(entry_by_id("qwen3-asr-1.7b").is_none());
         assert_eq!(zipformer.family, "Zipformer CTC");
-        assert_eq!(qwen.family, "Qwen3-ASR");
         assert_eq!(zipformer.bytes, 367_342_902);
-        assert_eq!(qwen.bytes, 2_404_222_421);
         let zip_release = zipformer.release.expect("pinned Zipformer metadata");
         assert_eq!(
             zip_release.revision,
@@ -1102,34 +1017,17 @@ mod tests {
         assert_eq!(zip_release.license, "Apache-2.0");
         assert_eq!(zip_release.measured_peak_rss_bytes, 1_332_903_936);
         assert_eq!(zip_release.sha256.len(), zipformer.files.len());
-        let qwen_release = qwen.release.expect("pinned ModelScope metadata");
-        assert_eq!(
-            qwen_release.revision,
-            "cb045ad80b8970c9d411d463e5b78991a566596c"
-        );
-        assert_eq!(qwen_release.license, "Apache-2.0");
-        assert_eq!(qwen_release.measured_peak_rss_bytes, 3_895_771_136);
-        assert_eq!(qwen_release.sha256.len(), qwen.files.len());
         assert!(
             super::catalog_download_urls(zipformer, "model.int8.onnx")[0]
                 .ends_with("/resolve/824c678e9b80f301110e3ea8cee9819a7994c049/model.int8.onnx")
         );
-        assert_eq!(
-            super::catalog_download_urls(qwen, "model_1.7B/decoder.int8.onnx")[0],
-            "https://modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx/resolve/cb045ad80b8970c9d411d463e5b78991a566596c/model_1.7B/decoder.int8.onnx"
-        );
         let states = super::states(std::path::Path::new("/definitely-not-installed"));
-        for (id, expected_license, expected_rss) in [
-            ("zipformer-ctc-zh", "Apache-2.0", 1_332_903_936),
-            ("qwen3-asr-1.7b", "Apache-2.0", 3_895_771_136),
-        ] {
-            let state = states
-                .iter()
-                .find(|state| state.id == id)
-                .expect("catalog state");
-            assert_eq!(state.license.as_deref(), Some(expected_license));
-            assert_eq!(state.estimated_memory_bytes, expected_rss);
-        }
+        let state = states
+            .iter()
+            .find(|state| state.id == "zipformer-ctc-zh")
+            .expect("catalog state");
+        assert_eq!(state.license.as_deref(), Some("Apache-2.0"));
+        assert_eq!(state.estimated_memory_bytes, 1_332_903_936);
     }
 
     #[test]
@@ -1166,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn catalog_offers_five_quality_and_three_speed_models() {
+    fn catalog_offers_four_quality_and_three_speed_models() {
         let quality = CATALOG
             .iter()
             .filter(|entry| entry.kind == CatalogKind::Asr && entry.tier == CatalogTier::Quality)
@@ -1175,7 +1073,7 @@ mod tests {
             .iter()
             .filter(|entry| entry.kind == CatalogKind::Asr && entry.tier == CatalogTier::Speed)
             .count();
-        assert_eq!(quality, 5);
+        assert_eq!(quality, 4);
         assert_eq!(speed, 3);
     }
 

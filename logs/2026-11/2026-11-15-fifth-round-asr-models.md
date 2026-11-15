@@ -24,3 +24,13 @@ Executor: OpenCode
 ## Current status
 
 Implementation and verification are complete. One reviewed commit was created on `research/models-180` (`Add verified fifth-round ASR models`). The `.dispatch/` reports remain local because that directory is excluded by this worktree's `.git/info/exclude`.
+
+---
+
+## 追加记录（23:15-23:30）—— 最终只纳入 Zipformer
+
+- Timmy's final product decision was to retain only Zipformer CTC zh 2025-07-03 and withdraw Qwen3-ASR 1.7B from the product catalog. Removed the Qwen 1.7B entry, its file/hash catalog constants, and the now-unneeded ModelScope download branch; removed its UI mapping and all five locale recommendation keys. Its exact run results remain in the quality report, explicitly marked evaluation-only/not distributed, and its license-source row is retained with the same status.
+- Added a catalog regression asserting the Qwen 1.7B ID is absent while the pinned Zipformer entry remains; the focused test failed before removal and passed after. Zipformer's five-language recommendation now says it is more accurate than CTC small (12.32% CER) but about 2.9× slower.
+- Updated the quality table and the separate “淘汰（未进清单）” table with Qwen's six CERs, 12.82% overall CER, 1.40× RTF, 3,895,771,136 B peak RSS, and 2,404,222,421 B model size. Updated the license and completion reports; no model weights, corpus, or transcription outputs were deleted.
+- Revalidation after the final changes: `cargo fmt --all -- --check` passed; `cargo test --locked --workspace` 277 passed / 0 failed / 11 ignored; strict workspace Clippy passed; `cd apps/desktop && npm test` 133 passed / 0 failed; `cd apps/desktop && npm run check` 0 errors / 0 warnings.
+- A separate follow-up commit and push to `research/models-180` are pending at the time this log entry was written.
