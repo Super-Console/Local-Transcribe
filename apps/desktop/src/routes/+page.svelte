@@ -900,7 +900,7 @@
     onComplete={finishOnboarding}
   />
 {:else}
-<div class="app" class:collapsed={sidebarCollapsed}>
+<div class="app" class:collapsed={sidebarCollapsed} class:windows-sidebar-up={onboardingPlatform === "windows"}>
   <header class="window-header" role="presentation" onmousedown={headerPointerDown}>
     <div class="sidebar-header"></div>
     <div class="header-tools">
@@ -921,7 +921,7 @@
     />
     </div>
   </header>
-  <div class="workspace">
+  <div class="workspace" onmousedown={onboardingPlatform === "windows" ? headerPointerDown : undefined}>
   <AppSidebar {view} collapsed={sidebarCollapsed} onNavigate={navigate} />
   <main class="main">
 
@@ -1069,6 +1069,12 @@
     background: var(--sidebar);
     border-right: 1px solid var(--hairline);
     transition: width var(--speed) var(--ease-out);
+  }
+
+  /* Windows keeps the toolbar row in place; only the sidebar occupies its titlebar reserve. */
+  .app.windows-sidebar-up .workspace :global(.sidebar) {
+    margin-top: -52px;
+    height: calc(100% + 52px);
   }
 
   .collapsed .sidebar-header {

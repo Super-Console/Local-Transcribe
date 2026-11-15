@@ -88,6 +88,15 @@ test("window header starts dragging programmatically for non-interactive targets
   assert.doesNotMatch(toolbar, /<[a-z][^>]*\sdata-tauri-drag-region/);
 });
 
+test("only Windows shifts the sidebar to the top without moving the toolbar", () => {
+  assert.match(page, /class:windows-sidebar-up=\{onboardingPlatform === "windows"\}/);
+  assert.match(page, /<div class="workspace" onmousedown=\{onboardingPlatform === "windows" \? headerPointerDown : undefined\}>/);
+  assert.match(page, /\.app\.windows-sidebar-up \.workspace :global\(\.sidebar\)\s*\{[^}]*margin-top:\s*-52px;[^}]*height:\s*calc\(100% \+ 52px\)/s);
+  assert.match(page, /\.window-header\s*\{[^}]*height:\s*52px/s);
+  assert.match(page, /\.sidebar-header\s*\{[^}]*padding:\s*0 10px 0 80px/s);
+  assert.match(sidebar, /padding:\s*14px 10px 14px/);
+});
+
 test("navigation preserves all existing destinations", () => {
   for (const view of ["home", "record", "lan", "model", "settings"]) {
     assert.ok(sidebar.includes(`onNavigate("${view}")`));
