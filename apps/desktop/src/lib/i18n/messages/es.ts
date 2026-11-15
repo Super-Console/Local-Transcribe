@@ -513,9 +513,9 @@ export const es: Record<MessageKey, Message> = {
   "whatsNew.title": "Novedades",
   "whatsNew.close": "Cerrar novedades",
   "whatsNew.windowsTitle": "Diseño más compacto en Windows",
-  "whatsNew.windowsBody": "Se elimina el espacio sobrante sobre la barra lateral para acercar el contenido al borde superior.",
-  "whatsNew.modelsTitle": "Nuevos modelos de reconocimiento de voz",
-  "whatsNew.modelsBody": "Se añade un modelo prioritario en precisión y otro en velocidad; los nombres llegarán en la próxima ronda.",
+  "whatsNew.windowsBody": "Windows deja de reservar espacio superior para los semáforos de macOS; la barra lateral sube y el espacio de trabajo es más compacto.",
+  "whatsNew.modelsTitle": "Nuevo modelo chino Zipformer CTC",
+  "whatsNew.modelsBody": "Se añade Zipformer CTC zh (2025-07-03): más preciso que la versión ligera, con aproximadamente un tercio de su velocidad y un tamaño de 367 MB.",
   "whatsNew.cardTitle": "Nueva tarjeta de novedades",
-  "whatsNew.cardBody": "Consulta un resumen de los cambios después de actualizar.",
+  "whatsNew.cardBody": "La nueva tarjeta What's New aparece la primera vez que abres la aplicación tras actualizar.",
 };

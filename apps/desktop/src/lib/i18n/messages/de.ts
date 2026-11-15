@@ -515,9 +515,9 @@ export const de: Record<MessageKey, Message> = {
   "whatsNew.title": "Neu in dieser Version",
   "whatsNew.close": "Neuigkeiten schließen",
   "whatsNew.windowsTitle": "Kompakteres Windows-Layout",
-  "whatsNew.windowsBody": "Der zusätzliche Abstand über der Seitenleiste entfällt; der Arbeitsbereich rückt nach oben.",
-  "whatsNew.modelsTitle": "Neue Spracherkennungsmodelle",
-  "whatsNew.modelsBody": "Je ein neues Modell für Genauigkeit und Geschwindigkeit; Namen folgen in der nächsten Runde.",
+  "whatsNew.windowsBody": "Windows reserviert oben keinen Platz mehr für die macOS-Ampeln; die Seitenleiste rückt nach oben und der Arbeitsbereich wird kompakter.",
+  "whatsNew.modelsTitle": "Neues chinesisches Zipformer-CTC-Modell",
+  "whatsNew.modelsBody": "Neu: Zipformer CTC zh (2025-07-03). Es ist genauer als die leichte Version, etwa ein Drittel so schnell und rund 367 MB groß.",
   "whatsNew.cardTitle": "Neue Neuigkeiten-Karte",
-  "whatsNew.cardBody": "Nach einem Upgrade siehst du hier eine kurze Zusammenfassung der Änderungen.",
+  "whatsNew.cardBody": "Die neue What's-New-Karte erscheint nach einem Upgrade beim ersten Öffnen der App.",
 };

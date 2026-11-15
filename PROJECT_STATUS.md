@@ -1,5 +1,26 @@
 # Project Status
 
+## 1.8.0 release preparation (2026-11-15)
+
+- Merged the fifth-round model evaluation branch, retaining the selected Zipformer CTC zh
+  model (`zipformer-ctc-zh`, 367,342,902 bytes) and excluding Qwen3-ASR 1.7B from the catalog.
+  The model evaluation details and source/license evidence remain documented below and in
+  `docs/model-download-and-quality.md` / `docs/model-licenses.md`.
+- Unified desktop build metadata to 1.8.0: package.json/lock, Tauri config (WiX 1.8.0.0),
+  desktop and LAN crate manifests, Cargo.lock and the release-version test fixture. The root
+  Cargo.toml has no workspace package version.
+- Finalized three What's New items in zh/en/de/es/fr: compact Windows layout, Zipformer CTC zh
+  (more accurate than the lightweight version, about one-third its speed, 367 MB), and the
+  upgrade card. Frontend validation: `npm run check` exits 0 (0 errors, 1 warning in
+  `WhatsNewCard.svelte:6:35`, `state_referenced_locally`); `npm test` 140 passed / 0 failed /
+  0 skipped; `cargo fmt --all -- --check` exits 0 with no output.
+- `cargo test --locked --workspace` did not reach test execution. Initial attempt failed while
+  sherpa-onnx-sys tried downloading its native archive (`SOCKS feature disabled`). Retrying
+  with the existing checksum-verified archive from the models-180 worktree progressed through
+  compilation but Tauri then failed because the configured external resource
+  `binaries/local-transcribe-node-aarch64-apple-darwin` is absent. No test result is claimed.
+- macOS DMG build and artifact validation are pending.
+
 ## 1.8.0 UI work (2026-11-15)
 
 - Windows-only sidebar positioning now lifts the sidebar by the existing 52 px header reserve;

@@ -498,12 +498,12 @@ export const zh = {
   "onboarding.rerunDesc": "随时重新查看首次设置与权限说明。",
   "whatsNew.title": "本次更新",
   "whatsNew.close": "关闭本次更新",
-  "whatsNew.windowsTitle": "Windows 顶部布局更紧凑",
-  "whatsNew.windowsBody": "修复侧栏顶部多余留白，让工作区内容更靠上。",
-  "whatsNew.modelsTitle": "新增语音识别模型",
-  "whatsNew.modelsBody": "准确优先与速度优先各新增一款；具体名单稍后补充。",
+  "whatsNew.windowsTitle": "Windows 布局更紧凑",
+  "whatsNew.windowsBody": "Windows 不再为 macOS 交通灯预留顶部空白，侧栏上移，工作区更紧凑。",
+  "whatsNew.modelsTitle": "新增 Zipformer CTC 中文模型",
+  "whatsNew.modelsBody": "新增 Zipformer CTC zh（2025-07-03）：比轻量版更准确，速度约为其三分之一，模型约 367 MB。",
   "whatsNew.cardTitle": "新增 What's New 更新卡片",
-  "whatsNew.cardBody": "升级后可在这里快速了解版本变化。",
+  "whatsNew.cardBody": "新增 What's New 更新卡片，升级后首次打开应用时显示。",
 };
 
 /** 所有语言目录共用的 key 集合（由中文源导出）。 */

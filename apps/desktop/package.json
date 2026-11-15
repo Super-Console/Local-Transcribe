@@ -1,6 +1,6 @@
 {
   "name": "voice-to-text-desktop",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Local Transcribe — local-first desktop audio/video transcription.",
   "type": "module",
   "scripts": {

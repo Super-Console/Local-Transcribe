@@ -1,5 +1,6 @@
 /** @type {Record<string, Array<{ titleKey: string; bodyKey: string }>>} */
 export const whatsNewByVersion = {
+  // Finalized 1.8.0 release notes, in display order.
   "1.8.0": [
     { titleKey: "whatsNew.windowsTitle", bodyKey: "whatsNew.windowsBody" },
     { titleKey: "whatsNew.modelsTitle", bodyKey: "whatsNew.modelsBody" },
