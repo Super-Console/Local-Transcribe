@@ -259,7 +259,7 @@ export const en: Record<MessageKey, Message> = {
   "settings.copyExample": "Copy example",
   "settings.cliDesc": "Shares the same service and queue as MCP",
   "settings.updatesName": "Check for updates",
-  "settings.updatesDesc": "On launch, fetch the version list from the product site. The request includes the app version and exposes your IP address; no transcripts or device ID are sent.",
+  "settings.updatesDesc": "On launch, fetch the version list from the product site.",
   "settings.updatesAuto": "Check automatically",
   "settings.updatesCheck": "Check now",
   "settings.updatesChecking": "Checking…",
@@ -514,4 +514,8 @@ export const en: Record<MessageKey, Message> = {
   "whatsNew.modelsBody": "Adds Zipformer CTC zh (2025-07-03): more accurate than the lightweight version, about one-third its speed, with a 367 MB download.",
   "whatsNew.cardTitle": "A new What’s New card",
   "whatsNew.cardBody": "A new What's New card appears the first time you open the app after upgrading.",
+  "whatsNew.layoutFixTitle": "Fixed Windows sidebar clipping",
+  "whatsNew.layoutFixBody": "The sidebar is no longer clipped at the top; Workspace and Home are fully visible.",
+  "whatsNew.updateDescTitle": "A clearer update description",
+  "whatsNew.updateDescBody": "The automatic update description in Settings is now shorter.",
 };

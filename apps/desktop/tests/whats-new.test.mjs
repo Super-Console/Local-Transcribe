@@ -39,10 +39,21 @@ test("1.8.0 What's New contains exactly the three finalized release notes", () =
   );
 });
 
+test("1.8.1 What's New describes the Windows layout and concise update setting", () => {
+  assert.deepEqual(
+    whatsNewByVersion["1.8.1"].map(({ titleKey, bodyKey }) => [titleKey, bodyKey]),
+    [
+      ["whatsNew.layoutFixTitle", "whatsNew.layoutFixBody"],
+      ["whatsNew.updateDescTitle", "whatsNew.updateDescBody"],
+    ],
+  );
+});
+
 test("all What's New keys exist in every supported locale", () => {
   const keys = [
     "whatsNew.title", "whatsNew.close", "whatsNew.windowsTitle", "whatsNew.windowsBody",
     "whatsNew.modelsTitle", "whatsNew.modelsBody", "whatsNew.cardTitle", "whatsNew.cardBody",
+    "whatsNew.layoutFixTitle", "whatsNew.layoutFixBody", "whatsNew.updateDescTitle", "whatsNew.updateDescBody",
   ];
   for (const locale of ["zh", "en", "de", "es", "fr"]) {
     const messages = read(`../src/lib/i18n/messages/${locale}.ts`);

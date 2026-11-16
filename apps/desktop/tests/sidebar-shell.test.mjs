@@ -12,9 +12,9 @@ const desktopLockPattern = (version) =>
   new RegExp(`name = "voice-to-text-desktop"\\r?\\nversion = "${version.replaceAll('.', '\\.') }"`);
 
 test("release version check accepts LF and CRLF Cargo.lock checkouts", () => {
-  const pattern = desktopLockPattern("1.8.0");
-  assert.match('name = "voice-to-text-desktop"\nversion = "1.8.0"', pattern);
-  assert.match('name = "voice-to-text-desktop"\r\nversion = "1.8.0"', pattern);
+  const pattern = desktopLockPattern("1.8.1");
+  assert.match('name = "voice-to-text-desktop"\nversion = "1.8.1"', pattern);
+  assert.match('name = "voice-to-text-desktop"\r\nversion = "1.8.1"', pattern);
 });
 
 test("macOS content extends into the native title bar", () => {
@@ -30,7 +30,7 @@ test("desktop release versions stay in sync", () => {
   const cargo = read("../src-tauri/Cargo.toml");
   const cargoLock = read("../../../Cargo.lock");
   const npmLock = JSON.parse(read("../package-lock.json"));
-  assert.equal(packageJson.version, "1.8.0");
+  assert.equal(packageJson.version, "1.8.1");
   assert.equal(tauri.version, packageJson.version);
   assert.match(cargo, new RegExp(`version = "${packageJson.version.replaceAll('.', '\\.') }"`));
   assert.equal(npmLock.version, packageJson.version);
@@ -89,13 +89,18 @@ test("window header starts dragging programmatically for non-interactive targets
   assert.doesNotMatch(toolbar, /<[a-z][^>]*\sdata-tauri-drag-region/);
 });
 
-test("only Windows shifts the sidebar to the top without moving the toolbar", () => {
-  assert.match(page, /class:windows-sidebar-up=\{onboardingPlatform === "windows"\}/);
+test("Windows sidebar uses a fixed header overlay and keeps the main below it", () => {
+  assert.match(page, /class:windows-sidebar-up=\{onboardingPlatform === "windows" \|\| previewWindowsLayout\}/);
   assert.doesNotMatch(page, /class="workspace" onmousedown=/);
   assert.match(page, /sidebarPointerDown[\s\S]*?isWithinSidebarDragStrip\(event\.clientY\)/);
   assert.match(page, /onSidebarPointerDown=\{onboardingPlatform === "windows" \? sidebarPointerDown : undefined\}/);
   assert.match(sidebar, /use:sidebarDragRegion=\{onSidebarPointerDown\}/);
-  assert.match(page, /\.app\.windows-sidebar-up \.workspace :global\(\.sidebar\)\s*\{[^}]*margin-top:\s*-52px;[^}]*height:\s*calc\(100% \+ 52px\)/s);
+  assert.match(page, /get\("windowsLayout"\) === "1"/);
+  assert.match(page, /\.app\.windows-sidebar-up\s*\{[^}]*position:\s*relative/s);
+  assert.match(page, /\.app\.windows-sidebar-up \.window-header\s*\{[^}]*position:\s*absolute;[^}]*left:\s*var\(--sidebar-width\);[^}]*height:\s*52px/s);
+  assert.match(page, /\.app\.windows-sidebar-up \.sidebar-header\s*\{[^}]*width:\s*0;[^}]*padding:\s*0/s);
+  assert.match(page, /\.app\.windows-sidebar-up \.main\s*\{[^}]*padding-top:\s*60px/s);
+  assert.doesNotMatch(page, /margin-top:\s*-\d|height:\s*calc\(100%\s*\+/);
   assert.match(page, /\.window-header\s*\{[^}]*height:\s*52px/s);
   assert.match(page, /\.sidebar-header\s*\{[^}]*padding:\s*0 10px 0 80px/s);
   assert.match(page, /\.collapsed \.sidebar-header\s*\{[^}]*width:\s*126px/s);

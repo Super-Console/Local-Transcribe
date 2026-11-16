@@ -253,7 +253,7 @@ export const zh = {
   "settings.copyExample": "复制示例",
   "settings.cliDesc": "与 MCP 共用同一服务与队列",
   "settings.updatesName": "自动检查更新",
-  "settings.updatesDesc": "启动时从官网下载版本清单。请求包含应用版本，服务器可见 IP 地址；不发送转写内容或设备 ID。",
+  "settings.updatesDesc": "启动时从官网下载版本清单。",
   "settings.updatesAuto": "允许自动检查",
   "settings.updatesCheck": "立即检查",
   "settings.updatesChecking": "检查中…",
@@ -504,6 +504,10 @@ export const zh = {
   "whatsNew.modelsBody": "新增 Zipformer CTC zh（2025-07-03）：比轻量版更准确，速度约为其三分之一，模型约 367 MB。",
   "whatsNew.cardTitle": "新增 What's New 更新卡片",
   "whatsNew.cardBody": "新增 What's New 更新卡片，升级后首次打开应用时显示。",
+  "whatsNew.layoutFixTitle": "修复 Windows 侧栏裁切",
+  "whatsNew.layoutFixBody": "侧栏顶部不再被裁切，「工作区」与首页现在完整可见。",
+  "whatsNew.updateDescTitle": "更新说明更简洁",
+  "whatsNew.updateDescBody": "设置页的自动更新说明已精简。",
 };
 
 /** 所有语言目录共用的 key 集合（由中文源导出）。 */

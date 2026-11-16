@@ -265,7 +265,7 @@ export const fr: Record<MessageKey, Message> = {
   "settings.copyExample": "Copier l’exemple",
   "settings.cliDesc": "Partage le même service et la même file que MCP",
   "settings.updatesName": "Rechercher les mises à jour",
-  "settings.updatesDesc": "Au démarrage, consulte les versions sur le site. La requête inclut la version de l’app et expose votre IP, sans envoyer de transcription ni d’identifiant d’appareil.",
+  "settings.updatesDesc": "Au démarrage, consulte la liste des versions sur le site.",
   "settings.updatesAuto": "Vérifier automatiquement",
   "settings.updatesCheck": "Vérifier maintenant",
   "settings.updatesChecking": "Vérification…",
@@ -521,4 +521,8 @@ export const fr: Record<MessageKey, Message> = {
   "whatsNew.modelsBody": "Ajout de Zipformer CTC zh (2025-07-03), plus précis que la version légère, environ trois fois moins rapide, pour un téléchargement de 367 Mo.",
   "whatsNew.cardTitle": "Nouvelle carte des nouveautés",
   "whatsNew.cardBody": "La nouvelle carte What's New s’affiche au premier lancement de l’application après une mise à jour.",
+  "whatsNew.layoutFixTitle": "Correction du rognage de la barre latérale sous Windows",
+  "whatsNew.layoutFixBody": "Le haut de la barre latérale n’est plus rogné ; l’espace de travail et l’accueil sont entièrement visibles.",
+  "whatsNew.updateDescTitle": "Description des mises à jour simplifiée",
+  "whatsNew.updateDescBody": "La description des mises à jour automatiques dans Réglages est désormais plus courte.",
 };

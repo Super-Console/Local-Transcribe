@@ -264,7 +264,7 @@ export const de: Record<MessageKey, Message> = {
   "settings.copyExample": "Beispiel kopieren",
   "settings.cliDesc": "Nutzt denselben Dienst und dieselbe Warteschlange wie MCP",
   "settings.updatesName": "Nach Updates suchen",
-  "settings.updatesDesc": "Beim Start wird die Versionsliste geladen. Die Anfrage enthält die App-Version und legt Ihre IP-Adresse offen; Transkripte und Geräte-ID werden nicht gesendet.",
+  "settings.updatesDesc": "Beim Start wird die Versionsliste geladen.",
   "settings.updatesAuto": "Automatisch prüfen",
   "settings.updatesCheck": "Jetzt prüfen",
   "settings.updatesChecking": "Prüfe…",
@@ -520,4 +520,8 @@ export const de: Record<MessageKey, Message> = {
   "whatsNew.modelsBody": "Neu: Zipformer CTC zh (2025-07-03). Es ist genauer als die leichte Version, etwa ein Drittel so schnell und rund 367 MB groß.",
   "whatsNew.cardTitle": "Neue Neuigkeiten-Karte",
   "whatsNew.cardBody": "Die neue What's-New-Karte erscheint nach einem Upgrade beim ersten Öffnen der App.",
+  "whatsNew.layoutFixTitle": "Windows-Seitenleiste nicht mehr abgeschnitten",
+  "whatsNew.layoutFixBody": "Der obere Rand der Seitenleiste bleibt sichtbar; Arbeitsbereich und Startseite sind vollständig zu sehen.",
+  "whatsNew.updateDescTitle": "Kürzere Update-Beschreibung",
+  "whatsNew.updateDescBody": "Die Beschreibung der automatischen Updates in den Einstellungen ist jetzt kürzer.",
 };

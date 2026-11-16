@@ -263,7 +263,7 @@ export const es: Record<MessageKey, Message> = {
   "settings.copyExample": "Copiar ejemplo",
   "settings.cliDesc": "Comparte el mismo servicio y la misma cola que MCP",
   "settings.updatesName": "Buscar actualizaciones",
-  "settings.updatesDesc": "Al iniciar, consulta la versión en el sitio web. La solicitud incluye la versión de la app y revela tu IP; no envía transcripciones ni ID del dispositivo.",
+  "settings.updatesDesc": "Al iniciar, consulta la lista de versiones en el sitio web.",
   "settings.updatesAuto": "Buscar automáticamente",
   "settings.updatesCheck": "Buscar ahora",
   "settings.updatesChecking": "Buscando…",
@@ -518,4 +518,8 @@ export const es: Record<MessageKey, Message> = {
   "whatsNew.modelsBody": "Se añade Zipformer CTC zh (2025-07-03): más preciso que la versión ligera, con aproximadamente un tercio de su velocidad y un tamaño de 367 MB.",
   "whatsNew.cardTitle": "Nueva tarjeta de novedades",
   "whatsNew.cardBody": "La nueva tarjeta What's New aparece la primera vez que abres la aplicación tras actualizar.",
+  "whatsNew.layoutFixTitle": "Corregido el recorte de la barra lateral en Windows",
+  "whatsNew.layoutFixBody": "La parte superior de la barra lateral ya no se recorta; el espacio de trabajo y el inicio se ven completos.",
+  "whatsNew.updateDescTitle": "Descripción de actualización más clara",
+  "whatsNew.updateDescBody": "La descripción de las actualizaciones automáticas en Ajustes ahora es más breve.",
 };

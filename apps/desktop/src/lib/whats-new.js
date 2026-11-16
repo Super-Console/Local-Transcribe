@@ -6,6 +6,10 @@ export const whatsNewByVersion = {
     { titleKey: "whatsNew.modelsTitle", bodyKey: "whatsNew.modelsBody" },
     { titleKey: "whatsNew.cardTitle", bodyKey: "whatsNew.cardBody" },
   ],
+  "1.8.1": [
+    { titleKey: "whatsNew.layoutFixTitle", bodyKey: "whatsNew.layoutFixBody" },
+    { titleKey: "whatsNew.updateDescTitle", bodyKey: "whatsNew.updateDescBody" },
+  ],
 };
 
 export const WHATS_NEW_READ_VERSION_KEY = "lt.whats-new.read-version";

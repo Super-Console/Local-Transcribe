@@ -57,6 +57,7 @@
 
   let onboardingStatus = $state<"checking" | "open" | "closed">(tauriAvailable ? "checking" : "closed");
   let onboardingPlatform = $state<"macos" | "windows" | "other">("other");
+  let previewWindowsLayout = $state(false);
   let onboardingState = $state<OnboardingState>({
     onboarding_completed: false,
     preferred_asr_model_id: null,
@@ -772,6 +773,7 @@
   }
 
   onMount(() => {
+    previewWindowsLayout = new URLSearchParams(window.location.search).get("windowsLayout") === "1";
     ensureModelNames();
     if (SIDEBAR_COLLAPSE_ENABLED) {
       try {
@@ -933,7 +935,7 @@
     onComplete={finishOnboarding}
   />
 {:else}
-<div class="app" class:collapsed={sidebarCollapsed} class:windows-sidebar-up={onboardingPlatform === "windows"}>
+<div class="app" class:collapsed={sidebarCollapsed} class:windows-sidebar-up={onboardingPlatform === "windows" || previewWindowsLayout}>
   <header class="window-header" role="presentation" onmousedown={headerPointerDown}>
     <div class="sidebar-header"></div>
     <div class="header-tools">
@@ -1093,6 +1095,10 @@
     color: var(--text);
   }
 
+  .app.windows-sidebar-up {
+    position: relative;
+  }
+
   .window-header {
     display: flex;
     height: 52px;
@@ -1112,10 +1118,27 @@
     transition: width var(--speed) var(--ease-out);
   }
 
-  /* Windows keeps the toolbar row in place; only the sidebar occupies its titlebar reserve. */
-  .app.windows-sidebar-up .workspace :global(.sidebar) {
-    margin-top: -52px;
-    height: calc(100% + 52px);
+  /* Windows keeps the sidebar at y=0 and overlays the reserved titlebar row. */
+  .app.windows-sidebar-up .window-header {
+    position: absolute;
+    top: 0;
+    left: var(--sidebar-width);
+    right: 0;
+    height: 52px;
+  }
+
+  .app.windows-sidebar-up .sidebar-header {
+    width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .app.windows-sidebar-up.collapsed .window-header {
+    left: 126px;
+  }
+
+  .app.windows-sidebar-up .main {
+    padding-top: 60px;
   }
 
   .collapsed .sidebar-header {
