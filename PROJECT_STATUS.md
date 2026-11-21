@@ -1,5 +1,19 @@
 # Project Status
 
+## 共享窗口外壳 AppShell 与侧栏分组参数化（2026-11-21）
+
+- 新增 `lib/components/AppShell.svelte`：窗口外壳（`.window-header` 52px /
+  `.sidebar-header` / `.header-tools` / `.workspace` / `.main`、`windows-sidebar-up` 规则、
+  `startWindowDrag` 拖拽）从 `routes/+page.svelte` 抽出，Local 与 Cloud Transcribe 共用。
+- 红绿灯避让分平台：启动时给 `<html>` 打 `data-os="macos|windows"`；macOS 保留
+  `.sidebar-header` padding-left 80px，Windows 用 `:global([data-os="windows"])` 降到 10px。
+  未使用负 margin 或高度补偿。
+- `AppSidebar.svelte` 参数化（groups + items）；Local 仍传原 5 项（工作区：home/record/lan；
+  管理：model/settings），每组标题仍为 `.section`。
+- 回归：TDD 红→绿（`npm test` 143 passed / 0 failed）；`npm run check` 0 errors /
+  1 既有 warning；`npm run build` 通过且产物含 `[data-os=windows]` 规则。Rust 未改动。
+- 详细记录见 `logs/2026-11/2026-11-21-shared-shell-and-sidebar-groups.md`。
+
 ## Windows service-socket ACL alias normalization (2026-11-16)
 
 - Fixed ACL readback comparison in `crates/transcription-service/src/windows_ipc.rs`:

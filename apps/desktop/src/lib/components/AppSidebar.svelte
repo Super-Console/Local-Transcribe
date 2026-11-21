@@ -1,17 +1,27 @@
-<script lang="ts">
+<script lang="ts" generics="V extends string">
   import Icon from "./Icon.svelte";
   import { t } from "$lib/i18n.svelte";
-  import type { View } from "$lib/types";
+
+  /**
+   * 参数化侧栏（2026-11-21 UI 验收 2）：分组 + items 由调用方传入。
+   * Local 传 5 项（工作区：home/record/lan；管理：model/settings），
+   * Cloud 传 6 项（工作区：transcribe/record/history；管理：providers/usage/settings）。
+   * 每组标题渲染为 .section 小标题，样式与原实现一致。
+   */
+  type SidebarItem = { view: V; icon: string; label: string };
+  type SidebarGroup = { title: string; items: SidebarItem[] };
 
   let {
+    groups,
     view,
     collapsed,
     onNavigate,
     onSidebarPointerDown,
   }: {
-    view: View;
+    groups: SidebarGroup[];
+    view: V;
     collapsed: boolean;
-    onNavigate: (next: View) => void;
+    onNavigate: (next: V) => void;
     onSidebarPointerDown?: (event: MouseEvent) => void;
   } = $props();
 
@@ -40,72 +50,27 @@
   aria-label={t("nav.mainLabel")}
   use:sidebarDragRegion={onSidebarPointerDown}
 >
-  <div class="section">{t("nav.workspace")}</div>
-  <nav class="nav">
-    <button
-      type="button"
-      class="nav-item"
-      class:active={view === "home"}
-      aria-current={view === "home" ? "page" : undefined}
-      aria-label={t("nav.home")}
-      title={t("nav.home")}
-      onclick={() => onNavigate("home")}
-    >
-      <Icon name="home" />
-      <span class="label">{t("nav.home")}</span>
-    </button>
-    <button
-      type="button"
-      class="nav-item"
-      class:active={view === "record"}
-      aria-current={view === "record" ? "page" : undefined}
-      aria-label={t("nav.record")}
-      title={t("nav.record")}
-      onclick={() => onNavigate("record")}
-    >
-      <Icon name="mic" />
-      <span class="label">{t("nav.record")}</span>
-    </button>
-    <button
-      type="button"
-      class="nav-item"
-      class:active={view === "lan"}
-      aria-current={view === "lan" ? "page" : undefined}
-      aria-label={t("nav.lan")}
-      title={t("nav.lan")}
-      onclick={() => onNavigate("lan")}
-    >
-      <Icon name="lan" />
-      <span class="label">{t("nav.lan")}</span>
-    </button>
-  </nav>
-  <div class="bottom">
-    <div class="section">{t("nav.manage")}</div>
-    <button
-      type="button"
-      class="nav-item"
-      class:active={view === "model"}
-      aria-current={view === "model" ? "page" : undefined}
-      aria-label={t("nav.model")}
-      title={t("nav.model")}
-      onclick={() => onNavigate("model")}
-    >
-      <Icon name="model" />
-      <span class="label">{t("nav.model")}</span>
-    </button>
-    <button
-      type="button"
-      class="nav-item"
-      class:active={view === "settings"}
-      aria-current={view === "settings" ? "page" : undefined}
-      aria-label={t("nav.settings")}
-      title={t("nav.settings")}
-      onclick={() => onNavigate("settings")}
-    >
-      <Icon name="settings" />
-      <span class="label">{t("nav.settings")}</span>
-    </button>
-  </div>
+  {#each groups as group, index (group.title)}
+    <div class="group" class:stacked={index > 0}>
+      <div class="section">{group.title}</div>
+      <nav class="nav">
+        {#each group.items as item (item.view)}
+          <button
+            type="button"
+            class="nav-item"
+            class:active={view === item.view}
+            aria-current={view === item.view ? "page" : undefined}
+            aria-label={item.label}
+            title={item.label}
+            onclick={() => onNavigate(item.view)}
+          >
+            <Icon name={item.icon} />
+            <span class="label">{item.label}</span>
+          </button>
+        {/each}
+      </nav>
+    </div>
+  {/each}
 </aside>
 
 <style>
@@ -150,16 +115,13 @@
     gap: 2px;
   }
 
-  .bottom {
+  /* 第 2 组起与上一组留出组间距（沿用原 .bottom 的 24px 语义） */
+  .group.stacked {
     margin-top: 24px;
     padding-top: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
-  }
-
-  .bottom .section {
-    padding: 0 10px 6px;
   }
 
   .nav-item {

@@ -4,10 +4,10 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { confirm, open, save } from "@tauri-apps/plugin-dialog";
   import type { UpdateInfo } from "$lib/types";
 
+  import AppShell, { startWindowDrag } from "$lib/components/AppShell.svelte";
   import AppSidebar from "$lib/components/AppSidebar.svelte";
   import AppToolbar from "$lib/components/AppToolbar.svelte";
   import TranscribeView from "$lib/components/TranscribeView.svelte";
@@ -73,6 +73,25 @@
 
   // 折叠状态的持久化键（保留，便于恢复）。
   const SIDEBAR_KEY = "lt.sidebar.collapsed.v1";
+
+  // UI 验收 2）：侧栏条目参数化——两组固定条目（工作区 / 管理），组标题用共享 i18n。
+  const sidebarGroups = $derived.by(() => [
+    {
+      title: t("nav.workspace"),
+      items: [
+        { view: "home" as View, icon: "home", label: t("nav.home") },
+        { view: "record" as View, icon: "mic", label: t("nav.record") },
+        { view: "lan" as View, icon: "lan", label: t("nav.lan") },
+      ],
+    },
+    {
+      title: t("nav.manage"),
+      items: [
+        { view: "model" as View, icon: "model", label: t("nav.model") },
+        { view: "settings" as View, icon: "settings", label: t("nav.settings") },
+      ],
+    },
+  ]);
 
   function initialView(): View {
     if (import.meta.env.DEV) {
@@ -269,33 +288,11 @@
     }
   }
 
-  // macOS Overlay 标题栏下 data-tauri-drag-region 不生效（tauri#9503 上游 bug），
-  // 且该属性只认直接命中，工具栏等子元素会挡住拖动；改为在标题栏统一显式
-  // startDragging()，可交互控件（按钮/输入等）保持原有点击行为。
-  function headerPointerDown(event: MouseEvent) {
-    if (!tauriAvailable || event.button !== 0 || event.detail > 1) return;
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    if (
-      target.closest(
-        'a, button, input, select, textarea, label, summary, [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"]), [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="checkbox"], [role="radio"], [role="switch"], [role="option"], [role="listbox"], [role="menu"]',
-      )
-    ) {
-      return;
-    }
-    event.preventDefault();
-    try {
-      void getCurrentWindow().startDragging().catch(() => {
-        /* 权限缺失或非窗口环境时静默降级 */
-      });
-    } catch {
-      /* 非 Tauri 环境没有窗口对象 */
-    }
-  }
-
+  // 标题栏拖拽（headerPointerDown）已抽到共享 AppShell.svelte 的 startWindowDrag；
+  // Windows 侧栏顶部拖拽条复用同一入口。
   function sidebarPointerDown(event: MouseEvent) {
     if (!isWithinSidebarDragStrip(event.clientY)) return;
-    headerPointerDown(event);
+    startWindowDrag(event);
   }
 
   async function refreshRetention() {
@@ -919,6 +916,40 @@
   });
 </script>
 
+{#snippet toolbar()}
+  <AppToolbar
+    {model}
+    models={libraryModels}
+    {loadedModelId}
+    remoteGroups={lanGroups}
+    {remoteLabel}
+    {remoteSelection}
+    search={searchQuery}
+    onSearchChange={(value) => (searchQuery = value)}
+    onSelectModel={selectModel}
+    onSelectRemote={selectRemoteModel}
+    onManageModels={() => (view = "model")}
+    {sidebarCollapsed}
+    onToggleSidebar={toggleSidebar}
+  />
+{/snippet}
+
+{#snippet sidebar()}
+  <AppSidebar
+    groups={sidebarGroups}
+    {view}
+    collapsed={sidebarCollapsed}
+    onNavigate={navigate}
+    onSidebarPointerDown={onboardingPlatform === "windows" ? sidebarPointerDown : undefined}
+  />
+{/snippet}
+
+{#snippet overlay()}
+  {#if showWhatsNew}
+    <WhatsNewCard version={appVersion} onClose={closeWhatsNew} />
+  {/if}
+{/snippet}
+
 {#if onboardingStatus === "checking"}
   <div class="onboarding-check" aria-busy="true" aria-label="Local Transcribe">
     <span>Local Transcribe</span>
@@ -935,35 +966,13 @@
     onComplete={finishOnboarding}
   />
 {:else}
-<div class="app" class:collapsed={sidebarCollapsed} class:windows-sidebar-up={onboardingPlatform === "windows" || previewWindowsLayout}>
-  <header class="window-header" role="presentation" onmousedown={headerPointerDown}>
-    <div class="sidebar-header"></div>
-    <div class="header-tools">
-    <AppToolbar
-      {model}
-      models={libraryModels}
-      {loadedModelId}
-      remoteGroups={lanGroups}
-      {remoteLabel}
-      {remoteSelection}
-      search={searchQuery}
-      onSearchChange={(value) => (searchQuery = value)}
-      onSelectModel={selectModel}
-      onSelectRemote={selectRemoteModel}
-      onManageModels={() => (view = "model")}
-      {sidebarCollapsed}
-      onToggleSidebar={toggleSidebar}
-    />
-    </div>
-  </header>
-  <div class="workspace">
-  <AppSidebar
-    {view}
-    collapsed={sidebarCollapsed}
-    onNavigate={navigate}
-    onSidebarPointerDown={onboardingPlatform === "windows" ? sidebarPointerDown : undefined}
-  />
-  <main class="main">
+<AppShell
+  collapsed={sidebarCollapsed}
+  windowsUp={onboardingPlatform === "windows" || previewWindowsLayout}
+  {toolbar}
+  {sidebar}
+  {overlay}
+>
 
     {#if view === "home"}
       {#if detail && detailJobId}
@@ -1065,12 +1074,7 @@
         onRerunOnboarding={restartOnboarding}
       />
     {/if}
-  </main>
-  </div>
-  {#if showWhatsNew}
-    <WhatsNewCard version={appVersion} onClose={closeWhatsNew} />
-  {/if}
-</div>
+</AppShell>
 {/if}
 
 <style>
@@ -1085,88 +1089,6 @@
     font-size: 20px;
   }
 
-  .app {
-    --sidebar-width: 204px;
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    overflow: hidden;
-    background: var(--bg);
-    color: var(--text);
-  }
-
-  .app.windows-sidebar-up {
-    position: relative;
-  }
-
-  .window-header {
-    display: flex;
-    height: 52px;
-    flex: none;
-    user-select: none;
-  }
-
-  .sidebar-header {
-    width: var(--sidebar-width);
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    padding: 0 10px 0 80px;
-    background: var(--sidebar);
-    border-right: 1px solid var(--hairline);
-    transition: width var(--speed) var(--ease-out);
-  }
-
-  /* Windows keeps the sidebar at y=0 and overlays the reserved titlebar row. */
-  .app.windows-sidebar-up .window-header {
-    position: absolute;
-    top: 0;
-    left: var(--sidebar-width);
-    right: 0;
-    height: 52px;
-  }
-
-  .app.windows-sidebar-up .sidebar-header {
-    width: 0;
-    padding: 0;
-    border: 0;
-  }
-
-  .app.windows-sidebar-up.collapsed .window-header {
-    left: 126px;
-  }
-
-  .app.windows-sidebar-up .main {
-    padding-top: 60px;
-  }
-
-  .collapsed .sidebar-header {
-    width: 126px;
-    background: var(--bg);
-    border-right-color: transparent;
-  }
-
-  .header-tools { flex: 1; min-width: 0; }
-
-  .workspace {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  /* 工作区内角用统一 token；原生窗口外角仍由系统管理。 */
-  .main {
-    border-radius: var(--radius);
-    overflow: hidden;
-    flex: 1;
-    /* 必须可收缩：否则 min-content（MCP 代码块 pre 长行/长路径）会把整条布局顶得比窗口宽 */
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    padding: 8px 12px 12px 12px;
-    background: var(--bg);
-  }
+  /* 窗口外壳样式（.app/.window-header/.sidebar-header/.header-tools/.workspace/.main）
+   * 已抽到共享 AppShell.svelte（UI 验收 3）。 */
 </style>

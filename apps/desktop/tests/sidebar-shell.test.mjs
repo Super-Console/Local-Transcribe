@@ -7,6 +7,7 @@ const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../src/routes/+page.svelte");
 const sidebar = read("../src/lib/components/AppSidebar.svelte");
 const toolbar = read("../src/lib/components/AppToolbar.svelte");
+const shell = read("../src/lib/components/AppShell.svelte");
 
 const desktopLockPattern = (version) =>
   new RegExp(`name = "voice-to-text-desktop"\\r?\\nversion = "${version.replaceAll('.', '\\.') }"`);
@@ -81,30 +82,73 @@ test("search button icon matches the other toolbar icon buttons", () => {
 test("window header starts dragging programmatically for non-interactive targets", () => {
   // macOS Overlay 标题栏下 data-tauri-drag-region 不生效（tauri#9503），且其属性值
   // 只认直接命中；标题栏必须改用显式 mousedown -> startDragging()，并放行可交互控件。
-  assert.match(page, /<header class="window-header" role="presentation" onmousedown=\{headerPointerDown\}>/);
-  assert.match(page, /getCurrentWindow\(\)/);
-  assert.match(page, /startDragging\(\)/);
-  assert.match(page, /headerPointerDown[\s\S]*?closest\(/);
-  assert.doesNotMatch(page, /<[a-z][^>]*\sdata-tauri-drag-region/);
+  // 2026-11-21：窗口外壳抽成共享 AppShell.svelte（结构 + CSS + 拖拽），断言随之迁移。
+  assert.match(shell, /<header class="window-header" role="presentation" onmousedown=\{startWindowDrag\}>/);
+  assert.match(shell, /getCurrentWindow\(\)/);
+  assert.match(shell, /startDragging\(\)/);
+  assert.match(shell, /startWindowDrag[\s\S]*?closest\(/);
+  assert.doesNotMatch(shell, /<[a-z][^>]*\sdata-tauri-drag-region/);
   assert.doesNotMatch(toolbar, /<[a-z][^>]*\sdata-tauri-drag-region/);
 });
 
+test("window shell is the shared AppShell with header, sidebar header and tools slot", () => {
+  // 2026-11-21 UI 验收 3）：.window-header / .sidebar-header / .header-tools / 拖拽
+  // 必须住在 lib/components/AppShell.svelte（sparse-checkout 之外也能被 Cloud 复用）。
+  assert.match(shell, /\.window-header\s*\{[^}]*height:\s*52px/s);
+  assert.match(shell, /\.sidebar-header\s*\{[^}]*padding:\s*0 10px 0 80px/s);
+  assert.match(shell, /\.header-tools\s*\{[^}]*flex:\s*1/s);
+  assert.match(shell, /\.collapsed \.sidebar-header\s*\{[^}]*width:\s*126px/s);
+  assert.match(shell, /<div class="sidebar-header">\s*<\/div>/);
+  assert.match(page, /import AppShell\b[^;\n]*from "\$lib\/components\/AppShell\.svelte"/);
+  assert.doesNotMatch(page, /\.window-header\s*\{/);
+  assert.doesNotMatch(page, /function headerPointerDown/);
+});
+
+test("traffic-light clearance is platform-aware through data-os", () => {
+  // 2026-11-21 UI 验收 4）：macOS 保留 padding-left: 80px；Windows 没有红绿灯降到 10px。
+  // 启动时给 document.documentElement 打 data-os="macos|windows"。
+  // 不允许负 margin 或高度补偿（历史 bug：margin-top:-52px + height:calc(100% + 52px)）。
+  assert.match(shell, /(:global\()?\[data-os="windows"\]\)? \.sidebar-header\s*\{[^}]*padding-left:\s*10px/s);
+  assert.match(shell, /document\.documentElement\.dataset\.os/);
+  assert.match(shell, /dataset\.os\s*=|"macos"|"windows"/);
+  assert.match(shell, /\.sidebar-header\s*\{[^}]*padding:\s*0 10px 0 80px/s);
+  assert.doesNotMatch(shell, /margin-top:\s*-\d|height:\s*calc\(100%\s*\+/);
+  assert.doesNotMatch(page, /margin-top:\s*-\d|height:\s*calc\(100%\s*\+/);
+});
+
+test("sidebar takes grouped items and renders one section title per group", () => {
+  // 2026-11-21 UI 验收 2）：AppSidebar 参数化（分组 + items 数组），每组标题是 .section。
+  // Local 传原来的 5 项（工作区：home/record/lan；管理：model/settings）。
+  assert.match(sidebar, /groups:/);
+  assert.match(sidebar, /\{#each groups as group/);
+  assert.match(sidebar, /class="section">\{group\.title\}/);
+  assert.match(page, /title:\s*t\("nav\.workspace"\)/);
+  assert.match(page, /title:\s*t\("nav\.manage"\)/);
+  const groupsBlock = page.match(/sidebarGroups[\s\S]*?\]\);/)?.[0] ?? "";
+  for (const view of ["home", "record", "lan", "model", "settings"]) {
+    assert.ok(groupsBlock.includes(`view: "${view}"`), `sidebar group includes ${view}`);
+  }
+  const workspace = groupsBlock.match(/nav\.workspace[\s\S]*?nav\.manage/)?.[0] ?? "";
+  assert.match(workspace, /view: "home"/);
+  assert.match(workspace, /view: "record"/);
+  assert.match(workspace, /view: "lan"/);
+});
+
 test("Windows sidebar uses a fixed header overlay and keeps the main below it", () => {
-  assert.match(page, /class:windows-sidebar-up=\{onboardingPlatform === "windows" \|\| previewWindowsLayout\}/);
+  assert.match(page, /windowsUp=\{onboardingPlatform === "windows" \|\| previewWindowsLayout\}/);
   assert.doesNotMatch(page, /class="workspace" onmousedown=/);
   assert.match(page, /sidebarPointerDown[\s\S]*?isWithinSidebarDragStrip\(event\.clientY\)/);
   assert.match(page, /onSidebarPointerDown=\{onboardingPlatform === "windows" \? sidebarPointerDown : undefined\}/);
   assert.match(sidebar, /use:sidebarDragRegion=\{onSidebarPointerDown\}/);
   assert.match(page, /get\("windowsLayout"\) === "1"/);
-  assert.match(page, /\.app\.windows-sidebar-up\s*\{[^}]*position:\s*relative/s);
-  assert.match(page, /\.app\.windows-sidebar-up \.window-header\s*\{[^}]*position:\s*absolute;[^}]*left:\s*var\(--sidebar-width\);[^}]*height:\s*52px/s);
-  assert.match(page, /\.app\.windows-sidebar-up \.sidebar-header\s*\{[^}]*width:\s*0;[^}]*padding:\s*0/s);
-  assert.match(page, /\.app\.windows-sidebar-up \.main\s*\{[^}]*padding-top:\s*60px/s);
-  assert.doesNotMatch(page, /margin-top:\s*-\d|height:\s*calc\(100%\s*\+/);
-  assert.match(page, /\.window-header\s*\{[^}]*height:\s*52px/s);
-  assert.match(page, /\.sidebar-header\s*\{[^}]*padding:\s*0 10px 0 80px/s);
-  assert.match(page, /\.collapsed \.sidebar-header\s*\{[^}]*width:\s*126px/s);
-  assert.match(page, /<header class="window-header" role="presentation" onmousedown=\{headerPointerDown\}>/);
+  assert.match(shell, /class:windows-sidebar-up=\{windowsUp\}/);
+  assert.match(shell, /\.app\.windows-sidebar-up\s*\{[^}]*position:\s*relative/s);
+  assert.match(shell, /\.app\.windows-sidebar-up \.window-header\s*\{[^}]*position:\s*absolute;[^}]*left:\s*var\(--sidebar-width\);[^}]*height:\s*52px/s);
+  assert.match(shell, /\.app\.windows-sidebar-up \.sidebar-header\s*\{[^}]*width:\s*0;[^}]*padding:\s*0/s);
+  assert.match(shell, /\.app\.windows-sidebar-up \.main\s*\{[^}]*padding-top:\s*60px/s);
+  assert.match(shell, /\.window-header\s*\{[^}]*height:\s*52px/s);
+  assert.match(shell, /\.sidebar-header\s*\{[^}]*padding:\s*0 10px 0 80px/s);
+  assert.match(shell, /\.collapsed \.sidebar-header\s*\{[^}]*width:\s*126px/s);
   assert.match(sidebar, /padding:\s*14px 10px 14px/);
 });
 
@@ -112,12 +156,6 @@ test("the Windows sidebar drag strip ends at viewport y=52", () => {
   assert.equal(isWithinSidebarDragStrip(0), true);
   assert.equal(isWithinSidebarDragStrip(52), true);
   assert.equal(isWithinSidebarDragStrip(52.01), false);
-});
-
-test("navigation preserves all existing destinations", () => {
-  for (const view of ["home", "record", "lan", "model", "settings"]) {
-    assert.ok(sidebar.includes(`onNavigate("${view}")`));
-  }
 });
 
 test("sidebar has a visible keyboard focus indicator", () => {
