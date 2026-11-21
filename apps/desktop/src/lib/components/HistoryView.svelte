@@ -11,6 +11,7 @@
     entries,
     detail,
     detailJobId = null,
+    title = t("nav.home"),
     loading,
     onSelect,
     onBack = () => {},
@@ -26,6 +27,8 @@
     entries: HistoryEntry[];
     detail?: Transcript | null;
     detailJobId?: string | null;
+    /** 列表页标题；Cloud 的「历史」页传 nav.history，Local 首页保持默认 nav.home。 */
+    title?: string;
     loading: boolean;
     onSelect: (jobId: string) => void;
     onBack?: () => void;
@@ -244,7 +247,7 @@
     </Reader>
   {:else}
     <div class="list">
-      <h1 class="page-title">{t("nav.home")}</h1>
+      <h1 class="page-title">{title}</h1>
       <p class="subtitle">{t("home.subtitle")}</p>
       {#if notice}
         <p class="notice" role="status">{notice}</p>
